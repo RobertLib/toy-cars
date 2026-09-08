@@ -2,7 +2,7 @@
 //  ToyCarsApp.swift
 //  ToyCars
 //
-//  Created by Robert Libšanský on 08.09.2026.
+//  Created by Robert Libsansky on 08.09.2026.
 //
 
 import SwiftUI
@@ -11,7 +11,7 @@ import SwiftUI
 struct ToyCarsApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
     }
 }

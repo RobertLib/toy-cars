@@ -1,0 +1,38 @@
+[
+ {
+  "id": "sunset",
+  "name": "Sunset Circuit",
+  "subtitle": "Classic circuit in the evening sun",
+  "theme": "classic",
+  "laps": 2,
+  "unlock": 0,
+  "difficulty": 1,
+  "reward": 120,
+  "length": 1640.6,
+  "tris": 206591
+ },
+ {
+  "id": "cove",
+  "name": "Palm Cove",
+  "subtitle": "Sandy cove, palm trees and piers",
+  "theme": "beach",
+  "laps": 3,
+  "unlock": 1,
+  "difficulty": 2,
+  "reward": 180,
+  "length": 1338.1,
+  "tris": 188614
+ },
+ {
+  "id": "frost",
+  "name": "Frostpeak",
+  "subtitle": "Frozen pass full of ice patches",
+  "theme": "winter",
+  "laps": 2,
+  "unlock": 2,
+  "difficulty": 3,
+  "reward": 250,
+  "length": 1893.5,
+  "tris": 218171
+ }
+]
