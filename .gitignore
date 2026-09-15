@@ -1,0 +1,13 @@
+build*/
+.DS_Store
+*.blend1
+*.blend2
+platform/android/.gradle/
+platform/android/local.properties
+screenshots/*.bmp
+third_party/SDL/
+platform/android/.cxx/
+platform/android/app/.cxx/
+platform/android/app/build/
+platform/android/build/
+dist/
