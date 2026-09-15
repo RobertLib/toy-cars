@@ -2,21 +2,60 @@
 #define TOYCARS_UI_H
 #include "renderer.h"
 #define UI_MAX_VERTS 65536
-typedef struct {float x,y,u,v,r,g,b,a;} UIVertex;
-typedef struct {GLuint texture;float glyphs[96][7];} UIFont;
-typedef struct {float x,y,w,h;} Rect;
-typedef struct {SDL_FingerID id;float x,y;bool active;} Finger;
+#define UI_MAX_FINGERS 10
+#define UI_MAX_CLICKS 32
 typedef struct {
-    GLuint program,vao,vbo,white,current_texture;UIFont fonts[2];UIVertex vertices[UI_MAX_VERTS];int count;
-    float width,height,mx,my,press_x,press_y,safe_left,safe_right,safe_top,safe_bottom;
-    bool mouse_down,clicked,click_pending;float click_x,click_y;Finger fingers[10];
-    bool left,right,brake,gas;int hovered;float fps;bool show_stats;
+    float x, y, u, v, r, g, b, a;
+} UIVertex;
+typedef struct {
+    GLuint texture;
+    float glyphs[96][7];
+} UIFont;
+typedef struct {
+    float x, y, w, h;
+} Rect;
+typedef struct {
+    SDL_TouchID touch_id;
+    SDL_FingerID id;
+    float x, y, press_x, press_y;
+    bool active;
+} Finger;
+typedef struct {
+    float press_x, press_y, x, y;
+    bool consumed;
+} UIClick;
+typedef struct {
+    GLuint program, vao, vbo, white, current_texture;
+    UIFont fonts[2];
+    UIVertex vertices[UI_MAX_VERTS];
+    int count;
+    float width, height, mx, my, safe_left, safe_right, safe_top, safe_bottom;
+    float mouse_x, mouse_y, mouse_press_x, mouse_press_y;
+    bool mouse_down;
+    Finger fingers[UI_MAX_FINGERS];
+    UIClick clicks[UI_MAX_CLICKS];
+    int click_count;
+    bool left, right, brake, gas;
+    float brake_travel, gas_travel, steering_travel;
+    float wheel_input, wheel_pointer_angle;
+    int wheel_pointer; // 0: none, 1: mouse, 2+: finger slot.
+    Uint64 control_frame_time;
+    int hovered;
+    float fps;
+    bool show_stats;
+    bool reset_failed;
+    bool mobile; // Native mobile layout, also available through --touch previews.
+    bool menu_seen;
+    Screen menu_screen;
+    float menu_transition_start, menu_fade, nav_from, nav_position;
 } UI;
 bool ui_init(UI *u);
-void ui_size(UI *u,int w,int h,SDL_Window *window);
-void ui_event(UI *u,const SDL_Event *e,int window_w,int window_h);
-Controls ui_controls(UI *u,const Game *g);
-void ui_draw(UI *u,Game *g,Renderer *r);
+void ui_size(UI *u, int w, int h, SDL_Window *window);
+bool ui_input_blocked(const UI *u);
+void ui_event(UI *u, const SDL_Event *e, int window_w, int window_h);
+bool ui_record_event(UI *u, Game *g, const SDL_Event *e);
+Controls ui_controls(UI *u, const Game *g);
+void ui_draw(UI *u, Game *g, Renderer *r);
 void ui_clear_input(UI *u);
 void ui_destroy(UI *u);
 int ui_tests(void);
