@@ -12,21 +12,29 @@
 #include <SDL3/SDL_opengl.h>
 #include <SDL3/SDL_opengl_glext.h>
 #endif
-typedef struct {GLuint vao,vbo;int count;} Mesh;
 typedef struct {
-    GLuint shader,depth_shader,post_shader,empty_vao;
-    GLuint shadow_fbo,shadow_texture,scene_fbo,scene_texture,scene_depth;
-    Mesh tracks[3],car,fuel,plane,cube;
-    Mat4 view,projection,vp,light_vp;Vec3 eye,target,cam_pos;float camera_yaw;
-    int width,height,draw_calls,triangles;float ui_width,ui_height,alpha;
-    GLuint bound_vao,default_fbo;
-    bool camera_ready;Screen last_screen;int last_track;
+    GLuint vao, vbo;
+    int count;
+} Mesh;
+typedef struct {
+    GLuint shader, depth_shader, post_shader, empty_vao;
+    GLuint shadow_fbo, shadow_texture, scene_fbo, scene_texture, scene_depth;
+    Mesh tracks[3], car, fuel, plane, cube;
+    Mat4 view, projection, vp, light_vp;
+    Vec3 eye, target, cam_pos;
+    float camera_yaw;
+    int width, height, draw_calls, triangles;
+    float ui_width, ui_height, alpha;
+    GLuint bound_vao, default_fbo;
+    bool camera_ready;
+    Screen last_screen;
+    int last_track;
 } Renderer;
-GLuint render_program(const char *vs,const char *fs);
+GLuint render_program(const char *vs, const char *fs);
 bool renderer_init(Renderer *r);
-void renderer_resize(Renderer *r,int w,int h);
-void renderer_draw(Renderer *r,const Game *g,float frame_dt,float alpha);
-bool renderer_project(const Renderer *r,Vec3 p,float *x,float *y);
-bool renderer_screenshot(const Renderer *r,const char *path);
+void renderer_resize(Renderer *r, int w, int h);
+void renderer_draw(Renderer *r, const Game *g, float frame_dt, float alpha);
+bool renderer_project(const Renderer *r, Vec3 p, float *x, float *y);
+bool renderer_screenshot(const Renderer *r, const char *path);
 void renderer_destroy(Renderer *r);
 #endif

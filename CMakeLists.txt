@@ -4,6 +4,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 option(TOYCARS_SANITIZE "Enable address and undefined behavior sanitizers" OFF)
 option(TOYCARS_BUILD_FONT_BAKER "Build the development-only font atlas baker" OFF)
+option(TOYCARS_GRAPHICS_TESTS "Build integration tests requiring a desktop display" OFF)
 
 if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
   if(NOT TARGET SDL3::SDL3)
@@ -63,11 +64,43 @@ if(TOYCARS_SANITIZE)
   target_link_options(${GAME_TARGET} PRIVATE -fsanitize=address,undefined)
 endif()
 if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-  add_custom_command(TARGET ToyCars POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:ToyCars>/assets")
+  # Assets can change without any C source changing. Run the copy for every
+  # build, including an explicit --target ToyCars, without forcing a relink.
+  add_custom_target(toycars_assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:ToyCars>/assets"
+    COMMENT "Updating ToyCars assets"
+    VERBATIM)
+  add_dependencies(ToyCars toycars_assets)
+  if(TOYCARS_GRAPHICS_TESTS)
+    # The test includes main.c to exercise the actual event loop and assets.c
+    # to redirect preferences into an isolated fixture.
+    set(GRAPHICS_TEST_SOURCES ${GAME_SOURCES})
+    list(REMOVE_ITEM GRAPHICS_TEST_SOURCES main.c src/assets.c)
+    add_executable(ToyCarsGraphicsTests tests/graphics.c ${GRAPHICS_TEST_SOURCES})
+    foreach(PROPERTY INCLUDE_DIRECTORIES COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_LIBRARIES LINK_OPTIONS)
+      get_target_property(VALUE ToyCars ${PROPERTY})
+      if(VALUE)
+        set_property(TARGET ToyCarsGraphicsTests PROPERTY ${PROPERTY} "${VALUE}")
+      endif()
+    endforeach()
+    add_dependencies(ToyCarsGraphicsTests toycars_assets)
+  endif()
   enable_testing()
   add_test(NAME simulation COMMAND ToyCars --test)
   set_tests_properties(simulation PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+  add_test(NAME asset_updates COMMAND ${CMAKE_COMMAND}
+    "-DPROJECT_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+    "-DTEST_BINARY_DIR=${CMAKE_BINARY_DIR}/asset-update-test"
+    "-DTEST_GENERATOR=${CMAKE_GENERATOR}"
+    "-DTEST_CONFIG=$<CONFIG>"
+    "-DTEST_C_COMPILER=${CMAKE_C_COMPILER}"
+    "-DTEST_SDL3_DIR=${SDL3_DIR}"
+    -P "${CMAKE_SOURCE_DIR}/tests/asset_updates.cmake")
+  if(TOYCARS_GRAPHICS_TESTS)
+    add_test(NAME graphics COMMAND ToyCarsGraphicsTests "${CMAKE_BINARY_DIR}/graphics-test-profile")
+    set_tests_properties(graphics PROPERTIES LABELS graphics WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+  endif()
 endif()
 if(TOYCARS_BUILD_FONT_BAKER)
   find_package(SDL3_ttf REQUIRED CONFIG HINTS /opt/homebrew/opt/sdl3_ttf/lib/cmake/SDL3_ttf)

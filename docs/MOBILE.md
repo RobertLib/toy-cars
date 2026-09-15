@@ -61,10 +61,33 @@ default framebuffer. The window properties are read from SDL each frame.
 
 ## Physical iPhone / iPad
 
-Create a separate device build using `-DCMAKE_OSX_SYSROOT=iphoneos` and omit
-`CODE_SIGNING_ALLOWED=NO`. Open `build-ios-device/ToyCars.xcodeproj`, select a
-development team and device, and build with Xcode. A personal development team
-or distribution signing configuration must come from the owner of the app.
+Generate a separate project for the physical device:
+
+```sh
+cmake -S . -B build-ios-device -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DCMAKE_OSX_SYSROOT=iphoneos \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+  -DSDL3_SOURCE_DIR="$PWD/third_party/SDL"
+open build-ios-device/ToyCars.xcodeproj
+```
+
+The static-library option lets CMake check the compiler without signing a test
+app. Signing remains enabled for ToyCars.
+
+In Xcode, select the **ToyCars** scheme. Under the ToyCars target's **Signing &
+Capabilities**, enable **Automatically manage signing** and select your
+development team. Select your connected iPhone or iPad as the run destination
+and press **Run**. The device must trust the Mac and have Developer Mode enabled.
+A personal development team or distribution signing configuration must come
+from the owner of the app.
+
+If Xcode lists your iPhone as incompatible, check which project is open:
+`build-ios` above is configured with `SDKROOT=iphonesimulator` and
+`CODE_SIGNING_ALLOWED=NO`. Use `build-ios-device/ToyCars.xcodeproj` for a physical
+phone. Both builds use ARM64, but simulator binaries cannot run on an iPhone.
 
 The renderer currently uses Apple's deprecated but available GLES API.
 An SDL_GPU/Metal backend and physical-device profiling are appropriate future
@@ -73,7 +96,7 @@ work before a long-term public iOS release.
 ## Mobile behavior
 
 - Landscape left and right are supported; a portrait surface displays a rotate
-  prompt and pauses gameplay.
+  prompt, pauses gameplay and blocks input to the covered screens.
 - Steering and brake/drift fingers are independent. Finger cancellation and
   focus loss clear held controls.
 - Auto acceleration is on by default. In manual mode, the right button is GAS.
@@ -81,6 +104,9 @@ work before a long-term public iOS release.
 - Backgrounding pauses the race and audio; foregrounding requires a deliberate
   resume. Countdown pause retains the remaining countdown.
 - Menus adapt to available height after safe-area insets.
+- A lost GL context triggers a rebuild of models, shaders, render targets and
+  fonts in SDL's replacement context. The current race stays paused with its
+  progress and fuel preserved until explicitly resumed.
 
 Emulator and simulator checks do not establish sustained performance or battery
 consumption on a physical phone. See [Validation](VALIDATION.md) for the exact

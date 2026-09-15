@@ -6,6 +6,16 @@
 
 ## Play on macOS
 
+From the project directory, build and launch the game with one command:
+
+```sh
+make run
+```
+
+`make` builds without launching; `make test` builds and runs the tests.
+Pass game options with, for example, `make run ARGS="--track winter --autoplay"`.
+Development builds need CMake and SDL3 installed.
+
 In this workspace, a ready-to-open application is in `dist/ToyCars.app`:
 
 ```sh
@@ -15,6 +25,7 @@ open dist/ToyCars.app
 The Android test package is `dist/ToyCars-android-arm64-debug.apk`.
 
 SDL3 is the only runtime library. CMake finds the Homebrew installation automatically.
+The equivalent CMake commands are:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -22,7 +33,8 @@ cmake --build build -j
 ./build/ToyCars
 ```
 
-The generated `build/assets` folder belongs beside the executable. The game does
+The generated `build/assets` folder belongs beside the executable. Every build
+refreshes it, including builds after only changing an asset. The game does
 not download anything and does not require Blender, Python, SDL_ttf, a login, or
 an internet connection to run.
 
@@ -37,6 +49,8 @@ an internet connection to run.
   collisions, gravity, takeoff and landing. Leaving the road costs speed.
 - Collectible fuel, fuel exhaustion, lap validation, race position, race time,
   lap time, final classification, podium medals and local personal records.
+- Each track card shows your personal best race time and highest medal. Results
+  also show the saved record; tracks you have not finished show `BEST --:--`.
 - A live 3D track selector, garage with six liveries, controls guide, settings,
   countdown, pause, restart, results and next-track flow. English throughout.
 - Independent multitouch steering and brake/drift controls, automatic or manual
@@ -82,7 +96,7 @@ Reproduce all five scenes and their runtime exports:
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender -b --python tools/build_assets.py
-cmake -E copy_directory assets build/assets
+cmake --build build
 ```
 
 The Blender script is an authoring tool. Gameplay and rendering run in C.
@@ -117,8 +131,36 @@ ctest --test-dir build --output-on-failure
 
 The headless tests drive complete races on every track at all three difficulty
 levels and check fuel, AI progress, jumps, lap progression, recovery, pause,
-fuel exhaustion and independent multitouch input. See [Validation](docs/VALIDATION.md)
+fuel exhaustion and independent multitouch input. Regression tests cover finish-line
+recrossing, lasting landing slowdown, independent pointer clicks, canceled input,
+ground contact and slope alignment off the road, free off-road movement around
+bends, terrain resistance and island-edge recovery, and copying changed or newly
+added assets without recompiling C sources.
+See [Validation](docs/VALIDATION.md)
 for executed checks and remaining release work.
+
+After rebuilding the Blender scenes, verify road markings and terrain contact:
+
+```sh
+/Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python tests/track_markings.py
+/Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python tests/ground_contact.py
+```
+
+Diagnostic runs (`--autoplay`, `--frames` or `--screen`) leave personal records
+and medals unchanged, including in memory. Settings can still be saved normally.
+
+The optional graphics regression test requires a desktop display. It exercises
+the real event loop, replaces the GL context, checks portrait input blocking and
+wide results, and uses an isolated profile under the build directory:
+
+```sh
+cmake -S . -B build -DTOYCARS_GRAPHICS_TESTS=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+Use `ctest --test-dir build -LE graphics --output-on-failure` for headless checks
+when the graphics test is enabled.
 
 For memory checks:
 
@@ -126,6 +168,12 @@ For memory checks:
 cmake -S . -B build-asan -DTOYCARS_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-asan -j
 ./build-asan/ToyCars --test
+```
+
+C sources use the repository's `.clang-format` style. To keep changes readable:
+
+```sh
+clang-format -i main.c src/*.c src/*.h tools/bake_fonts.c
 ```
 
 ## Design research and credits

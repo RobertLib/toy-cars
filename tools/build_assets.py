@@ -6,6 +6,7 @@ No Blender installation or Python interpreter is needed to play the game.
 """
 import bpy, math, random, struct, os
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 from math import sin, cos, pi
 
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +55,36 @@ def mesh(name,vs,fs,material):
     m=bpy.data.meshes.new(name);m.from_pydata([xyz(v) for v in vs],[],fs);m.update()
     o=bpy.data.objects.new(name,m);bpy.context.collection.objects.link(o);o.data.materials.append(material);return o
 
+def road_marking(name,surface,lap_length,start,end,left,right,material):
+    """Clip paint to road triangles in (distance, lane) space, including the seam.
+
+    Interpolating the original triangle vertices preserves the exact road height
+    and banking, even where a marking crosses a bend or a triangle diagonal.
+    """
+    vertices=[];faces=[]
+    for cycle in range(math.floor(start/lap_length),math.floor(end/lap_length)+1):
+        lo=start-cycle*lap_length;hi=end-cycle*lap_length
+        for triangle in surface:
+            if max(v[0] for v in triangle)<=lo or min(v[0] for v in triangle)>=hi:continue
+            polygon=list(triangle)
+            for axis,bound,sign in [(0,lo,1),(0,hi,-1),(1,left,1),(1,right,-1)]:
+                clipped=[]
+                for previous,current in zip(polygon[-1:]+polygon[:-1],polygon):
+                    a=(previous[axis]-bound)*sign>=0;b=(current[axis]-bound)*sign>=0
+                    if a!=b:
+                        f=(bound-previous[axis])/(current[axis]-previous[axis])
+                        clipped.append(tuple(x+(y-x)*f for x,y in zip(previous,current)))
+                    if b:clipped.append(current)
+                polygon=clipped
+            if len(polygon)<3:continue
+            for k in range(1,len(polygon)-1):
+                a,b,c=polygon[0],polygon[k],polygon[k+1]
+                if abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))<1e-9:continue
+                index=len(vertices)
+                vertices.extend((v[2],v[3]+.035,v[4]) for v in (a,b,c))
+                faces.append((index,index+1,index+2))
+    return mesh(name,vertices,faces,material)
+
 def export(path):
     bpy.context.view_layer.update();deps=bpy.context.evaluated_depsgraph_get();data=[]
     for o in bpy.context.scene.objects:
@@ -70,6 +101,21 @@ def export(path):
     with open(path,'wb') as f:
         f.write(b'TCM1');f.write(struct.pack('<I',len(data)//10));f.write(struct.pack('<%sf'%len(data),*data))
     print('EXPORTED',os.path.basename(path),len(data)//30,'triangles',flush=True)
+
+def export_surface(path):
+    """Collision uses the same triangles as the visible driving surfaces."""
+    bpy.context.view_layer.update();data=[]
+    for o in bpy.context.scene.objects:
+        if not o.get('drivable'):continue
+        o.data.calc_loop_triangles()
+        for tri in o.data.loop_triangles:
+            points=[eng(o.matrix_world@o.data.vertices[i].co) for i in tri.vertices]
+            a,b,c=points
+            if abs((b[0]-a[0])*(c[2]-a[2])-(b[2]-a[2])*(c[0]-a[0]))<1e-6:continue
+            for p in points:data.extend(p)
+    with open(path,'wb') as f:
+        f.write(b'TCS1');f.write(struct.pack('<I',len(data)//9))
+        f.write(struct.pack('<%sf'%len(data),*data))
 
 def save(name):
     scene=bpy.context.scene
@@ -184,17 +230,43 @@ def build_track(theme,name):
     grass=mat(['Meadow','Golden sand','Powder snow'][theme],[(.48,.64,.30),(.83,.73,.49),(.76,.87,.87)][theme])
     road=mat('Road '+name,[(.28,.31,.29),(.53,.44,.31),(.37,.48,.54)][theme])
     curb=mat('Curb '+name,[(.80,.31,.18),(.89,.43,.18),(.21,.50,.64)][theme])
-    # Sculpted circular island. Regular rings keep the mesh mobile-friendly.
-    vs=[(0,terrain(0,0,theme)-.1,0)];rings=25;slices=128
+    banks=[]
+    for i in range(N):
+        pp,pn=path[(i-5)%N],path[(i+5)%N]
+        banks.append(max(-.33,min(.33,(pp[3]*pn[4]-pp[4]*pn[3])*.55)))
+    # Author the road first so terrain grading can respect its tightest bends.
+    verts=[]
+    for i,p in enumerate(path):
+        x,y,z,dx,dz,half,_=p
+        for side in [-1,1]:verts.append((x+dz*half*side,y+banks[i]*side,z-dx*half*side))
+    faces=[(i*2,((i+1)%N)*2,((i+1)%N)*2+1,i*2+1) for i in range(N)]
+    ribbon=mesh('Elevated ribbon road',verts,faces,road)
+    ribbon['drivable']=True
+    for poly in ribbon.data.polygons:poly.use_smooth=True
+    ribbon.data.calc_loop_triangles()
+    # Grade a broad shoulder into the hills, without a trench beneath the road.
+    vs=[(0,terrain(0,0,theme)-.14,0)];rings=40;slices=192
     for r in range(1,rings+1):
         for j in range(slices):
             a=j*2*pi/slices;rad=r/rings
             x=cos(a)*128*rad;z=sin(a)*126*rad
             edge=max(0,(rad-.87)/.13)
             y=terrain(x,z,theme)-.14-edge*edge*5
-            closest=min(path[::4],key=lambda p:(p[0]-x)**2+(p[2]-z)**2)
-            road_distance=((closest[0]-x)**2+(closest[2]-z)**2)**.5
-            if road_distance<width*.5+5:y=min(y,closest[1]-1.1)
+            idx=min(range(N),key=lambda i:(path[i][0]-x)**2+(path[i][2]-z)**2)
+            projections=[]
+            for segment in ((idx-1)%N,idx):
+                p,q=path[segment],path[(segment+1)%N]
+                dx,dz=q[0]-p[0],q[2]-p[2]
+                f=max(0,min(1,((x-p[0])*dx+(z-p[2])*dz)/(dx*dx+dz*dz)))
+                center=tuple(a+(b-a)*f for a,b in zip(p,q))
+                projections.append((math.hypot(center[0]-x,center[2]-z),segment,f,center))
+            road_distance,idx,f,closest=min(projections)
+            lane=(x-closest[0])*closest[4]-(z-closest[2])*closest[3]
+            blend=max(0,min(1,(road_distance-width*.5-2)/5))
+            blend=blend*blend*(3-2*blend)
+            bank=banks[idx]+(banks[(idx+1)%N]-banks[idx])*f
+            grade=closest[1]+bank*max(-1,min(1,lane/closest[5]))-.22
+            y=grade+(y-grade)*blend
             vs.append((x,y,z))
     fs=[]
     for j in range(slices):fs.append((0,1+(j+1)%slices,1+j))
@@ -202,7 +274,25 @@ def build_track(theme,name):
         for j in range(slices):
             a=1+(r-1)*slices+j;b=1+(r-1)*slices+(j+1)%slices;c=1+r*slices+(j+1)%slices;d=1+r*slices+j
             fs.extend([(a,b,c),(a,c,d)])
+    # A coarse terrain face can span both sides of a hairpin. Cut only those
+    # faces that intersect the actual road, keeping a shallow covered road bed.
+    ground_bvh=BVHTree.FromPolygons([Vector(xyz(v)) for v in vs],fs,all_triangles=True)
+    cuts=[0.0]*len(vs)
+    for triangle in ribbon.data.loop_triangles:
+        a,b,c=[ribbon.data.vertices[i].co for i in triangle.vertices]
+        for sample in (a,b,c,(a+b)/2,(b+c)/2,(c+a)/2,(a+b+c)/3):
+            hit,_,face,_=ground_bvh.ray_cast(sample+Vector((0,0,30)),Vector((0,0,-1)))
+            if hit is not None:
+                cut=max(0,hit.z-sample.z+.12)
+                for vertex in fs[face]:cuts[vertex]=max(cuts[vertex],cut)
+    vs=[(x,y-cuts[i],z) for i,(x,y,z) in enumerate(vs)]
     island=mesh('Sculpted island',vs,fs,grass)
+    island['drivable']=True
+    ground_bvh=BVHTree.FromPolygons([Vector(xyz(v)) for v in vs],fs,all_triangles=True)
+    def ground_height(x,z):
+        hit,_,_,_=ground_bvh.ray_cast(Vector((x,-z,100)),Vector((0,0,-1)))
+        assert hit is not None,(name,x,z)
+        return hit.z
     # Per-face palette variation gives the ground a hand-built faceted finish.
     for k in range(7):island.data.materials.append(mat(name+' ground tone '+str(k),tuple(min(1,v*(.985+k*.005)) for v in grass.diffuse_color[:3])))
     for poly in island.data.polygons:poly.material_index=random.randrange(1,8);poly.use_smooth=True
@@ -216,29 +306,31 @@ def build_track(theme,name):
         for i in range(18):
             a=i*2*pi/18;x,z=cos(a)*133,sin(a)*133
             box('Foam glint',(x,-6.6,z),(5,.04,.4),cream,.1,yaw=-a)
-    # Full 3D road ribbons conform to elevation; bank in response to curvature.
-    verts=[]
-    for i,p in enumerate(path):
-        x,y,z,dx,dz,half,_=p;pn=path[(i+5)%N];pp=path[(i-5)%N]
-        curve=(pp[3]*pn[4]-pp[4]*pn[3]);bank=max(-.33,min(.33,curve*.55))
-        for side in [-1,1]:verts.append((x+dz*half*side,y+bank*side,z-dx*half*side))
-    faces=[(i*2,((i+1)%N)*2,((i+1)%N)*2+1,i*2+1) for i in range(N)]
-    ribbon=mesh('Elevated ribbon road',verts,faces,road)
-    for poly in ribbon.data.polygons:poly.use_smooth=True
-    # A molded road bed gives the ribbon visible thickness above the terrain.
+    # Paint follows the road's exact elevation and banking.
+    ribbon.data.calc_loop_triangles();surface=[]
+    for triangle in ribbon.data.loop_triangles:
+        segment=triangle.polygon_index;points=[]
+        for vertex in triangle.vertices:
+            i=vertex//2;s=length if segment==N-1 and i==0 else path[i][6]
+            points.append((s,path[i][5]*(1 if vertex%2 else -1),*verts[vertex]))
+        surface.append(points)
+    # The shoulder meets the actual island mesh; no unsupported road skirt.
     for side in [-1,1]:
         bed=[]
         for i,p in enumerate(path):
             a=verts[i*2+(side+1)//2]
-            bed.extend([(a[0],a[1]-.03,a[2]),(a[0]+p[4]*1.05*side,a[1]-.75,a[2]-p[3]*1.05*side)])
-        mesh('Sculpted road bed',bed,[(i*2,i*2+1,((i+1)%N)*2+1,((i+1)%N)*2) for i in range(N)],mat('Road foundation '+name,[(.41,.44,.31),(.68,.57,.36),(.66,.78,.80)][theme]))
+            x=a[0]+p[4]*1.5*side;z=a[2]-p[3]*1.5*side
+            bed.extend([a,(x,ground_height(x,z)-.04,z)])
+        shoulder=mesh('Sculpted road bed',bed,[(i*2,i*2+1,((i+1)%N)*2+1,((i+1)%N)*2) for i in range(N)],mat('Road foundation '+name,[(.41,.44,.31),(.68,.57,.36),(.66,.78,.80)][theme]))
+        shoulder['drivable']=True
     # Curbs, dashed lane markings, trackside guardrail and reflectors.
     for i in range(0,N,2):
         p=path[i];q=path[(i+2)%N]
         for side in [-1,1]:
             a=verts[i*2+(side+1)//2];b=verts[((i+2)%N)*2+(side+1)//2]
             vv=[a,b,(b[0]+q[4]*.72*side,b[1]+.1,b[2]-q[3]*.72*side),(a[0]+p[4]*.72*side,a[1]+.1,a[2]-p[3]*.72*side)]
-            mesh('Alternating safety curb',vv,[(0,1,2,3)],curb if (i//4)%2 else cream)
+            curb_mesh=mesh('Alternating safety curb',vv,[(0,1,2,3)],curb if (i//4)%2 else cream)
+            curb_mesh['drivable']=True
         if i%8==0:
             yaw=math.atan2(p[3],p[4]);box('Center dash',(p[0],p[1]+.045,p[2]),(.15,.018,1.65),cream,0,yaw)
         if i%16==0:
@@ -252,7 +344,8 @@ def build_track(theme,name):
         p=path[idx];yaw=math.atan2(p[3],p[4]);length_r=5.8;height=1.40 if theme!=2 else 1.65
         def local(x,y,z):return(p[0]+cos(yaw)*x+sin(yaw)*z,p[1]+y,p[2]-sin(yaw)*x+cos(yaw)*z)
         vv=[local(x,y,z) for x,y,z in [(-3.9,0,-length_r/2),(3.9,0,-length_r/2),(-3.9,height,length_r/2),(3.9,height,length_r/2),(-3.9,0,length_r/2),(3.9,0,length_r/2)]]
-        mesh('Jump ramp',vv,[(0,2,3,1),(0,4,2),(1,3,5),(2,4,5,3)],mat('Ramp deck',(.67,.42,.18)))
+        ramp_mesh=mesh('Jump ramp',vv,[(0,2,3,1),(0,4,2),(1,3,5),(2,4,5,3)],mat('Ramp deck',(.67,.42,.18)))
+        ramp_mesh['drivable']=True
         for k in range(3):
             zz=-1.8+k*1.55
             for side in [-1,1]:
@@ -268,10 +361,16 @@ def build_track(theme,name):
     for k in range(14):
         for j in range(2):
             box('Gantry checker',startpos(-5.9+k*.9,6.65+j*.65,.38),(.65,.52,.05),cream if (k+j)%2 else dark,0,yaw)
+    half=width*.5-.12;cell=half*2/12
     for k in range(12):
-        for j in range(2):box('Finish road checker',startpos(-5+k*.87,.06,-j*.85),(.85,.025,.84),cream if (k+j)%2 else dark,0,yaw)
+        for j in range(2):
+            road_marking('Finish road checker',surface,length,-(j+1)*.85+.008,-j*.85-.008,
+                         -half+k*cell+.008,-half+(k+1)*cell-.008,cream if (k+j)%2 else dark)
     for row in range(4):
-        for side in [-1,1]:box('Starting grid',startpos(side*2.2,.06,-5-row*4), (2.4,.025,.15),cream,0,yaw)
+        # Match game_start's row spacing and lanes; the line sits ahead of the nose.
+        s=-5-row*4.2+1.7
+        for side in [-1,1]:
+            road_marking('Starting grid',surface,length,s-.075,s+.075,side*2-1.2,side*2+1.2,cream)
     # Place vegetation only outside the racing surface.
     def nearest(x,z):return min((x-p[0])**2+(z-p[2])**2 for p in path[::4])**.5
     placed=0
@@ -317,6 +416,7 @@ def build_track(theme,name):
         box('Direction sign',(xx,p[1]+2,zz),(2.8,1.15,.18),orange,.08,yaw)
         box('Sign post',(xx,p[1]+.9,zz),(.16,1.8,.16),dark,.02)
     export(os.path.join(ROOT,'assets/tracks',name+'.tcm'))
+    export_surface(os.path.join(ROOT,'assets/tracks',name+'.tcs'))
     cans=[]
     for k,idx in enumerate([42,130,214,332,407,542,601]):cans.append((float(idx),(-1 if k%2 else 1)*2.4))
     with open(os.path.join(ROOT,'assets/tracks',name+'.tcp'),'wb') as f:
@@ -327,6 +427,7 @@ def build_track(theme,name):
     save(name)
     print('TRACK',name,'length',round(length,1),'elevation',round(max(p[1] for p in path)-min(p[1] for p in path),1),flush=True)
 
-build_car();build_can()
-for theme,name in enumerate(['country','beach','winter']):build_track(theme,name)
-print('All Blender source scenes and runtime assets generated.',flush=True)
+if __name__=='__main__':
+    build_car();build_can()
+    for theme,name in enumerate(['country','beach','winter']):build_track(theme,name)
+    print('All Blender source scenes and runtime assets generated.',flush=True)
