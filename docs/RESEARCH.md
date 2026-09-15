@@ -1,5 +1,9 @@
 # Research and design direction
 
+The soundtrack was expanded on 16 September 2026 using interactive-composition
+research. See [Soundtrack](SOUNDTRACK.md) for sources, original compositions and
+the concrete arrangement and gameplay decisions.
+
 Research date: 15 September 2026. The following are design references, not a
 claim that one game is objectively the best in the genre.
 
@@ -65,8 +69,8 @@ Source: [Remedy's games catalog](https://www.remedygames.com/games).
 - **Session:** two laps, eight drivers, roughly one minute to ninety seconds
   depending on route, difficulty and player pace.
 - **Challenge:** learn the line, carry speed over ramps, keep enough fuel to finish.
-- **Ownership:** everything needed to race is on the device. Every track is
-  available immediately; no accounts, ads, purchases or network services.
+- **Ownership:** everything needed to race is on the device. Tracks unlock by
+  playing Championship; no accounts, ads, purchases or network services.
 - **Asset pipeline:** Blender is the authoring source for all modeled 3D content.
 
 ## Technical references
@@ -81,3 +85,24 @@ The platform implementation was checked against SDL's primary documentation:
 The renderer uses GL 3.3 on desktop and GLES 3.0 on Android/iOS. Apple's OpenGL
 APIs are deprecated; a Metal backend through SDL_GPU is a future renderer
 upgrade, not something this version claims to implement.
+
+## Sega Rally and Daytona — progression and quick races
+
+Research date: 17 September 2026. Sega Rally Championship links Desert, Forest
+and Mountain stages, carrying position between stages. First place after the
+third stage grants the bonus Lakeside stage. On Saturn, reaching Lakeside also
+unlocks it for practice/time trials. Original Daytona USA instead offers three
+courses (Beginner, Advanced, Expert), with checkpoints extending a race timer;
+it is not a persistent track-unlock campaign.
+
+Sources: [Sega Rally gameplay](https://en.wikipedia.org/wiki/Sega_Rally_Championship),
+[Saturn unlock conditions](https://gamefaqs.gamespot.com/saturn/573998-sega-rally-championship/cheats),
+[Daytona USA gameplay](https://en.wikipedia.org/wiki/Daytona_USA#Gameplay).
+
+**Applied:** ToyCars combines a saved Championship route with an Arcade mode
+for individual races on earned tracks. A podium on Harvest Hills unlocks
+Sunshine Coast, a podium there unlocks Alpine Rush, and a podium in Alpine Rush
+completes Championship. Any difficulty qualifies. This is an adaptation for
+ToyCars, not an exact reproduction of either Sega game's rules: positions
+reset between stages, progress survives quitting, and fuel remains the race's
+survival constraint. No cumulative points or checkpoint countdown was added.
