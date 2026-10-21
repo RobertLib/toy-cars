@@ -497,6 +497,15 @@ static void control_rects(UI *u, Rect *left, Rect *right, Rect *brake, Rect *gas
     *brake = (Rect){end - 304, y, 144, 132};
     *gas = (Rect){end - 144, y, 144, 132};
 }
+static Rect recover_rect(UI *u) {
+    return (Rect){u->safe_left + 24, u->height - u->safe_bottom - 240, 176, 72};
+}
+// Thumbs land loosely, so the wheel accepts presses across the lower-left
+// corner up to RECOVER's row, including the margin outside the safe area.
+static Rect wheel_target(UI *u, Rect left, Rect right) {
+    float top = recover_rect(u).y;
+    return (Rect){0, top, right.x + right.w + 96, u->height - top};
+}
 Controls ui_controls(UI *u, const Game *g) {
     Controls c = {0};
     u->left = u->right = u->brake = u->gas = false;
@@ -513,8 +522,8 @@ Controls ui_controls(UI *u, const Game *g) {
     c.throttle = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP] || g->profile.auto_accel) ? 1 : 0;
     Rect l, r, b, a;
     control_rects(u, &l, &r, &b, &a);
-    Rect wheel = {l.x, l.y, r.x + r.w - l.x, u->height - l.y};
-    float wheel_cx = wheel.x + wheel.w * .5f, wheel_cy = l.y + l.h + 29;
+    Rect wheel = wheel_target(u, l, r), recover = recover_rect(u);
+    float wheel_cx = (l.x + r.x + r.w) * .5f, wheel_cy = l.y + l.h + 29;
     if (!u->mobile || !g->profile.touch ||
         (u->wheel_pointer == 1 && !u->mouse_down) ||
         (u->wheel_pointer >= 2 && !u->fingers[u->wheel_pointer - 2].active)) {
@@ -530,7 +539,8 @@ Controls ui_controls(UI *u, const Game *g) {
                   y = i < 0 ? u->mouse_y : u->fingers[i].y;
             float press_x = i < 0 ? u->mouse_press_x : u->fingers[i].press_x,
                   press_y = i < 0 ? u->mouse_press_y : u->fingers[i].press_y;
-            if (u->mobile && inside(wheel, press_x, press_y)) {
+            if (u->mobile && inside(wheel, press_x, press_y) &&
+                !inside(recover, press_x, press_y)) {
                 // Capture one pointer for the whole gesture, including outside
                 // the wheel. Pedal fingers cannot take ownership or steer it.
                 if (!u->wheel_pointer) {
@@ -1212,7 +1222,7 @@ static void hud(UI *u, Game *g, Renderer *r) {
              "A / D STEER    SPACE DRIFT    R RECOVER");
     }
     if (u->mobile && g->profile.touch && g->screen == SCREEN_RACE) {
-        Rect recover = {u->safe_left + 24, u->height - u->safe_bottom - 240, 176, 72};
+        Rect recover = recover_rect(u);
         rounded(u, recover, 10, rgba(.08, .14, .17, .48f));
         center_label(u, 1, 28, recover.x + recover.w * .5f, recover.y + 19, WHITE, "RECOVER");
         if (hit(u, recover)) {
@@ -2173,6 +2183,27 @@ static int test_layout_input(UI *u, Game *g) {
             test_finger_event(u, SDL_EVENT_FINGER_DOWN, 1, 51, cx - 130, u->height - 2);
             ui_controls(u, g);
             UI_CHECK(u->wheel_pointer != 0, "wheel can be grabbed at the bottom screen edge");
+            ui_clear_input(u);
+            Rect recover = recover_rect(u);
+            const float grabs[][2] = {{2, l.y + 40},
+                                      {r.x + r.w + 80, l.y + 40},
+                                      {r.x + r.w - 10, recover.y + 6}};
+            for (size_t k = 0; k < SDL_arraysize(grabs); k++) {
+                test_finger_event(u, SDL_EVENT_FINGER_DOWN, 1, 51, grabs[k][0], grabs[k][1]);
+                ui_controls(u, g);
+                UI_CHECK(u->wheel_pointer != 0 && ui_controls(u, g).steer == 0,
+                         "wheel grabs neutrally beside and above its visible rim");
+                ui_clear_input(u);
+            }
+            test_finger_event(u, SDL_EVENT_FINGER_DOWN, 1, 51, recover.x + recover.w * .5f,
+                              recover.y + recover.h * .5f);
+            ui_controls(u, g);
+            UI_CHECK(u->wheel_pointer == 0, "RECOVER presses never grab the wheel");
+            ui_clear_input(u);
+            test_finger_event(u, SDL_EVENT_FINGER_DOWN, 1, 51, b.x + 4, b.y + 4);
+            controls = ui_controls(u, g);
+            UI_CHECK(u->wheel_pointer == 0 && controls.brake > 0,
+                     "the enlarged wheel target stays clear of the pedals");
             ui_clear_input(u);
         }
     }
