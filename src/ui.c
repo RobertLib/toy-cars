@@ -1087,11 +1087,6 @@ static void mobile_hud_top(UI *u, Game *g) {
         g->screen = SCREEN_PAUSE;
         ui_clear_input(u);
     }
-    if (g->mode == MODE_CHAMPIONSHIP) {
-        SDL_snprintf(text, sizeof text, "STAGE %d / 3 / RACE P%d%s", g->selected + 1, g->rank,
-                     g->selected < TRACK_COUNT - 1 ? " / TOP 4 ADVANCE" : "");
-        center_label(u, 1, 26, cx, y + 100, WHITE, text);
-    }
     rounded(u, (Rect){end - 154, y + 108, 154, 132}, 14, rgba(.08, .13, .16, .48f));
     map(u, &g->tracks[g->selected], (Rect){end - 140, y + 120, 126, 108}, WHITE, 3, g, true);
 }
@@ -1176,9 +1171,8 @@ static void hud(UI *u, Game *g, Renderer *r) {
         float cx = (w + u->safe_left - u->safe_right) * .5f;
         float safe_height = u->height - u->safe_top - u->safe_bottom;
         // One cursor reserves space for every visible notice, including GO!'s
-        // larger panel. Start below the HUD and the championship status line.
-        float notice_y = u->safe_top +
-                         (u->mobile ? (g->mode == MODE_CHAMPIONSHIP ? 164 : 116) : 127);
+        // larger panel. Start below the HUD.
+        float notice_y = u->safe_top + (u->mobile ? 116 : 127);
         if (c->fuel < 25 && g->screen == SCREEN_RACE)
             hud_notice(u, cx, &notice_y, 0, u->mobile ? 24 : 17, WHITE,
                        "LOW FUEL - FIND A GREEN CAN", false);
