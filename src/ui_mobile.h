@@ -484,9 +484,8 @@ static void mobile_results(UI *u, Game *g) {
     if (!championship &&
         mobile_button(u, (Rect){b.x + 2 * (bw + 12), by, bw, 72}, "RECORDS", false))
         game_open_records(g);
-    if (!completed && !waiting &&
-        mobile_button(u, (Rect){b.x + b.w - bw, by, bw, 72}, "BACK TO MENU", false)) {
-        g->screen = SCREEN_MENU;
+    if (!completed && mobile_button(u, (Rect){b.x + b.w - bw, by, bw, 72}, "BACK TO MENU", false)) {
+        game_leave_results(g);
         ui_clear_input(u);
     }
 }

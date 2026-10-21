@@ -1548,9 +1548,8 @@ static void results(UI *u, Game *g) {
     }
     if (g->mode == MODE_ARCADE && button(u, (Rect){m + 445, by, 176, 49}, "TRACK RECORDS", false))
         game_open_records(g);
-    if (!completed && (!championship || g->championship_scored || g->test_mode) &&
-        button(u, (Rect){x + w - 225, by, 189, 49}, "BACK TO MENU", false)) {
-        g->screen = SCREEN_MENU;
+    if (!completed && button(u, (Rect){x + w - 225, by, 189, 49}, "BACK TO MENU", false)) {
+        game_leave_results(g);
         ui_clear_input(u);
     }
 }
@@ -1609,9 +1608,6 @@ bool ui_record_event(UI *u, Game *g, const SDL_Event *event) {
         ui_clear_input(u);
         return true;
     }
-    if (g->screen == SCREEN_RESULTS && g->mode == MODE_CHAMPIONSHIP && !g->championship_scored &&
-        !g->test_mode && back)
-        return true;
     if (g->screen == SCREEN_RESULTS && g->championship_celebration && !g->initials_pending &&
         (confirm || back || key == SDLK_SPACE || pad == SDL_GAMEPAD_BUTTON_SOUTH)) {
         if (event->type != SDL_EVENT_KEY_DOWN || !event->key.repeat) {

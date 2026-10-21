@@ -105,6 +105,8 @@ an internet connection to run.
   Progress and each driver's classification save after each settled stage.
   Initials are requested after the opening finish and reused on later stages.
   **NEXT STAGE**, Enter or gamepad A continues after rivals finish if you qualify.
+  **BACK TO MENU** or Esc works while rivals are still racing: the rest of the
+  stage is simulated instantly and scored as if you had watched it.
   Final or elimination results return to the menu, where a new championship starts from zero points
   while unlocked tracks, records and the best championship medal remain saved.
   Older saves keep their unlocked tracks and records and start a new points series.

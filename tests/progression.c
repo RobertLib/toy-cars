@@ -570,6 +570,22 @@ int main(int argc, char **argv) {
     g->time = 221;
     game_tick(g, (Controls){0}, FIXED_DT, false);
     EXPECT(g->championship_scored && g->profile.championship_stages == 2);
+    // Leaving to the menu races the pending rivals out instead of losing the stage.
+    EXPECT(game_reset_profile(g));
+    finish(g, 4, false);
+    EXPECT(game_submit_initials(g));
+    game_continue(g);
+    g->screen = SCREEN_RACE;
+    g->cars[0].finished = true;
+    g->cars[0].finish_time = 80;
+    game_results(g);
+    EXPECT(!g->championship_scored && g->profile.championship_stages == 1);
+    game_leave_results(g);
+    EXPECT(g->screen == SCREEN_MENU && g->championship_scored);
+    EXPECT(g->profile.championship_stages == 2 && g->profile.championship_places[1][0] > 0);
+    EXPECT(g->selected == (g->profile.championship_eliminated ? 0 : 2));
+    for (int i = 1; i < CAR_COUNT; i++)
+        EXPECT(g->cars[i].finished || g->cars[i].dnf);
     // Ties count back wins before stable driver order.
     EXPECT(game_reset_profile(g));
     g->profile.championship_completed = g->profile.championship_stages = 2;

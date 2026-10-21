@@ -52,10 +52,9 @@ static SDL_Gamepad *open_gamepad(void) {
     return p;
 }
 static void toggle_pause(Game *g, UI *u) {
-    if (g->screen == SCREEN_RESULTS && g->mode == MODE_CHAMPIONSHIP && !g->championship_scored &&
-        !g->test_mode)
-        return;
-    if (g->screen == SCREEN_RESET_DATA)
+    if (g->screen == SCREEN_RESULTS)
+        game_leave_results(g);
+    else if (g->screen == SCREEN_RESET_DATA)
         g->screen = SCREEN_SETTINGS;
     else if (g->screen == SCREEN_RACE || g->screen == SCREEN_COUNTDOWN)
         g->screen = SCREEN_PAUSE;

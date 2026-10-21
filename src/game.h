@@ -223,6 +223,7 @@ void game_start(Game *g);
 void props_reset(Game *g);
 void props_tick(Game *g, float dt);
 void game_continue(Game *g);
+void game_leave_results(Game *g);
 bool game_track_unlocked(const Profile *p, int track);
 void game_set_mode(Game *g, RaceMode mode);
 bool game_night(const Game *g);

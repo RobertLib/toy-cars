@@ -1412,6 +1412,23 @@ void game_continue(Game *g) {
     game_start(g);
 }
 
+// Leaving a pending Championship stage still scores it: the remaining rivals
+// finish instantly, exactly as they would have on the results screen.
+void game_leave_results(Game *g) {
+    if (game_save_warning(g))
+        return;
+    for (int step = 0; step < 120 * 240 && g->screen == SCREEN_RESULTS &&
+                       g->mode == MODE_CHAMPIONSHIP && !g->championship_scored && !g->test_mode;
+         step++)
+        game_tick(g, (Controls){0}, FIXED_DT, false);
+    g->championship_celebration = false;
+    g->sound_event = 0;
+    // The menu previews the stage the Championship continues with.
+    if (g->mode == MODE_CHAMPIONSHIP)
+        game_set_mode(g, MODE_CHAMPIONSHIP);
+    g->screen = SCREEN_MENU;
+}
+
 void game_open_records(Game *g) {
     g->records_return = g->screen;
     g->record_history = false;
