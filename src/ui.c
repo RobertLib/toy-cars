@@ -105,6 +105,21 @@ static void ring(UI *u, float x, float y, float radius, float w, Color c) {
              y + sinf(b) * radius, w, c);
     }
 }
+static void arc(UI *u, float cx, float cy, float radius, float width, float from, float to,
+                Color color) {
+    int segments = (int)ceilf((to - from) * 32);
+    for (int i = 0; i < segments; i++) {
+        float a = from + (to - from) * i / segments;
+        float b = from + (to - from) * (i + 1) / segments;
+        float outer = radius + width * .5f, inner = radius - width * .5f;
+        triangle(u, cx + cosf(a) * inner, cy + sinf(a) * inner,
+                 cx + cosf(a) * outer, cy + sinf(a) * outer,
+                 cx + cosf(b) * outer, cy + sinf(b) * outer, color);
+        triangle(u, cx + cosf(a) * inner, cy + sinf(a) * inner,
+                 cx + cosf(b) * outer, cy + sinf(b) * outer,
+                 cx + cosf(b) * inner, cy + sinf(b) * inner, color);
+    }
+}
 static float text_width(UI *u, int font, float size, const char *s) {
     float w = 0;
     for (; *s; s++) {
@@ -930,65 +945,56 @@ static void touch_pedal(UI *u, Rect target, float travel, bool brake, const char
     float hinge = target.y + target.h - 30;
     Rect face = {cx - (brake ? 59 : 34), hinge - (brake ? 72 : 100),
                  brake ? 118 : 68, brake ? 72 : 100};
-    // The start hint follows the pedal itself, without a surrounding button panel.
-    if (hint > 0)
-        pedal_detail(u, face, (Rect){face.x - 5, face.y - 5, face.w + 10, face.h + 10},
-                     13, travel, 0, alpha(ORANGE, hint));
-    rounded(u, (Rect){cx - 23, hinge - 3, 46, 14}, 5, alpha(INK, .65f));
+    // A HUD-colored footplate grounds the pedal and keeps its caption readable
+    // on snow and sand; it lights up like a primary button while pressed. The
+    // pedal itself has no surrounding button panel.
+    Color plate = {lerpf(.08f, ORANGE.r, travel), lerpf(.13f, ORANGE.g, travel),
+                   lerpf(.16f, ORANGE.b, travel), lerpf(.86f, 1, travel)};
+    rounded(u, (Rect){cx - face.w * .5f - 8, hinge + 2, face.w + 16, 30}, 10, plate);
+    // The start hint and a press glow follow the tilting face.
+    float glow = fmaxf(hint, .75f * travel);
+    if (glow > 0)
+        pedal_detail(u, face, (Rect){face.x - 7, face.y - 7, face.w + 14, face.h + 14}, 16,
+                     travel, 0, alpha(ORANGE, glow));
     if (brake) {
-        rounded(u, (Rect){cx - 10, target.y + 6, 20, 72}, 5, rgb(.24f, .29f, .28f));
-        rect(u, (Rect){cx - 6, target.y + 9, 4, 60}, rgb(.49f, .53f, .49f));
+        rounded(u, (Rect){cx - 9, target.y + 4, 18, 74}, 9, INK);
+        rounded(u, (Rect){cx - 5, target.y + 8, 10, 68}, 5, rgb(.83f, .82f, .77f));
+        rect(u, (Rect){cx - 1.5f, target.y + 11, 3, 62}, PAPER);
     }
+    // Cream plastic around dark rubber with an ink outline: it reads against
+    // dark night roads and bright snow alike.
     float depth = 7 - 5 * travel;
-    pedal_detail(u, face, (Rect){face.x + 3, face.y + 3, face.w, face.h}, 11, travel,
-                 11 - 8 * travel, rgba(.04f, .08f, .09f, .28f));
-    pedal_detail(u, face, face, 10, travel, depth, rgb(.14f, .19f, .20f));
-    pedal_detail(u, face, face, 10, travel, 0, rgb(.68f, .72f, .68f));
-    pedal_detail(u, face, (Rect){face.x + 2, face.y + 2, face.w - 4, face.h - 6}, 8, travel, 0,
-                 PAPER);
-    pedal_detail(u, face, (Rect){face.x + 5, face.y + 5, face.w - 10, face.h - 11}, 6,
-                 travel, 0, brake ? rgb(.23f, .28f, .28f) : rgb(.72f, .75f, .70f));
+    Rect outline = {face.x - 2, face.y - 2, face.w + 4, face.h + 4};
+    pedal_detail(u, face, (Rect){face.x + 4, face.y + 4, face.w, face.h}, 12, travel,
+                 12 - 8 * travel, alpha(INK, .35f));
+    pedal_detail(u, face, outline, 12, travel, depth, INK);
+    pedal_detail(u, face, outline, 12, travel, 0, INK);
+    pedal_detail(u, face, face, 10, travel, 0, PAPER);
+    pedal_detail(u, face, (Rect){face.x + 2, face.y + face.h - 5, face.w - 4, 3}, 1, travel, 0,
+                 rgb(.80f, .79f, .74f));
+    Rect pad = {face.x + 6, face.y + 6, face.w - 12, face.h - 13};
+    pedal_detail(u, face, pad, 6, travel, 0, rgb(.17f, .23f, .25f));
     if (brake) {
         for (int i = 0; i < 4; i++) {
-            Rect rib = {face.x + 13, face.y + 13 + i * 11, face.w - 26, 6};
-            pedal_detail(u, face, rib, 2, travel, 1, rgb(.10f, .15f, .16f));
+            Rect rib = {face.x + 14, face.y + 14 + i * 11, face.w - 28, 6};
+            pedal_detail(u, face, rib, 3, travel, 0, rgb(.31f, .38f, .40f));
             rib.h = 2;
-            pedal_detail(u, face, rib, 1, travel, 0, rgb(.40f, .45f, .43f));
+            pedal_detail(u, face, rib, 1, travel, 0, rgb(.47f, .54f, .55f));
         }
     } else {
         for (int i = 0; i < 3; i++) {
-            Rect rib = {face.x + 14 + i * 15, face.y + 18, 9, face.h - 36};
-            pedal_detail(u, face, rib, 4, travel, 0, rgb(.26f, .32f, .31f));
+            Rect rib = {face.x + 14 + i * 15, face.y + 20, 9, face.h - 40};
+            pedal_detail(u, face, rib, 4.5f, travel, 0, rgb(.31f, .38f, .40f));
+            rib.x += 2;
             rib.w = 2;
-            pedal_detail(u, face, rib, 1, travel, 0, rgb(.49f, .55f, .50f));
+            pedal_detail(u, face, rib, 1, travel, 0, rgb(.47f, .54f, .55f));
         }
         for (int i = 0; i < 2; i++) {
-            Rect screw = {cx - 3, face.y + 8 + i * (face.h - 22), 6, 6};
-            pedal_detail(u, face, screw, 3, travel, 0, rgb(.40f, .46f, .43f));
-            screw.y += 2;
-            screw.h = 1;
-            pedal_detail(u, face, screw, 0, travel, 0, PAPER);
+            Rect screw = {cx - 3, face.y + 10 + i * (face.h - 27), 6, 6};
+            pedal_detail(u, face, screw, 3, travel, 0, rgb(.80f, .79f, .74f));
         }
     }
-    // Small warm accents echo the cars and menu without recoloring the rubber.
-    rounded(u, (Rect){cx - 15, hinge + 9, 30, 3}, 1.5f, alpha(ORANGE, .35f + .65f * travel));
-    center_label(u, 1, 20, cx, target.y + target.h - 24, WHITE, caption);
-}
-
-static void wheel_arc(UI *u, float cx, float cy, float radius, float width,
-                      float from, float to, Color color) {
-    int segments = (int)ceilf((to - from) * 32);
-    for (int i = 0; i < segments; i++) {
-        float a = from + (to - from) * i / segments;
-        float b = from + (to - from) * (i + 1) / segments;
-        float outer = radius + width * .5f, inner = radius - width * .5f;
-        triangle(u, cx + cosf(a) * inner, cy + sinf(a) * inner,
-                 cx + cosf(a) * outer, cy + sinf(a) * outer,
-                 cx + cosf(b) * outer, cy + sinf(b) * outer, color);
-        triangle(u, cx + cosf(a) * inner, cy + sinf(a) * inner,
-                 cx + cosf(b) * outer, cy + sinf(b) * outer,
-                 cx + cosf(b) * inner, cy + sinf(b) * inner, color);
-    }
+    center_label(u, 1, 20, cx, hinge + 6, WHITE, caption);
 }
 
 static void touch_wheel(UI *u, Renderer *r, Rect left, Rect right) {
@@ -999,42 +1005,56 @@ static void touch_wheel(UI *u, Renderer *r, Rect left, Rect right) {
     // orange center marker turn together; the generous touch zones stay fixed.
     flush(u);
     glEnable(GL_SCISSOR_TEST);
-    glScissor((int)(left.x * r->width / u->width),
-              0,
-              (int)((right.x + right.w - left.x) * r->width / u->width),
+    float crop = left.x - 16;
+    glScissor((int)(crop * r->width / u->width), 0,
+              (int)((right.x + right.w + 16 - crop) * r->width / u->width),
               (int)((u->height - left.y) * r->height / u->height));
+    // A soft shadow lifts the wheel off grass, sand and snow alike.
+    arc(u, cx, cy + 7, 130, 52, -PI, PI, alpha(INK, .12f));
+    arc(u, cx, cy + 5, 130, 40, -PI, PI, alpha(INK, .26f));
     for (int i = 0; i < 3; i++) {
         float a = -.5f * PI + (i - 1) * 1.12f + angle;
-        float x = cx + cosf(a) * 126, y = cy + sinf(a) * 126;
-        line(u, cx, cy + 5, x, y + 5, 20, alpha(INK, .4f));
-        line(u, cx, cy, x, y, 16, rgb(.28f, .34f, .33f));
-        line(u, cx - 2, cy - 2, x - 2, y - 2, 10, rgb(.72f, .75f, .70f));
-        line(u, cx, cy, cx + cosf(a) * 102, cy + sinf(a) * 102, 4,
-             rgb(.39f, .45f, .42f));
+        float x = cx + cosf(a) * 128, y = cy + sinf(a) * 128;
+        line(u, cx, cy + 5, x, y + 5, 24, alpha(INK, .3f));
+        line(u, cx, cy, x, y, 22, INK);
+        line(u, cx, cy, x, y, 16, rgb(.83f, .82f, .77f));
+        line(u, cx, cy, x, y, 6, PAPER);
     }
-    wheel_arc(u, cx + 2, cy + 6, 130, 32, -PI, PI, alpha(INK, .35f));
-    wheel_arc(u, cx, cy, 130, 30, -PI, PI, rgb(.09f, .14f, .15f));
-    wheel_arc(u, cx, cy - 1, 130, 24, -PI, PI, rgb(.23f, .29f, .28f));
-    wheel_arc(u, cx, cy - 2, 135, 4, -PI, PI, rgb(.43f, .49f, .45f));
-    wheel_arc(u, cx, cy, 119, 2, -PI, PI, rgb(.58f, .62f, .56f));
-    circle(u, cx, cy + 3, 27, INK);
-    circle(u, cx, cy, 25, rgb(.58f, .62f, .56f));
-    circle(u, cx, cy, 21, rgb(.23f, .29f, .28f));
-    circle(u, cx, cy, 7, ORANGE);
+    // Dark rubber with a cream keyline, the same pairing as the pedals.
+    arc(u, cx, cy, 130, 36, -PI, PI, INK);
+    arc(u, cx, cy, 130, 28, -PI, PI, rgb(.20f, .27f, .29f));
     for (int side = -1; side <= 1; side += 2) {
         float grip = -.5f * PI + side * 1.03f + angle;
-        wheel_arc(u, cx, cy, 130, 22, grip - .24f, grip + .24f, rgb(.14f, .20f, .20f));
-        for (int i = -2; i <= 2; i++) {
-            float a = grip + i * .085f;
-            line(u, cx + cosf(a) * 123, cy + sinf(a) * 123,
-                 cx + cosf(a) * 137, cy + sinf(a) * 137, 2, rgb(.32f, .38f, .35f));
+        arc(u, cx, cy, 130, 40, grip - .25f, grip + .25f, INK);
+        arc(u, cx, cy, 130, 32, grip - .235f, grip + .235f, rgb(.14f, .20f, .22f));
+        for (int i = -3; i <= 3; i++) {
+            float a = grip + i * .065f;
+            line(u, cx + cosf(a) * 117, cy + sinf(a) * 117, cx + cosf(a) * 143,
+                 cy + sinf(a) * 143, 3, rgb(.27f, .34f, .36f));
         }
     }
+    // The light stays on top while the wheel turns.
+    arc(u, cx, cy, 138, 5, -.86f * PI, -.14f * PI, alpha(WHITE, .14f));
+    arc(u, cx, cy, 150, 3, -PI, PI, alpha(PAPER, .92f));
     float marker = -.5f * PI + angle;
-    wheel_arc(u, cx, cy, 130, 26, marker - .042f, marker + .042f, ORANGE);
-    wheel_arc(u, cx, cy, 137, 3, marker - .042f, marker + .042f, PAPER);
+    arc(u, cx, cy, 130, 40, marker - .062f, marker + .062f, INK);
+    arc(u, cx, cy, 130, 33, marker - .046f, marker + .046f, ORANGE);
+    circle(u, cx, cy + 4, 35, alpha(INK, .35f));
+    circle(u, cx, cy, 33, INK);
+    circle(u, cx, cy, 29, ORANGE);
+    arc(u, cx, cy, 22, 4, -.8f * PI, -.2f * PI, alpha(WHITE, .4f));
     flush(u);
     glDisable(GL_SCISSOR_TEST);
+}
+
+// A clockwise arrow around a circle: put the car back on the road.
+static void recover_icon(UI *u, float x, float y, float s, Color c) {
+    float to = 1.4f * PI, head = s * .62f;
+    arc(u, x, y, s, s * .4f, -.2f * PI, to, c);
+    float ex = x + cosf(to) * s, ey = y + sinf(to) * s;
+    float rx = cosf(to), ry = sinf(to), tx = -ry, ty = rx;
+    triangle(u, ex + rx * head, ey + ry * head, ex - rx * head, ey - ry * head,
+             ex + tx * head * 1.2f, ey + ty * head * 1.2f, c);
 }
 
 static void animate_controls(UI *u, const Game *g) {
@@ -1272,8 +1292,10 @@ static void hud(UI *u, Game *g, Renderer *r) {
     }
     if (u->mobile && g->profile.touch && g->screen == SCREEN_RACE) {
         Rect recover = recover_rect(u);
-        rounded(u, recover, 10, rgba(.08, .14, .17, .48f));
-        center_label(u, 1, 28, recover.x + recover.w * .5f, recover.y + 19, WHITE, "RECOVER");
+        rounded(u, recover, 14, rgba(.08, .13, .16, .86f));
+        float rx = recover.x + (recover.w - text_width(u, 1, 28, "RECOVER") - 34) * .5f;
+        recover_icon(u, rx + 11, recover.y + 36, 10, ORANGE);
+        label(u, 1, 28, rx + 34, recover.y + 19, WHITE, "RECOVER");
         if (hit(u, recover)) {
             game_reset_car(g, 0);
             ui_clear_input(u);
