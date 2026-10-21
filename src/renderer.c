@@ -860,6 +860,37 @@ static float hero_lane(const Game *g, int car) {
     return (slot % 2 ? 1.7f : -1.7f) + sinf(g->clock * .31f + slot * 1.3f) * .35f;
 }
 
+// A ramp's lip launches the pack the way update_car would at HERO_SPEED, rather
+// than dropping it back onto the road in one frame. The attitude eases from the
+// deck's slope to the ground below, so the car touches down on its wheels.
+static void hero_jump(const Track *t, float distance, float lane, Vec3 *pos, float *pitch,
+                      float *roll) {
+    float climb = (HERO_SPEED * .265f + 1.3f) / HERO_SPEED, fall = 10 / (HERO_SPEED * HERO_SPEED);
+    for (int j = 0; j < t->ramp_count; j++) {
+        const Ramp *ramp = &t->ramps[j];
+        const TrackPoint *rp = &t->points[(int)ramp->index];
+        float past = fmodf(distance - rp->s - ramp->length * .5f, t->length);
+        if (past < 0)
+            past += t->length;
+        // Start just short of the lip, where the deck still holds the car higher.
+        if (past > t->length - 1)
+            past -= t->length;
+        if (past > 40 || fabsf(lane) >= ramp->half)
+            continue;
+        float lip = rp->p.y + ramp->height, y = lip + past * (climb - fall * past);
+        if (y <= pos->y)
+            return;
+        float drop = fmaxf(0, lip - pos->y);
+        float landing = (climb + sqrtf(climb * climb + 4 * fall * drop)) / (2 * fall);
+        float f = clampf(past / landing, 0, 1);
+        f = f * f * (3 - 2 * f);
+        *pitch = lerpf(-atanf(ramp->height / ramp->length), *pitch, f);
+        *roll *= f;
+        pos->y = y;
+        return;
+    }
+}
+
 // Interpolated once per frame so both passes and the night lamps agree.
 static void update_cars(Renderer *r, const Game *g, bool menu) {
     const Track *t = &g->tracks[g->selected];
@@ -869,9 +900,11 @@ static void update_cars(Renderer *r, const Game *g, bool menu) {
         r->car_visible[i] = true;
         if (menu) {
             Vec3 d;
-            pos = track_at(t, hero_distance(g, i), hero_lane(g, i), &d);
+            float distance = hero_distance(g, i), lane = hero_lane(g, i);
+            pos = track_at(t, distance, lane, &d);
             yaw = atan2f(d.x, d.z);
             car_surface_pose(t, &pos, yaw, &pitch, &roll);
+            hero_jump(t, distance, lane, &pos, &pitch, &roll);
             // Rivals cycle through the other liveries so the player's car stays unique.
             int color = g->profile.color;
             r->car_colors[i] = CAR_COLORS[i ? (color + 1 + (i - 1) % 5) % 6 : color];
