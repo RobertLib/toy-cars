@@ -676,6 +676,17 @@ static float corner_grip(int track) {
     return track == 2 ? 20.f : track == 1 ? 24.f : 28.f;
 }
 
+// Rivals adapt to the player's race distance so neither side drives out of
+// sight. Returns -1..1: positive when the rival trails the player. Close
+// racing is untouched, and the result table settles at regular pace.
+static float ai_rubber_band(const Game *g, int index) {
+    const Car *c = &g->cars[index], *player = &g->cars[0];
+    if (index == 0 || c->finished || player->finished || player->dnf)
+        return 0;
+    float gap = player->progress - c->progress;
+    return copysignf(fminf(1, fmaxf(0, fabsf(gap) - 15) / 100), gap);
+}
+
 void game_ai(const Game *g, int index, Controls *out) {
     const Track *t = &g->tracks[g->selected];
     const Car *c = &g->cars[index];
@@ -758,7 +769,21 @@ void game_ai(const Game *g, int index, Controls *out) {
     int difficulty = g->profile.difficulty;
     float pace = difficulty == 0 ? .74f : difficulty == 2 ? 1.08f : 1.f;
     pace *= 1.f - (index % 4) * .008f;
-    float desired = 31.f * pace;
+    // Leaders ease off for a struggling player, most on easy. Trailing rivals
+    // gain engine power and corner closer to the tire limit, still below it.
+    // Ice recovers grip too slowly for that, so there only easy rivals
+    // approach normal cornering pace.
+    static const float ease[3] = {.40f, .30f, .15f}, push[3] = {.12f, .14f, .18f};
+    static const float commit[3] = {1.f, 1.10f, 1.14f};
+    float band = ai_rubber_band(g, index), power = 1;
+    if (band < 0) {
+        pace *= 1 + band * ease[difficulty];
+    } else {
+        float limit = g->selected == 2 ? 1.f : commit[difficulty];
+        pace += fmaxf(0, limit - pace) * band;
+        power += band * push[difficulty];
+    }
+    float desired = 31.f * pace * power;
     for (float ahead = 0; ahead <= 48; ahead += 6) {
         Vec3 d0, d1;
         track_at(t, c->last_s + ahead, 0, &d0);
@@ -824,7 +849,7 @@ void game_ai(const Game *g, int index, Controls *out) {
                 desired = fminf(desired, fmaxf(0, other->speed + (gap - 7) * .8f));
         }
     }
-    out->throttle = clampf(.6f + (desired - c->speed) * .5f, 0, 1);
+    out->throttle = clampf(.6f + (desired - c->speed) * .5f, 0, power);
     out->brake = clampf((c->speed - desired - .6f) * .25f, 0, 1);
     if (c->finished)
         out->brake = fminf(out->brake, .22f);
@@ -3117,6 +3142,40 @@ static void test_ai_pace_and_range(Game *g) {
           "skipping all fuel stops cannot complete a race");
 }
 
+static void test_ai_rubber_band(Game *g) {
+    const Track *t = &g->tracks[g->selected];
+    for (int difficulty = 0; difficulty < 3; difficulty++) {
+        g->profile.difficulty = difficulty;
+        game_start(g);
+        g->screen = SCREEN_RACE;
+        // Find a stretch where a rival racing close to the player holds full
+        // throttle just below its cruising speed: no bend or ramp limits it.
+        float speed = 31.f * (difficulty == 0 ? .74f : difficulty == 2 ? 1.08f : 1.f) - 2;
+        Controls close = {0}, leading, trailing, settled;
+        float s = 60;
+        for (; s < t->length - 260; s += 5) {
+            test_place_car(g, 1, s, speed, false);
+            test_place_car(g, 0, s - 10, speed, false);
+            game_ai(g, 1, &close);
+            if (close.throttle == 1 && close.brake == 0)
+                break;
+        }
+        CHECK(s < t->length - 260, "rubber band fixture finds a cruising stretch");
+        test_place_car(g, 0, s - 200, speed, false);
+        game_ai(g, 1, &leading);
+        test_place_car(g, 0, s + 200, speed, false);
+        game_ai(g, 1, &trailing);
+        g->cars[0].finished = true;
+        game_ai(g, 1, &settled);
+        CHECK(leading.throttle == 0 && leading.brake > 0,
+              "a rival far ahead eases off for the player");
+        CHECK(trailing.throttle > 1, "a rival far behind gains catch-up power");
+        CHECK(settled.throttle == close.throttle && settled.brake == close.brake,
+              "rivals settle the results at regular pace after the player finishes");
+    }
+    g->profile.difficulty = 1;
+}
+
 static void test_weather(Game *g) {
     game_start(g);
     CHECK(g->weather.kind == WEATHER_CLEAR && g->weather.intensity == 0 &&
@@ -3348,6 +3407,7 @@ int game_tests(void) {
         }
         test_fuel_pickups(g);
         test_ai_pace_and_range(g);
+        test_ai_rubber_band(g);
         test_steering_direction(g);
         test_lap_timing(g);
         test_close_finish(g);

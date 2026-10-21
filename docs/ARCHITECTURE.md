@@ -110,6 +110,16 @@ near alternating road edges, restore 18 percentage points within a 1.5-meter
 collection radius, and have a 35-second per-driver cooldown so a lead car
 cannot deny the entire field access to fuel.
 
+Rivals adapt to the player's race distance so neither side drives out of sight.
+Within 15 meters they race at their difficulty pace; beyond that the adjustment
+grows over the next 100 meters. A rival ahead lowers its pace by up to
+40 / 30 / 15 percent on easy / normal / hard. A rival behind gains up to
+12 / 14 / 18 percent engine power (throttle above 1, AI only) and corners at up
+to 1.0 / 1.10 / 1.14 times normal pace, which stays below the tire limit. Ice
+recovers grip too slowly for that, so on Alpine Rush catch-up never raises
+corner pace above 1.0. Jump takeoff speeds are unchanged. Adaptation stops once the player
+finishes, so the remaining classification settles at regular pace.
+
 Track projection searches a bounded neighborhood around the previous segment.
 Signed, unwrapped progress and sequential quarter-lap gates prevent finish-line
 reversing from counting laps. Recovery preserves distance, checkpoints and fuel.

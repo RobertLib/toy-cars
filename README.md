@@ -82,6 +82,9 @@ an internet connection to run.
   asset generation; each track adds one wildlife draw per scene/shadow pass.
 - Eight-car, two-lap races. Seven rivals steer, brake, select overtaking lines,
   plan fuel stops and recover if stuck. Three difficulty levels.
+- Rivals adapt to your pace: leaders far ahead ease off, and rivals far behind
+  push harder, so the field stays within reach. Close racing is unaffected;
+  easy waits longest for you, hard chases hardest.
 - A substantial shortcut across terrain returns the car to its last legal road
   position and stops it. Detection compares the actual distance driven with the
   skipped road distance; ordinary shoulder excursions keep their progress.
@@ -116,7 +119,8 @@ an internet connection to run.
   sending the car into a sideways skid that widens the turn and scrubs speed,
   especially on snow. Ease the steering and slow down to regain traction.
   Brake before tight corners; holding Drift trades more grip and speed for rotation.
-  Rivals use the same physics and plan braking around the surface limits.
+  Rivals use the same physics and plan braking around the surface limits;
+  only rivals far behind you get a little extra engine power to catch up.
 - Collectible fuel, fuel exhaustion, lap validation, race position, race time,
   lap time, final classification, podium medals and local personal records.
   Finishers lead the classification, followed by active racers and then DNF cars.
@@ -319,8 +323,8 @@ python3 tests/track_layouts.py
 ```
 
 The headless tests drive complete races on every track at all three difficulty
-levels and check fuel, AI progress, jumps, lap progression, recovery, pause,
-fuel exhaustion and independent multitouch input. Regression tests cover finish-line
+levels and check fuel, AI progress, rival pace adaptation, jumps, lap progression,
+recovery, pause, fuel exhaustion and independent multitouch input. Regression tests cover finish-line
 recrossing, lasting landing slowdown, independent pointer clicks, canceled input,
 ground contact and slope alignment off the road, free off-road movement around
 bends, genuine corner shortcuts versus harmless shoulder excursions across

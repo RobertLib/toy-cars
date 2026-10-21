@@ -97,6 +97,7 @@ typedef struct {
 } Track;
 typedef struct {
     // Driver-relative steering: -1 left, +1 right.
+    // Throttle above 1 is catch-up power for rivals far behind the player.
     float steer, throttle, brake;
     bool drift, reset;
     // Holding the player's brake also requests reverse once stopped.
