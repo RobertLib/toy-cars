@@ -602,6 +602,7 @@ void game_start(Game *g) {
     g->toast_time = 0;
     g->wrong_way = 0;
     g->shake = 0;
+    g->rival_quiet = 0;
     g->last_lap = 0;
     memset(g->particles, 0, sizeof g->particles);
     g->particle_cursor = 0;
@@ -1618,6 +1619,245 @@ static void resolve_car_collisions(Game *g) {
     }
 }
 
+// Chatter topics pair a kind with a feature index, so each ramp, can or rival
+// is announced once per pass. Lines speak only about the road ahead.
+enum {
+    TOPIC_START = 1, TOPIC_TUMBLE, TOPIC_FINISH, TOPIC_CAN, TOPIC_RAMP, TOPIC_CORNER,
+    TOPIC_OFFROAD, TOPIC_BOOST, TOPIC_BRIDGE, TOPIC_RIVAL, TOPIC_WEATHER, TOPIC_CLEAR
+};
+#define TOPIC(kind, item) ((kind) * 64 + (item))
+
+static bool quip_fresh(const Car *c, int topic, float span) {
+    for (int i = 0; i < QUIP_MEMORY; i++)
+        if (c->quip_topics[i] == topic && c->progress - c->quip_marks[i] < span)
+            return false;
+    return true;
+}
+
+// '@' stands for a rival's name or a direction.
+static void quip_format(char *out, size_t size, const char *line, const char *word) {
+    char *end = out + size - 1;
+    for (; *line && out < end; line++) {
+        if (*line != '@') {
+            *out++ = *line;
+            continue;
+        }
+        for (const char *w = word; *w && out < end; w++)
+            *out++ = *w;
+    }
+    *out = 0;
+}
+
+// Lines are NULL-terminated. A hashed pick has no audible rhythm, and the
+// previous line is never repeated straight away.
+static bool quip_say(Car *c, int index, int topic, const char *const *lines, const char *word) {
+    unsigned count = 0;
+    while (lines[count])
+        count++;
+    unsigned pick = (unsigned)(c->quip_count + 1) * 2654435761u + (unsigned)index * 40503u;
+    pick ^= pick >> 13;
+    pick *= 0x5bd1e995u;
+    pick ^= pick >> 15;
+    char text[sizeof c->quip];
+    quip_format(text, sizeof text, lines[pick % count], word);
+    if (!strcmp(text, c->quip))
+        quip_format(text, sizeof text, lines[(pick + 1) % count], word);
+    memcpy(c->quip, text, sizeof text);
+    c->quip_topics[c->quip_count % QUIP_MEMORY] = topic;
+    c->quip_marks[c->quip_count % QUIP_MEMORY] = c->progress;
+    c->quip_count++;
+    c->quip_time = QUIP_TIME;
+    return true;
+}
+
+// Picks the most pressing thing ahead. Rivals only show off about ramps, fuel,
+// traffic and the finish; the player also hears about bends, pads, bridges and weather.
+static bool chatter_pick(Game *g, int index) {
+    const Track *t = &g->tracks[g->selected];
+    Car *c = &g->cars[index];
+    bool me = index == 0;
+    float pass = t->length * .6f;
+    if (c->tumbling) {
+        static const char *lines[] = {"I MEANT TO DO THAT", "WHOOPSIE DAISY!", "ROLL WITH IT!",
+                                      "WHICH WAY IS UP?", NULL};
+        return quip_fresh(c, TOPIC(TOPIC_TUMBLE, 0), 25) &&
+               quip_say(c, index, TOPIC(TOPIC_TUMBLE, 0), lines, "");
+    }
+    if (!c->grounded)
+        return false;
+    // The player starts from the back; the grid can tie the last two places.
+    if (me && g->time < 4 && g->rank >= CAR_COUNT - 1 &&
+        quip_fresh(c, TOPIC(TOPIC_START, 0), 1e9f)) {
+        static const char *lines[] = {"BACK OF THE GRID? NOT FOR LONG", "WHOLE PACK AHEAD. YUM.",
+                                      "EVERYONE'S AHEAD... FOR NOW", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_START, 0), lines, "");
+    }
+    float remaining = t->length * RACE_LAPS - c->progress;
+    if (remaining > 0 && remaining < 90 && quip_fresh(c, TOPIC(TOPIC_FINISH, 0), 1e9f)) {
+        static const char *mine[] = {"FINISH LINE! FLOOR IT!", "CHECKERED FLAG AHEAD!",
+                                     "HOME STRETCH - GO GO GO!", NULL};
+        static const char *theirs[] = {"CHECKERED FLAG, HERE I COME", "SAVE ME A TROPHY!",
+                                       "FINISH LINE! WHEEE!", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_FINISH, 0), me ? mine : theirs, "");
+    }
+    int n = c->nearest;
+    float lane;
+    track_nearest(t, c->pos, &n, NULL, &lane);
+    int can = -1;
+    float can_ahead = 55;
+    for (int j = 0; j < t->can_count; j++) {
+        float d = wrap(t->points[(int)t->cans[j].index].s - c->last_s, t->length);
+        if (d > 8 && d < can_ahead && c->can_cooldown[j] <= 0) {
+            can = j;
+            can_ahead = d;
+        }
+    }
+    // Positive lanes lie to the driver's left.
+    const char *can_side = "DEAD AHEAD";
+    if (can >= 0 && fabsf(t->cans[can].lane - lane) > 1.2f)
+        can_side = t->cans[can].lane > lane ? "ON THE LEFT" : "ON THE RIGHT";
+    bool can_fresh = can >= 0 && quip_fresh(c, TOPIC(TOPIC_CAN, can), pass);
+    if (can_fresh && c->fuel < (me ? 30 : 50)) {
+        static const char *thirsty[] = {"GAS CAN @ - GRAB IT!", "ON FUMES! GAS @",
+                                        "GAS @! PRETTY PLEASE!", NULL};
+        static const char *dibs[] = {"DIBS ON THAT GAS!", "MMM... GASOLINE", "THAT CAN IS MINE!",
+                                     "SNACK TIME!", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_CAN, can), me ? thirsty : dibs, can_side);
+    }
+    for (int j = 0; j < t->ramp_count; j++) {
+        float ramp_s = t->points[(int)t->ramps[j].index].s;
+        float ahead = wrap(ramp_s - c->last_s, t->length);
+        if (ahead < 12 || ahead > 55 || !quip_fresh(c, TOPIC(TOPIC_RAMP, j), pass))
+            continue;
+        // The AI's takeoff check: a bend right after landing needs a gentler jump.
+        Vec3 takeoff, landing;
+        track_at(t, ramp_s, 0, &takeoff);
+        track_at(t, ramp_s + 40, 0, &landing);
+        float turn = angle_delta(atan2f(landing.x, landing.z), atan2f(takeoff.x, takeoff.z));
+        static const char *straight[] = {"RAMP AHEAD - FULL SEND!", "JUMP! HOLD ON TO YOUR HUBCAPS",
+                                         "RAMP! TIME TO FLY", "RAMP! I BELIEVE I CAN FLY", NULL};
+        static const char *bend[] = {"RAMP, THEN A @ BEND - EASY!", "JUMP INTO A @ BEND. GULP!",
+                                     "RAMP! LAND IT, THEN GO @", NULL};
+        static const char *show_off[] = {"WATCH ME FLY!", "RAMP! YEEHAW!", "CANNONBALL INCOMING!",
+                                         "TO INFINITY!", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_RAMP, j),
+                        !me ? show_off : fabsf(turn) > .5f ? bend : straight,
+                        turn > 0 ? "LEFT" : "RIGHT");
+    }
+    if (me && c->speed > 15 && quip_fresh(c, TOPIC(TOPIC_CORNER, 0), 90)) {
+        // Pace notes for bends tighter than ~27 m. Heading increases to the left.
+        for (float ahead = 15; ahead <= 50; ahead += 3) {
+            Vec3 d0, d1;
+            track_at(t, c->last_s + ahead, 0, &d0);
+            track_at(t, c->last_s + ahead + 12, 0, &d1);
+            float turn = angle_delta(atan2f(d1.x, d1.z), atan2f(d0.x, d0.z));
+            if (fabsf(turn) < .45f)
+                continue;
+            float grip_speed = sqrtf(corner_grip(g->selected) * 12 / fabsf(turn));
+            static const char *note[] = {"TIGHT @ AHEAD", "@ BEND COMING UP",
+                                         "SHARP @ - HOLD MY JUICE", NULL};
+            static const char *hot[] = {"TIGHT @ - BRAKES, BRAKES!", "@ BEND! TOO HOT, TOO HOT!",
+                                        "@ BEND! WHOA THERE!", NULL};
+            return quip_say(c, index, TOPIC(TOPIC_CORNER, 0), c->speed > grip_speed ? hot : note,
+                            turn > 0 ? "LEFT" : "RIGHT");
+        }
+    }
+    // Race progress stays frozen off-road, so one excursion gets one line.
+    if (me && c->offroad && quip_fresh(c, TOPIC(TOPIC_OFFROAD, 0), 250)) {
+        static const char *lines[TRACK_COUNT][4] = {
+            {"GRASS IS NOT A ROAD!", "MOWING THE LAWN, BRB", "COWS DRIVE HERE, NOT ME", NULL},
+            {"SAND IN EVERYTHING!", "BEACH DAY? NOT NOW!", "SANDCASTLE SPEEDRUN", NULL},
+            {"SNOWBANK SURFING!", "BRRR, FRESH POWDER!", "SNOW ANGEL MODE", NULL}};
+        return quip_say(c, index, TOPIC(TOPIC_OFFROAD, 0), lines[g->selected], "");
+    }
+    for (int j = 0; me && j < t->boost_count; j++) {
+        float ahead = wrap(t->boosts[j] - c->last_s, t->length);
+        if (ahead > 8 && ahead < 45 && quip_fresh(c, TOPIC(TOPIC_BOOST, j), pass)) {
+            static const char *lines[] = {"BOOST PAD - AIM FOR THE MIDDLE", "ZOOM ARROWS AHEAD!",
+                                          "TURBO STRIP! STAY CENTERED", NULL};
+            return quip_say(c, index, TOPIC(TOPIC_BOOST, j), lines, "");
+        }
+    }
+    if (me && quip_fresh(c, TOPIC(TOPIC_BRIDGE, 0), 150)) {
+        // Streams cross under short decks only a few metres long.
+        for (float ahead = 10; ahead <= 40; ahead += 1.5f) {
+            Vec3 p = track_at(t, c->last_s + ahead, 0, NULL);
+            float level, ground = track_height(t, p, NULL);
+            if (track_water(t, p, &level) && level < ground - .2f) {
+                static const char *lines[] = {"BRIDGE AHEAD - NO SWIMMING!",
+                                              "STREAM BELOW. DON'T LOOK DOWN",
+                                              "TROLL BRIDGE! PAY THE TOLL", NULL};
+                return quip_say(c, index, TOPIC(TOPIC_BRIDGE, 0), lines, "");
+            }
+        }
+    }
+    if (can_fresh && me && c->fuel < 85) {
+        static const char *lines[] = {"FREE GAS @", "GAS CAN @ - YUM", "SNACK TIME: GAS @", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_CAN, can), lines, can_side);
+    }
+    int rival = -1;
+    float gap = t->length * .5f;
+    for (int j = 0; j < CAR_COUNT; j++) {
+        const Car *other = &g->cars[j];
+        float d = wrap(other->last_s - c->last_s + t->length * .5f, t->length) - t->length * .5f;
+        if (j != index && !other->dnf && d > 2.5f && d < gap) {
+            rival = j;
+            gap = d;
+        }
+    }
+    // One rival topic for all cars: a pack would otherwise fill every pause.
+    if (rival >= 0 && gap < 20 && vlen(vsub(g->cars[rival].pos, c->pos)) < 24 &&
+        quip_fresh(c, TOPIC(TOPIC_RIVAL, 0), 150)) {
+        static const char *chase[] = {"@ AHEAD - SQUEEZE BY!", "CATCHING @!", "HELLO @. BYE @.",
+                                      "@ IN MY SIGHTS", NULL};
+        static const char *honk[] = {"OUTTA MY WAY, @!", "BEEP BEEP, @!", "MOVE OVER, @!",
+                                     "NICE BUMPER, @!", NULL};
+        static const char *nudge[] = {"COMING THROUGH, @!", "SCOOT OVER, @!",
+                                      "@, YOU'RE IN MY LANE", "NICE PAINT, @. NOW MOVE.",
+                                      "@ IS SO SLOW TODAY", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_RIVAL, 0), me ? chase : rival == 0 ? honk : nudge,
+                        g->cars[rival].name);
+    }
+    const Weather *w = &g->weather;
+    float spell = w->duration - w->remaining;
+    if (me && w->kind != WEATHER_CLEAR && spell > 2 && spell < 9 &&
+        quip_fresh(c, TOPIC(TOPIC_WEATHER, w->kind), 300)) {
+        static const char *lines[][3] = {
+            [WEATHER_RAIN] = {"RAIN! WIPERS ON", "SPLISH SPLASH, HERE WE GO", NULL},
+            [WEATHER_SNOW] = {"SNOW! EXTRA SLIDEY", "SNOWFLAKES ON MY HOOD!", NULL},
+            [WEATHER_WIND] = {"WINDY! HOLD ON TO YOUR HAT", "THE WIND WANTS TO RACE TOO", NULL}};
+        return quip_say(c, index, TOPIC(TOPIC_WEATHER, w->kind), lines[w->kind], "");
+    }
+    if (me && g->rank == 1 && gap > 120 && quip_fresh(c, TOPIC(TOPIC_CLEAR, 0), t->length * .8f)) {
+        static const char *lines[] = {"OPEN ROAD. ALL MINE!", "NOBODY AHEAD. JUST VIBES",
+                                      "LEADING! KEEP IT CLEAN", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_CLEAR, 0), lines, "");
+    }
+    return false;
+}
+
+static void car_chatter(Game *g, int index, float dt) {
+    Car *c = &g->cars[index];
+    c->quip_time = fmaxf(0, c->quip_time - dt);
+    c->quip_quiet = fmaxf(0, c->quip_quiet - dt);
+    if (c->finished || c->dnf) {
+        c->quip_time = 0;
+        return;
+    }
+    // A rollover interrupts the current line; otherwise lines take turns.
+    bool tumble = c->tumbling && quip_fresh(c, TOPIC(TOPIC_TUMBLE, 0), 25);
+    if (!tumble && (c->quip_time > 0 || c->quip_quiet > 0))
+        return;
+    // Rivals talk one at a time and only near the player, keeping it readable.
+    if (index > 0 && (g->rival_quiet > 0 || vlen(vsub(c->pos, g->cars[0].pos)) > 40))
+        return;
+    if (!chatter_pick(g, index))
+        return;
+    c->quip_quiet = QUIP_TIME + (index ? 5 + index * .7f : 2.5f);
+    if (index > 0)
+        g->rival_quiet = QUIP_TIME + 1.5f;
+}
+
 void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
     if (g->screen == SCREEN_PAUSE)
         return;
@@ -1705,6 +1945,9 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
     props_tick(g, dt);
     resolve_car_collisions(g);
     g->rank = player_rank(g);
+    g->rival_quiet = fmaxf(0, g->rival_quiet - dt);
+    for (int i = 0; i < CAR_COUNT; i++)
+        car_chatter(g, i, dt);
     Car *p = &g->cars[0];
     TrackPoint tp = g->tracks[g->selected].points[p->nearest];
     // Backing up is a maneuver, including coasting after releasing the brake.
@@ -3350,6 +3593,64 @@ static void test_boosts(Game *g) {
     game_start(g);
 }
 
+static bool test_spoke(const Car *c, int topic) {
+    for (int i = 0; i < QUIP_MEMORY && i < c->quip_count; i++)
+        if (c->quip_topics[i] == topic)
+            return true;
+    return false;
+}
+
+static void test_chatter(Game *g) {
+    const Track *t = &g->tracks[g->selected];
+    // Below pace-note speed and with a full tank, only the placed subjects speak.
+    float ramp_s = t->points[(int)t->ramps[0].index].s;
+    for (int passed = 0; passed < 2; passed++) {
+        game_start(g);
+        g->screen = SCREEN_RACE;
+        g->time = 10;
+        for (int i = 1; i < CAR_COUNT; i++)
+            g->cars[i].dnf = true;
+        test_place_player(g, ramp_s + (passed ? 10 : -35), 10, false);
+        game_tick(g, (Controls){.throttle = 1}, FIXED_DT, false);
+        CHECK(test_spoke(&g->cars[0], TOPIC(TOPIC_RAMP, 0)) == !passed,
+              "chatter announces the ramp ahead, never one already passed");
+    }
+    bool named_ahead = false, named_behind = false, honked = false, honked_behind = false;
+    for (int k = 0; k < 8; k++) {
+        for (int ahead = 0; ahead < 2; ahead++) {
+            game_start(g);
+            g->screen = SCREEN_RACE;
+            g->time = 10;
+            for (int i = 2; i < CAR_COUNT; i++)
+                g->cars[i].dnf = true;
+            float s = t->length * k / 8;
+            test_place_player(g, s, 10, false);
+            test_place_car(g, 1, s + (ahead ? 10 : -10), 10, false);
+            game_tick(g, (Controls){.throttle = 1}, FIXED_DT, false);
+            bool named = test_spoke(&g->cars[0], TOPIC(TOPIC_RIVAL, 0));
+            bool honk = test_spoke(&g->cars[1], TOPIC(TOPIC_RIVAL, 0));
+            named_ahead |= ahead && named;
+            named_behind |= !ahead && named;
+            honked |= !ahead && honk;
+            honked_behind |= ahead && honk;
+        }
+    }
+    CHECK(named_ahead && !named_behind, "the player names rivals ahead, never those behind");
+    CHECK(honked && !honked_behind, "rivals tease the player only while the player leads them");
+    game_start(g);
+    int steps = 0, rivals_at_once = 0, player_lines = 0;
+    while (g->screen != SCREEN_RESULTS && steps++ < 120 * 60) {
+        int before = g->cars[0].quip_count, talking = 0;
+        game_tick(g, (Controls){0}, FIXED_DT, true);
+        player_lines += g->cars[0].quip_count != before;
+        for (int i = 1; i < CAR_COUNT; i++)
+            talking += g->cars[i].quip_time > 0;
+        rivals_at_once = talking > rivals_at_once ? talking : rivals_at_once;
+    }
+    CHECK(player_lines >= 4 && rivals_at_once == 1,
+          "the player chats regularly while rivals take turns");
+}
+
 int game_tests(void) {
     Game *g = calloc(1, sizeof *g);
     if (!g || !game_load(g)) {
@@ -3425,6 +3726,7 @@ int game_tests(void) {
         test_fuel_pickups(g);
         test_ai_pace_and_range(g);
         test_ai_rubber_band(g);
+        test_chatter(g);
         test_steering_direction(g);
         test_lap_timing(g);
         test_close_finish(g);

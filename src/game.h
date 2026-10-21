@@ -17,6 +17,8 @@
 #define FUEL_PICKUP_AMOUNT 18
 #define FUEL_PICKUP_RADIUS 1.5f
 #define FUEL_PICKUP_COOLDOWN 35.f
+#define QUIP_TIME 2.4f
+#define QUIP_MEMORY 6
 #define MAX_PARTICLES 1024
 #define MAX_TRACK_PROPS 160
 #define MAX_FENCE_PANELS 16
@@ -121,6 +123,11 @@ typedef struct {
     bool grounded, finished, dnf, offroad;
     Color color;
     const char *name;
+    // Marker bubble chatter about the road ahead, never about what is behind.
+    char quip[40];
+    float quip_time, quip_quiet;
+    int quip_count, quip_topics[QUIP_MEMORY];
+    float quip_marks[QUIP_MEMORY]; // Race progress when each recent topic was spoken.
 } Car;
 typedef enum { PARTICLE_DUST, PARTICLE_SPRAY, PARTICLE_RIPPLE } ParticleKind;
 typedef struct {
@@ -197,6 +204,7 @@ typedef struct {
     float celebration_time;
     int selected, particle_cursor, rank, finish_rank;
     float time, countdown, clock, toast_time, wrong_way, shake;
+    float rival_quiet; // Pause between rival lines, which take turns.
     float start_idle_time;
     bool start_hint_dismissed;
     char toast[80];

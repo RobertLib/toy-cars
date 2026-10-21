@@ -1107,6 +1107,50 @@ static void hud_notice(UI *u, float cx, float *y, int font, float size, Color co
     *y += height + 12;
 }
 
+typedef struct {
+    const char *text;
+    Rect box;
+    float tail, size;
+    bool rival;
+} Bubble;
+// Marker bubbles carry each car's chatter about the road ahead. The player's
+// falls back to the name between lines; a rival's appears only while talking.
+static bool car_bubble(UI *u, Game *g, Renderer *r, int index, Bubble *b) {
+    const Car *c = &g->cars[index];
+    bool talking = c->quip_time > 0;
+    b->text = talking ? c->quip : index == 0 ? game_player_name(g) : NULL;
+    float x, y;
+    if (!b->text || !renderer_project(r, vadd(c->pos, v3(0, 3.7f, 0)), &x, &y))
+        return false;
+    // A new line pops in slightly larger, then settles.
+    float age = QUIP_TIME - c->quip_time;
+    float pop = talking && age < .25f ? 1 + .18f * sinf(age * 4 * PI) : 1;
+    b->rival = index > 0;
+    b->size = (talking && u->mobile ? 19 : 16) * pop;
+    float dot = b->rival ? b->size * .6f : 0, h = b->size * 1.375f;
+    float w = fmaxf(40, text_width(u, 1, b->size, b->text) + b->size + dot);
+    b->tail = x;
+    b->box = (Rect){clampf(x - w * .5f, 8, u->width - 8 - w), y - 8 - h, w, h};
+    return true;
+}
+static void draw_bubble(UI *u, const Bubble *b, Color speaker, float fade, bool tail) {
+    Rect box = b->box;
+    rounded(u, box, 5, alpha(WHITE, fade));
+    if (tail) {
+        float x = clampf(b->tail, box.x + 8, box.x + box.w - 8), y = box.y + box.h;
+        triangle(u, x - 5, y, x + 5, y, x, y + 6, alpha(WHITE, fade));
+    }
+    float dot = 0;
+    if (b->rival) {
+        // The speaker's paint color tells rivals apart.
+        dot = b->size * .6f;
+        circle(u, box.x + b->size * .7f, box.y + box.h * .5f, b->size * .2f, alpha(speaker, fade));
+    }
+    float tw = text_width(u, 1, b->size, b->text);
+    label(u, 1, b->size, box.x + dot + (box.w - dot - tw) * .5f, box.y + b->size / 16,
+          alpha(INK, fade), b->text);
+}
+
 static void hud(UI *u, Game *g, Renderer *r) {
     float m = 32 + u->safe_left, y = 24 + u->safe_top, w = u->width;
     Car *c = &g->cars[0];
@@ -1194,12 +1238,22 @@ static void hud(UI *u, Game *g, Renderer *r) {
         }
     }
     // The player marker remains visible while jumping and among the AI pack.
-    float px, py;
-    if (renderer_project(r, vadd(c->pos, v3(0, 3.7f, 0)), &px, &py)) {
-        rounded(u, (Rect){px - 20, py - 30, 40, 22}, 5, WHITE);
-        center_label(u, 1, 16, px, py - 29, INK, game_player_name(g));
-        triangle(u, px - 5, py - 8, px + 5, py - 8, px, py - 2, WHITE);
+    // Rival lines move above it rather than covering it.
+    Bubble mine, bubble;
+    bool marker = car_bubble(u, g, r, 0, &mine);
+    for (int i = 1; i < CAR_COUNT; i++) {
+        if (!car_bubble(u, g, r, i, &bubble))
+            continue;
+        Rect a = bubble.box, b = mine.box;
+        bool covered = marker && a.x < b.x + b.w + 4 && b.x < a.x + a.w + 4 &&
+                       a.y < b.y + b.h + 4 && b.y < a.y + a.h + 4;
+        if (covered)
+            bubble.box.y = b.y - a.h - 6;
+        draw_bubble(u, &bubble, g->cars[i].color, fminf(1, g->cars[i].quip_time / .2f),
+                    !covered);
     }
+    if (marker)
+        draw_bubble(u, &mine, WHITE, 1, true);
     float bottom = u->height - 54 - u->safe_bottom;
     SDL_snprintf(s, sizeof s, "%03d", (int)(c->speed * 3.6f));
     center_label(u, 1, 44, w * .5f, bottom - 53, WHITE, s);
