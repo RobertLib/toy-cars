@@ -50,6 +50,9 @@ typedef struct {
 #define SURFACE_GRID 32
 #define SURFACE_ORIGIN -128.f
 #define SURFACE_CELL 8.f
+// Ground queries bridge slits between adjacent driving meshes up to this far
+// from a triangle; road and curb edges leave seams several centimetres wide.
+#define SURFACE_SEAM .08f
 
 typedef struct {
     Vec3 a, b, c;

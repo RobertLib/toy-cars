@@ -171,24 +171,45 @@ bool track_water(const Track *t, Vec3 p, float *height) {
     return found;
 }
 
+static float segment_distance_xz(Vec3 p, Vec3 a, Vec3 b) {
+    float dx = b.x - a.x, dz = b.z - a.z;
+    float f = ((p.x - a.x) * dx + (p.z - a.z) * dz) / fmaxf(dx * dx + dz * dz, 1e-12f);
+    f = clampf(f, 0, 1);
+    return hypotf(p.x - a.x - dx * f, p.z - a.z - dz * f);
+}
+
 float track_height(const Track *t, Vec3 p, bool *on_ramp) {
     float y = NO_SURFACE_HEIGHT, lowest = 1e20f;
     int cell = surface_cell(p.z) * SURFACE_GRID + surface_cell(p.x);
     for (uint32_t i = t->surface_cells[cell]; i < t->surface_cells[cell + 1]; i++) {
         SurfaceTriangle f = t->surface[t->surface_refs[i]];
+        if (p.x < fminf(f.a.x, fminf(f.b.x, f.c.x)) - SURFACE_SEAM ||
+            p.x > fmaxf(f.a.x, fmaxf(f.b.x, f.c.x)) + SURFACE_SEAM ||
+            p.z < fminf(f.a.z, fminf(f.b.z, f.c.z)) - SURFACE_SEAM ||
+            p.z > fmaxf(f.a.z, fmaxf(f.b.z, f.c.z)) + SURFACE_SEAM)
+            continue;
         Vec3 ab = vsub(f.b, f.a), ac = vsub(f.c, f.a), q = vsub(p, f.a);
         float det = ab.x * ac.z - ab.z * ac.x;
         if (fabsf(det) < 1e-6f)
             continue;
         float u = (q.x * ac.z - q.z * ac.x) / det;
         float v = (ab.x * q.z - ab.z * q.x) / det;
-        if (u >= -.00001f && v >= -.00001f && u + v <= 1.00001f) {
-            float height = f.a.y + u * ab.y + v * ac.y;
-            lowest = fminf(lowest, height);
-            // Follow the supporting layer; overhead decks are not ground.
-            if (height <= p.y + 2.0f)
-                y = fmaxf(y, height);
+        float height = f.a.y + u * ab.y + v * ac.y;
+        if (u < -.00001f || v < -.00001f || u + v > 1.00001f) {
+            // Road, curb and shoulder meshes meet along slightly different
+            // polylines. A tire bridges those slits instead of reaching the
+            // terrain or water below; the clamp keeps steep walls from spiking.
+            if (fminf(segment_distance_xz(p, f.a, f.b),
+                      fminf(segment_distance_xz(p, f.b, f.c), segment_distance_xz(p, f.c, f.a))) >
+                SURFACE_SEAM)
+                continue;
+            height = clampf(height, fminf(f.a.y, fminf(f.b.y, f.c.y)),
+                            fmaxf(f.a.y, fmaxf(f.b.y, f.c.y)));
         }
+        lowest = fminf(lowest, height);
+        // Follow the supporting layer; overhead decks are not ground.
+        if (height <= p.y + 2.0f)
+            y = fmaxf(y, height);
     }
     if (y == NO_SURFACE_HEIGHT && lowest < 1e20f)
         y = lowest;
@@ -1027,13 +1048,18 @@ static void update_car(Game *g, int index, Controls in, float dt) {
     if (c->grounded) {
         Mat4 rotation = mmul(rotate_y(c->yaw), mmul(rotate_x(c->pitch), rotate_z(c->roll)));
         Vec3 load = vsub(v3(0,-20,0), vmul(vsub(c->velocity, before_handling), 1 / dt));
-        float side_load = vdot(load, car_rotated(rotation, v3(1,0,0)));
+        Vec3 right = car_rotated(rotation, v3(1,0,0));
         float down_load = fmaxf(0, -vdot(load, car_rotated(rotation, v3(0,1,0))));
+        // The arcade grip exceeds the chassis' stability margin (1.4 g versus
+        // .85/.55). Tires skid before they lever the car over: friction carries
+        // at most the normal load, and only a steep bank adds the remainder.
+        float friction = clampf(vdot(load, right) + 20 * right.y, -down_load, down_load);
+        float side_load = friction - 20 * right.y;
         float torque = fabsf(side_load) * .55f - down_load * .85f;
         c->load_roll_rate *= expf(-2 * dt);
         if (torque > 0) {
             // A bank and cornering force can move the effective load beyond
-            // the outside tires. On level ground the tires normally skid first.
+            // the outside tires.
             c->load_roll_rate -= copysignf(torque * dt / .8f, side_load);
             if (fabsf(c->load_roll_rate) > 2) {
                 c->roll_rate += c->load_roll_rate;
@@ -1095,6 +1121,10 @@ static void update_car(Game *g, int index, Controls in, float dt) {
         c->vy = 0;
         c->pos.y = c->prev.y;
         c->air_time = 0;
+        // The suspension followed the ground down over the crest, but ground
+        // cannot pull the body: only gravity tips it off the edge (~1 rad/s).
+        c->pitch_rate = clampf(c->pitch_rate, -1, 1);
+        c->roll_rate = clampf(c->roll_rate, -1, 1);
     }
     if (!c->grounded) {
         c->air_time += dt;
@@ -1114,6 +1144,10 @@ static void update_car(Game *g, int index, Controls in, float dt) {
                 car_body_tick(c, t, dt);
                 goto race_progress;
             }
+            // The suspension absorbs this attitude difference. Judge wheel
+            // support from the seated pose, not from the airborne attitude.
+            c->pitch = pitch;
+            c->roll = roll;
             c->pos.y = ground;
             c->grounded = true;
             c->vy = 0;
@@ -1138,10 +1172,23 @@ static void update_car(Game *g, int index, Controls in, float dt) {
         float old_pitch, old_roll;
         Vec3 previous = c->prev;
         car_surface_pose(t, &previous, c->prev_yaw, &old_pitch, &old_roll);
-        car_surface_pose(t, &c->pos, c->yaw, &c->pitch, &c->roll);
+        Vec3 seated = c->pos;
+        float pitch, roll;
+        car_surface_pose(t, &seated, c->yaw, &pitch, &roll);
+        float pitch_rate = angle_delta(pitch, old_pitch) / dt;
+        float roll_rate = angle_delta(roll, old_roll) / dt;
+        // A side the ground pushed up keeps rising where its support ends
+        // abruptly, as off a ramp's edge. The suspension cannot pull it down;
+        // uneven slopes only jitter the rate and stay with the suspension.
+        if (c->speed > 16 && fabsf(c->roll_rate) > 2.5f && roll_rate * c->roll_rate < 0 &&
+            fabsf(roll_rate) > 10) {
+            car_release(c);
+            goto race_progress;
+        }
+        c->pos = seated;
+        c->pitch = pitch;
+        c->roll = roll;
         // Suspension filters gentle terrain changes but retains a sharp wheel lift.
-        float pitch_rate = angle_delta(c->pitch, old_pitch) / dt;
-        float roll_rate = angle_delta(c->roll, old_roll) / dt;
         float response = 1 - expf(-12 * dt);
         c->pitch_rate = clampf(lerpf(c->pitch_rate, pitch_rate, response),
                                -fabsf(pitch_rate), fabsf(pitch_rate));
@@ -2573,6 +2620,89 @@ static void test_terrain_rollover(Game *g) {
     t->guardrail_count = rails;
 }
 
+static void test_surface_seams(Game *g) {
+    // Road, curb and shoulder meshes meet along different polylines. Across
+    // either road edge, no narrow slit may expose the terrain below to a tire.
+    const Track *t = &g->tracks[g->selected];
+    int slits = 0;
+    for (float s = 0; s < t->length; s += 1) {
+        Vec3 center = track_at(t, s, 0, NULL);
+        int index = -1;
+        track_nearest(t, center, &index, NULL, NULL);
+        float half = t->points[index].half;
+        for (int side = -1; side <= 1; side += 2) {
+            float h[750];
+            for (int i = 0; i < 750; i++) {
+                Vec3 p = track_at(t, s, side * (half - .5f + i * .002f), NULL);
+                p.y = center.y + .5f;
+                h[i] = track_height(t, p, NULL);
+            }
+            for (int i = 40; i < 710; i++)
+                if (h[i] < fminf(h[i - 40], h[i + 40]) - .5f) {
+                    slits++;
+                    break;
+                }
+        }
+    }
+    CHECK(slits == 0, "tires bridge the seams between road, curb and shoulder meshes");
+}
+
+static void test_edge_rollovers(Game *g) {
+    // Crossing the curb onto the shoulder and back is ordinary driving. It may
+    // unsettle the chassis, but only rarely overturns it.
+    const Track *t = &g->tracks[g->selected];
+    Car *c = &g->cars[0];
+    float angles[] = {.14f, .31f, .61f}, speeds[] = {18, 30};
+    int runs = 0, overturned = 0;
+    for (int point = 5; point < t->count; point += 37)
+        for (int side = -1; side <= 1; side += 2)
+            for (int back = 0; back < 2; back++)
+                for (int a = 0; a < 3; a++)
+                    for (int v = 0; v < 2; v++) {
+                        game_start(g);
+                        g->prop_count = g->fence_count = 0;
+                        g->screen = SCREEN_RACE;
+                        for (int i = 1; i < CAR_COUNT; i++)
+                            g->cars[i].dnf = true;
+                        test_place_player(g, t->points[point].s, speeds[v], false);
+                        float half = t->points[point].half;
+                        c->pos = track_at(t, c->progress,
+                                          side * (back ? half + 4.5f : half - 2), NULL);
+                        c->yaw += (back ? -side : side) * angles[a];
+                        c->prev_yaw = c->yaw;
+                        c->velocity = v3(sinf(c->yaw) * speeds[v], 0, cosf(c->yaw) * speeds[v]);
+                        // Ramps, bridge approaches and water are separate hazards.
+                        float ground = track_height(t, c->pos, NULL);
+                        bool skip = fabsf(ground - t->points[point].p.y) > 1.5f;
+                        for (int j = 0; j < t->ramp_count; j++)
+                            skip |= vlen(vsub(c->pos, t->points[(int)t->ramps[j].index].p)) < 40;
+                        for (int k = 0; k <= 6 && !skip; k++) {
+                            Vec3 q = vadd(c->pos, vmul(c->velocity, k * 2 / speeds[v]));
+                            float water, h = track_height(t, q, NULL);
+                            skip = h == NO_SURFACE_HEIGHT ||
+                                   (track_water(t, q, &water) && water > h - .3f);
+                        }
+                        if (skip)
+                            continue;
+                        car_surface_pose(t, &c->pos, c->yaw, &c->pitch, &c->roll);
+                        c->nearest = -1;
+                        c->progress = c->last_s = track_nearest(t, c->pos, &c->nearest, NULL, NULL);
+                        c->route_pos = c->prev = c->pos;
+                        bool inverted = false;
+                        for (int step = 0; step < 240 && c->reset_protection <= 0; step++) {
+                            // Steer back after half a second, as a driver would.
+                            Controls in = {.throttle = 1};
+                            in.steer = step > 60 ? (back ? side : -side) : 0;
+                            game_tick(g, in, FIXED_DT, false);
+                            inverted |= c->tumbling && c->body_rotation.m[5] < .3f;
+                        }
+                        runs++;
+                        overturned += inverted;
+                    }
+    CHECK(runs > 150, "edge crossings cover the circuit");
+    CHECK(overturned * 30 < runs, "crossing the road edge rarely overturns the car");
+}
+
 static void test_rollover_recovery(Game *g) {
     game_start(g);
     g->screen = SCREEN_RACE;
@@ -3224,6 +3354,8 @@ int game_tests(void) {
         test_rollover_recovery(g);
         test_playable_rollovers(g);
         test_terrain_rollover(g);
+        test_surface_seams(g);
+        test_edge_rollovers(g);
     }
     g->selected = 0;
     game_start(g);

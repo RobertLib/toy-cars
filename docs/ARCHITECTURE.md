@@ -52,11 +52,22 @@ Cars and pickups on different levels cannot collide or collect across a bridge.
 
 Driving surfaces are exported as collision triangles from the same Blender
 meshes as the visible scene. A spatial grid limits height queries to nearby
-triangles. Four tire samples set grounded height, pitch and roll at the car's
+triangles. Road, curb and shoulder meshes meet along slightly different
+polylines; queries bridge the resulting slits up to 8 cm from a triangle, so a
+tire never reaches the terrain or water beneath a seam. Four tire samples set
+grounded height, pitch and roll at the car's
 actual heading, including at spawn, recovery and after collision separation.
 The terrain grades smoothly into the road bed; off-road contact does not extend
 the road's elevation beyond its edges. Airborne cars still use gravity and
 land on the surface below them.
+
+A rollover needs rotation the ground actually imparts. Tires skid before
+cornering load can lever the chassis over: friction carries at most the normal
+load, so only a steep bank adds enough side load. Crossing a crest or dropping
+off an edge, the suspension's pitch and roll rates are capped at about 1 rad/s,
+since only gravity tips the body; a side that a ramp pushed up keeps its roll
+rate where its support ends abruptly. A landing the suspension absorbs reseats
+the chassis on the surface before wheel support is judged.
 
 Steering inputs use -1 for the driver's left and +1 for the driver's right.
 With local +Z forward and +Y up, positive yaw turns left in the chase view,

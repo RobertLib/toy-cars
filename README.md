@@ -171,7 +171,8 @@ an internet connection to run.
   the race. Banks have stones and, in the countryside, reeds.
 - Cars retain angular momentum and can overturn after strong impacts, abrupt
   terrain changes or uneven landings. Wheel contact is checked independently, so
-  driving one side over an edge can remove its support. Tire support, chassis contact and friction
+  driving one side over an edge can remove its support. Curbs, shoulders and
+  cornering alone rarely tip a car: the tires skid first. Tire support, chassis contact and friction
   let them settle on their side or roof, or regain traction after landing on their
   wheels. All cars automatically recover after resting on their side or roof for
   three seconds. Use **R / RECOVER** to recover manually when stranded.
@@ -330,7 +331,9 @@ reloading, legacy migration, malformed data, save failure and diagnostic/DNF
 exclusion. Graphics checks exercise the initials form, keyboard shortcuts,
 touch and gamepad record controls, and history pagination.
 They also cover close finishes within one simulation step, consistent lap and
-finish timing, ramp edge and corner exits, and drift braking across input sources.
+finish timing, ramp edge and corner exits, and drift braking across input sources,
+seamless tire support across both road edges, and how rarely curb crossings
+onto the shoulder and back overturn the car.
 See [Validation](docs/VALIDATION.md)
 for executed checks and remaining release work.
 

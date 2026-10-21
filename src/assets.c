@@ -104,14 +104,16 @@ static bool load_surface(Track *t, bool water) {
     else
         t->surface_count = (int)count;
     // Index triangles by their XZ bounds once, keeping tire queries local.
+    // Ground queries also accept points within the seam tolerance of a triangle.
     uint32_t cursor[SURFACE_GRID * SURFACE_GRID] = {0};
+    float pad = water ? 0 : SURFACE_SEAM;
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t i = 0; i < count; i++) {
             SurfaceTriangle f = triangles[i];
-            int x0 = surface_cell(fminf(f.a.x, fminf(f.b.x, f.c.x)));
-            int x1 = surface_cell(fmaxf(f.a.x, fmaxf(f.b.x, f.c.x)));
-            int z0 = surface_cell(fminf(f.a.z, fminf(f.b.z, f.c.z)));
-            int z1 = surface_cell(fmaxf(f.a.z, fmaxf(f.b.z, f.c.z)));
+            int x0 = surface_cell(fminf(f.a.x, fminf(f.b.x, f.c.x)) - pad);
+            int x1 = surface_cell(fmaxf(f.a.x, fmaxf(f.b.x, f.c.x)) + pad);
+            int z0 = surface_cell(fminf(f.a.z, fminf(f.b.z, f.c.z)) - pad);
+            int z1 = surface_cell(fmaxf(f.a.z, fmaxf(f.b.z, f.c.z)) + pad);
             for (int z = z0; z <= z1; z++)
                 for (int x = x0; x <= x1; x++) {
                     int cell = z * SURFACE_GRID + x;
