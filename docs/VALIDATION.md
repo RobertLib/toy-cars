@@ -680,6 +680,33 @@ verified. This pass does not add mobile-device validation.
 - This pass does not include listening, playtesting the timetable with people,
   or Android and iOS builds.
 
+## Rendering upgrade (21 October 2026)
+
+- A Release build without warnings passed all seven CTest entries. The opt-in
+  graphics tests had their one known failure, "mobile recovery target recovers
+  the car". The speed blur test now replays the post passes through
+  `renderer_present`; its central road stays pixel-exact.
+- Night checks still hold: the scene darkens from 133 / 134 / 160 to
+  31 / 40 / 39 mean luma for country / beach / winter, and the road ahead reads
+  224 / 206 / 190 lit against 20 / 31 / 35 dark. The pond keeps 0 white samples
+  of 574. Paused frames remain byte-identical: every new pass is deterministic.
+- All 21 shaders, rewritten with the OpenGL ES 3.00 header and mobile sample
+  counts, pass `glslangValidator`. This caught `patch`, a reserved word in
+  GLSL ES that the terrain shader had used as a variable name; it is now `tone`.
+- On Apple M5 at 2880x1800 (fixed-step benchmark, 900 frames), frame time went
+  from 3.15 to 5.03 ms in a race, 2.91 to 6.04 ms in the menu (depth of field
+  included) and 1.00 to 2.30 ms in the garage. The packed `R11F_G11F_B10F`
+  scene costs about 0.2 ms more than 8 bits; `RGBA16F` had cost 0.6 ms.
+- A first ambient occlusion pass showed horizontal bands: filtered depth reads
+  at the half-resolution pixel centers rounded differently between rows. Close
+  menu shots were nearly black until the samples were normalized by the capped
+  sampling radius. Both are fixed.
+- Reviewed against a build of the previous commit at 1440x900, 1600x500 and
+  874x402 mobile: all three races, Alpine Rush by day and night, the four menu
+  camera angles, night menu, garage, rain and the country pond.
+- This pass does not include Android or iOS builds, so neither the
+  floating-point probe nor the cost on a phone GPU has been measured on a device.
+
 ## Still required before public release
 
 - Playtesting with people on physical phones, particularly steering feel,

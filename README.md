@@ -168,8 +168,17 @@ an internet connection to run.
   cooler skylight, with subdued water glints and matching cloud reflections.
   Clouds drift with the breeze and weather, soften under overcast skies, and
   freeze when paused. The effect needs no extra draw calls or texture assets.
-- Filtered real-time shadows, vertex-colored Blender models, smooth terrain,
-  distance fog, edge smoothing, dust, pickup and landing particles.
+- Soft real-time shadows that stay still as the camera moves, ambient occlusion
+  for contact shadows under cars, trees, rocks and curbs, and a warm sun against
+  cool skylight. A gradient sky carries the same drifting clouds that shade the
+  track, with stars at night, and distant haze takes the color of the sky behind
+  it. Car paint, glazing and aluminum trim reflect the sky like lacquered die-cast
+  toys; asphalt has worn patches and grain.
+- Lamps, glints and sunlit snow can exceed white in a floating-point scene: they
+  bloom and roll off softly instead of clipping. A light color grade, FXAA edge
+  smoothing and dithered gradients finish the image. The menu broadcast films
+  through a lens with depth of field, sharp on the cars and soft behind them.
+- Vertex-colored Blender models, smooth terrain, dust, pickup and landing particles.
 - Terrain-led streams: a meandering meadow creek feeds an irregular pond with
   shallow inlets and sediment shelves, a sand-bar creek widens into a coastal
   estuary, and a narrow alpine stream winds through rock constrictions. Channels

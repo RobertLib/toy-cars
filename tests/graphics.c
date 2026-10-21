@@ -553,9 +553,9 @@ static void test_boost_rendering(Renderer *r, const Game *g) {
             glReadPixels(0, 0, r->width, r->height, GL_RGBA, GL_UNSIGNED_BYTE, blurred);
             SDL_snprintf(path, sizeof path, "%sspeed-blur-%d.bmp", pref_directory, track);
             EXPECT(renderer_screenshot(r, path), "speed blur review capture saved");
-            // Replay the same post pass with blur disabled, keeping camera and scene identical.
-            glUniform1f(glGetUniformLocation(r->post_shader, "uSpeedBlur"), 0);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
+            // Replay the same post passes with blur disabled, keeping camera and scene identical.
+            r->speed_blur = 0;
+            renderer_present(r);
             glReadPixels(0, 0, r->width, r->height, GL_RGBA, GL_UNSIGNED_BYTE, sharp);
             int side_changes = 0, center_changes = 0;
             for (int y = 0; y < r->height; y++) for (int x = 0; x < r->width; x++) {

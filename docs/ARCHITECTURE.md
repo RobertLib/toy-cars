@@ -181,8 +181,30 @@ for demonstrations and screenshots.
 ## Rendering and content
 
 Blender evaluates bevel and weighted-normal modifiers and exports triangles.
-Static environment geometry is merged into one vertex buffer per track. A race
-uses a depth shadow pass, a colored scene pass and a final edge-smoothing pass.
+Static environment geometry is merged into one vertex buffer per track. A frame
+renders a depth shadow pass and a colored scene pass; the sky then fills the
+remaining background at the far plane. The scene target is `R11F_G11F_B10F`, or
+`RGBA16F`, where the GPU can render to floating point, so lamps and glints can
+exceed white; OpenGL ES devices without the extension get an 8-bit scene with a
+lower bloom threshold. The shadow frustum moves in whole shadow-map texels and
+is sampled with hardware comparison filtering.
+
+Post-processing then works from the scene's color and depth textures:
+
+- Half-resolution scalable ambient obscurance with a depth-aware 4x4 blur.
+  Depth is read with `texelFetch`: half-resolution pixel centers fall exactly
+  between full-resolution ones, and filtered reads round differently from row
+  to row, which broke the reconstructed normals into bands.
+- A five-level dual-filter bloom pyramid that starts at half resolution.
+- In the menu only, a half-resolution depth of field focused on the filmed cars.
+- A composite pass with the speed blur, a filmic highlight shoulder, a light
+  grade, vignette and ordered dither. It writes the luma that FXAA 3.11 needs
+  before the result reaches the window. `renderer_present` replays these two
+  passes, and the speed blur test uses it.
+
+Glossy materials (paint, glazing, aluminum, rubber) and asphalt are recognized
+by their exported vertex colors, so the mesh formats are unchanged. Phones take
+8 occlusion samples and 16 depth-of-field taps; desktops take 12 and 24.
 The UI uses a separate batched triangle stream and single-channel glyph atlases.
 The GL and GLES shader variants share their shader bodies.
 

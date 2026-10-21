@@ -10,9 +10,14 @@ typedef struct {
     float p[3], n[3], c[3], paint;
 } Vertex;
 #if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
-#define GLSL "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n"
+#define GLSL                                                                                       \
+    "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n" \
+    "precision highp sampler2DShadow;\n"
+// Phones take fewer occlusion samples and depth-of-field taps.
+#define QUALITY "#define AO_SAMPLES 8\n#define DOF_TAPS 16\n"
 #else
 #define GLSL "#version 330 core\n"
+#define QUALITY "#define AO_SAMPLES 12\n#define DOF_TAPS 24\n"
 #endif
 // Shared by the color and shadow passes so limbs and their shadows agree.
 // TCA1: world origin/yaw, pose, body part, scale and width.
@@ -80,15 +85,23 @@ typedef struct {
     "float sway=.35+.60*sin(t*1.6+seed)+.18*sin(t*2.43+seed*.7);" \
     "vec2 bend=uVegetationWind.xz*(.045*sqrt(aMotion.x)*sway);" \
     "p.xz+=bend*y*y/h;n.y-=dot(bend*(2.*y/h),n.xz);n=normalize(n);}"
+// Glossy draws tell body paint (1), glazing (2), aluminum (3) and rubber (4)
+// apart by the exported colors of those materials in tools/build_assets.py.
+// Asphalt (5) is the circuit's road color or one of its darker tire marks.
 static const char *world_vs =
     GLSL "layout(location=0) in vec3 aPos;layout(location=1) in vec3 aNormal;layout(location=2) in "
          "vec3 aColor;layout(location=3) in float aPaint;\n"
-         "uniform mat4 uModel,uVP,uLight;uniform vec3 uPaint;out float vGround;out vec3 vPos,vNormal,vColor;out vec4 "
-         "vShadow;\n"
+         "uniform mat4 uModel,uVP,uLight;uniform vec3 uPaint,uRoad;out float vGround,vMaterial;"
+         "out vec3 vPos,vNormal,vColor;out vec4 vShadow;\n"
          CROWD_GLSL VEGETATION_GLSL
          "void main(){vec3 pos=aPos,normal=aNormal;animateCrowd(pos,normal);animateVegetation(pos,normal);vec4 "
          "p=uModel*vec4(pos,1.);vPos=p.xyz;vNormal=mat3(uModel)*normal;vColor=mix(aColor,uPaint,"
-         "clamp(aPaint,0.,1.));vGround=max(0.,-aPaint);vShadow=uLight*p;gl_Position=uVP*p;}";
+         "clamp(aPaint,0.,1.));vGround=max(0.,-aPaint);"
+         "float worn=dot(aColor,uRoad)/dot(uRoad,uRoad);"
+         "vMaterial=aPaint>.5?1.:distance(aColor,vec3(.075,.18,.22))<.01?2.:"
+         "distance(aColor,vec3(.60,.66,.65))<.01?3.:distance(aColor,vec3(.055,.065,.073))<.01?4.:"
+         "worn>.6&&worn<1.01&&distance(aColor,uRoad*worn)<.004&&aPaint==0.?5.:0.;"
+         "vShadow=uLight*p;gl_Position=uVP*p;}";
 // One world-space cloud layer for terrain, props and water reflections. Project
 // along the sun direction onto a plane 110 m above the track, including elevation.
 // Integrated weather drift avoids jumps when wind changes; no extra render pass.
@@ -103,9 +116,20 @@ static const char *world_vs =
     "float d=cloudNoise(q)*.65+cloudNoise(q*2.03+19.)*.25+cloudNoise(q*4.07+41.)*.10;" \
     "return smoothstep(.36,.66,d);}" \
     "float cloudShade(vec3 p){return cloudCover(p.xz+vec2(-.6,.45)*(110.-p.y))*uCloudAmount;}"
-static const char *world_fs = GLSL CLOUD_GLSL
-    "in float vGround;in vec3 vPos,vNormal,vColor;in vec4 vShadow;out vec4 frag;uniform sampler2D uShadow;uniform "
-    "vec3 uEye,uFog;uniform float uFogFar,uUnlit,uOvercast,uNight;uniform bool uBoost;uniform float uBoostTime;\n"
+// The sky dome behind the scene, also seen in distant haze, water and glossy
+// paint. The horizon is the former flat fog color; the sun or moon glows in
+// the shadow light's direction.
+#define SKY_GLSL \
+    "uniform vec3 uHorizon,uZenith;uniform float uOvercast,uNight;" \
+    "vec3 skyColor(vec3 d){d=normalize(d);vec3 sun=normalize(vec3(-.6,1.,.45));" \
+    "float s=max(0.,dot(d,sun));vec3 c=mix(uHorizon,uZenith,pow(clamp(d.y,0.,1.),.6));" \
+    "vec3 glow=mix(vec3(1.,.84,.58),vec3(.45,.52,.72),uNight)*(1.-.75*uOvercast)*mix(1.,.3,uNight);" \
+    "return c+glow*(pow(s,4.)*.12+pow(s,60.)*.4);}" \
+    "vec3 fogColor(vec3 d){return skyColor(vec3(d.x,max(d.y,0.)*.4,d.z));}"
+static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
+    "in float vGround,vMaterial;in vec3 vPos,vNormal,vColor;in vec4 vShadow;out vec4 frag;"
+    "uniform sampler2DShadow uShadow;uniform "
+    "vec3 uEye;uniform float uFogFar,uUnlit,uGloss;uniform bool uBoost;uniform float uBoostTime;\n"
     "uniform vec4 uLamps[8],uLampDirs[8];\n"
     // Night car lamps: a low beam tipped towards the road and a short red spill
     // behind. Softened facing lets the grazing beam still reach the asphalt.
@@ -125,12 +149,14 @@ static const char *world_fs = GLSL CLOUD_GLSL
     "mix(terrainHash(i+vec2(0,1)),terrainHash(i+vec2(1,1)),f.x),f.y);}"
     "float shadow(vec3 n){vec3 "
     "p=vShadow.xyz/vShadow.w*.5+.5;if(p.x<0.||p.x>1.||p.y<0.||p.y>1.||p.z>1.)return 1.;float "
-    "bias=max(.0005,.0015*(1.-dot(n,normalize(vec3(-.6,1.,.45)))));float s=0.;for(int "
-    "x=-1;x<=1;x++)for(int y=-1;y<=1;y++){float "
-    "d=texture(uShadow,p.xy+vec2(x,y)/2048.).r;s+=p.z-bias<=d?1.:0.;}return s/9.;}\n"
+    "bias=max(.0005,.0015*(1.-dot(n,normalize(vec3(-.6,1.,.45)))));float s=0.;"
+    // Nine bilinear depth comparisons blend into a smooth 4x4-texel penumbra.
+    "for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++)"
+    "s+=texture(uShadow,vec3(p.xy+vec2(x,y)/2048.,p.z-bias));return s/9.;}\n",
     "void main(){vec3 n=normalize(vNormal);if(!gl_FrontFacing)n=-n;vec3 "
     "light=normalize(vec3(-.6,1.,.45));float diff=max(0.,dot(n,light));float sh=shadow(n);float "
-    "hemi=n.y*.5+.5;vec3 ambient=mix(vec3(.33,.38,.43),vec3(.71,.75,.74),hemi);"
+    // Cool skylight in the shade against a warm sun gives the forms their depth.
+    "hemi=n.y*.5+.5;vec3 ambient=mix(vec3(.30,.35,.42),vec3(.58,.65,.74),hemi);"
     "ambient=mix(ambient,mix(vec3(.045,.06,.10),vec3(.12,.16,.26),hemi),uNight);"
     "vec3 base=vColor,glow=vec3(0.);if(uBoost){vec2 p=vColor.rg;"
     "float phase=(p.y+abs(p.x)*.7-uBoostTime*1.35)/2.;"
@@ -140,22 +166,36 @@ static const char *world_fs = GLSL CLOUD_GLSL
     "float ends=smoothstep(0.,.3,p.y)*(1.-smoothstep(5.7,6.,p.y));"
     "base=mix(vec3(.19,.23,.22),vec3(.36,.56,.48),arrow*inset*ends);"
     "glow=vec3(.20,.62,.50)*arrow*inset*ends;"
-    "}if(vGround>.5){float patch=terrainNoise(vPos.xz*.13);"
+    "}if(vGround>.5){float tone=terrainNoise(vPos.xz*.13);"
     "float detail=(terrainNoise(vPos.xz*3.5)-.5)*(1.-smoothstep(.12,.65,length(fwidth(vPos.xz))));"
-    "if(vGround<1.5){base*=.86+.22*patch+.10*detail;"
-    "base=mix(base,base*vec3(1.13,.94,.74),smoothstep(.52,.8,patch)*.4);}"
-    "else{float ripple=sin(vPos.x*.9+vPos.z*.43+patch*5.);"
-    "base*=.93+.09*patch+.04*detail+.018*ripple;} }float "
+    "if(vGround<1.5){base*=.86+.22*tone+.10*detail;"
+    "base=mix(base,base*vec3(1.13,.94,.74),smoothstep(.52,.8,tone)*.4);}"
+    "else{float ripple=sin(vPos.x*.9+vPos.z*.43+tone*5.);"
+    "base*=.93+.09*tone+.04*detail+.018*ripple;} }"
+    // Asphalt: broad worn patches and an aggregate grain that fades out with distance.
+    "if(vMaterial>4.5){float grain=(terrainNoise(vPos.xz*7.3)-.5)*"
+    "(1.-smoothstep(.06,.4,length(fwidth(vPos.xz))));"
+    "base*=.93+.13*terrainNoise(vPos.xz*.21+7.)+.10*grain;}float "
     "cloud=cloudShade(vPos);float sun=(1.-.8*uOvercast)*(1.-.82*cloud);"
     "vec3 skyAmbient=ambient*mix(vec3(1.),vec3(.91,.95,1.02),cloud);"
     // The moon shares the sun's direction and shadow map, with a cool, dim light.
-    "vec3 sunColor=mix(vec3(.39,.34,.27),vec3(.12,.15,.23),uNight);"
-    "vec3 col=base*(skyAmbient*(1.-.18*uOvercast)+sunColor*diff*sh*sun);"
-    "if(uNight>0.)col+=(base*carLamps(n)+glow)*uNight;vec3 "
-    "halfV=normalize(light+normalize(uEye-vPos));float "
-    "spec=pow(max(0.,dot(n,halfV)),48.)*.12*sh*sun*(1.-.75*uNight);col+=spec;col=mix(col,base,uUnlit);float "
-    "fog=smoothstep(uFogFar*.45,uFogFar,length(uEye-vPos));col=mix(col,uFog,fog*.88);frag=vec4(col,"
-    "1.);}";
+    "vec3 sunColor=mix(vec3(.58,.47,.33),vec3(.12,.15,.23),uNight);"
+    "vec3 col=base*(skyAmbient*(1.-.05*uOvercast)+sunColor*diff*sh*sun);"
+    "if(uNight>0.)col+=(base*carLamps(n)+glow)*uNight;vec3 V=normalize(uEye-vPos),"
+    "halfV=normalize(light+V);float "
+    "spec=pow(max(0.,dot(n,halfV)),48.)*.12*sh*sun*(1.-.75*uNight);col+=spec;"
+    // Clear-coated die-cast paint, glazing and aluminum mirror the sky above and
+    // the ground below, with a tight sun glint that the bloom picks up.
+    "if(uGloss>0.){float m=vMaterial,coat=uGloss*(m>3.5?.05:m>2.5?.8:m>1.5?1.2:m>.5?.85:.5);"
+    "vec3 R=reflect(-V,n),env=R.y>0.?skyColor(R):uHorizon*mix(.5,.22,clamp(-R.y*2.,0.,1.));"
+    // A softer Fresnel curve than glass alone: toy lacquer catches the sky early.
+    "bool metal=m>2.5&&m<3.5;float f=metal?.6:.06+.7*pow(1.-max(dot(n,V),0.),3.);"
+    "col=mix(col,metal?env*base*1.5:env,clamp(f*coat,0.,1.));"
+    "col+=pow(max(0.,dot(n,halfV)),160.)*.55*coat*sh*sun*(1.-.75*uNight);}"
+    // Fully unlit lamps are brighter than white so that they bloom.
+    "col=mix(col,base*(uUnlit>.99?2.4:1.),uUnlit);float "
+    "fog=smoothstep(uFogFar*.45,uFogFar,length(uEye-vPos));col=mix(col,fogColor(-V),fog*.88);frag=vec4(col,"
+    "1.);}"};
 static const char *depth_vs = GLSL "layout(location=0)in vec3 aPos;uniform mat4 uModel,uVP;"
     CROWD_GLSL VEGETATION_GLSL "void main(){vec3 pos=aPos,n=vec3(0.,1.,0.);animateCrowd(pos,n);animateVegetation(pos,n);"
                "gl_Position=uVP*uModel*vec4(pos,1.);}";
@@ -200,11 +240,11 @@ static const char *water_vs = GLSL
     "vPos.y+=(sin(dot(q,vec2(.8,.6))+uTime)*.006+"
     "sin(dot(q,vec2(-1.1,.9))-uTime*1.3)*.003)*mix(.4,1.,moving)*smoothstep(0.,.4,aWater.x);"
     "gl_Position=uVP*vec4(vPos,1.);}";
-static const char *water_fs[] = {GLSL CLOUD_GLSL
+static const char *water_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "in vec3 vPos,vWater;out vec4 frag;"
-    "uniform sampler2D uOpaque,uDepth,uShadow;uniform mat4 uVP,uLight;"
-    "uniform vec3 uEye,uSky;uniform vec2 uResolution,uDepthParams;"
-    "uniform vec4 uViewport,uWakes[8];uniform float uTime,uOvercast,uNight;"
+    "uniform sampler2D uOpaque,uDepth;uniform sampler2DShadow uShadow;uniform mat4 uVP,uLight;"
+    "uniform vec3 uEye;uniform vec2 uResolution,uDepthParams;"
+    "uniform vec4 uViewport,uWakes[8];uniform float uTime;"
     "uniform int uTrack;"
     "float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
     "float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);"
@@ -254,8 +294,8 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "float caustic=pow(max(0.,1.-abs(sin(cq.x*3.1+sin(cq.y*2.7))+sin(cq.y*3.7+t*.4))*.5),18.);"
     "caustic*=1.-smoothstep(.15,.6,length(fwidth(q)));"
     "transmitted+=bed*caustic*.065*exp(-thickness*.8)*sunlight;"
-    "vec3 reflected=reflect(-V,n);float horizon=pow(1.-max(0.,reflected.y),3.);"
-    "vec3 sky=mix(uSky*.78,uSky*1.06,horizon);"
+    "vec3 reflected=reflect(-V,n);"
+    "vec3 sky=skyColor(vec3(reflected.x,max(reflected.y,0.),reflected.z));"
     "float cloud=cloudCover(vPos.xz+reflected.xz/max(.18,reflected.y)*(110.-vPos.y));"
     "sky=mix(sky,vec3(.92,.94,.90)*mix(1.,.16,uNight),cloud*.32*uCloudAmount);"
     // Short screen-space rays reflect nearby banks, trees and cars; sky fills
@@ -276,13 +316,13 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "vec3 light=normalize(vec3(-.6,1.,.45));vec3 halfV=normalize(light+V);"
     "vec4 sh=uLight*vec4(vPos,1.);vec3 sc=sh.xyz/sh.w*.5+.5;"
     "float lit=1.;if(all(greaterThan(sc,vec3(0)))&&all(lessThan(sc,vec3(1))))"
-    "lit=sc.z-.001<texture(uShadow,sc.xy).r?1.:.2;"
+    "lit=mix(.2,1.,texture(uShadow,vec3(sc.xy,sc.z-.001)));"
     "float glint=pow(max(0.,dot(n,halfV)),300.)*.18+pow(max(0.,dot(n,halfV)),40.)*.04;"
     "col+=mix(vec3(1.,.94,.76),vec3(.62,.70,.88),uNight)*glint*lit*sunlight;"
     "float foam=shore*smoothstep(.68,.9,noise(q*3.))*moving;"
     "col=mix(col,vec3(.75,.83,.79)*mix(1.,.25,uNight),foam*.16);"
     "float fog=smoothstep(85.,190.,length(uEye-vPos));"
-    "col=mix(col,uSky,fog*.88);"
+    "col=mix(col,fogColor(-V),fog*.88);"
     "frag=vec4(col,smoothstep(0.,.065,depth));}"};
 static const char *spray_vs = GLSL
     "layout(location=0)in vec4 aPosition;layout(location=1)in vec4 aMotion;"
@@ -306,26 +346,183 @@ static const char *spray_fs = GLSL
     "float rim=pow(max(0.,1.-length(vUV-vec2(-.27,.28))*1.5),4.);"
     "color=mix(vec3(.39,.65,.68),vec3(1.),rim+.3);a*=.8;}"
     "a*=vFade;if(a<.008)discard;frag=vec4(color*mix(1.,.35,uNight),a);}";
+// The sky is drawn behind the finished opaque scene, at the far plane. Clouds
+// sit on the same 110 m layer whose shadows cross the track.
+static const char *sky_vs =
+    GLSL "out vec2 vNdc;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2)*2.-1.;"
+         "vNdc=p;gl_Position=vec4(p,1.,1.);}";
+static const char *sky_fs = GLSL CLOUD_GLSL SKY_GLSL
+    "in vec2 vNdc;out vec4 frag;uniform vec3 uEye,uRight,uUp,uBack;uniform vec4 uProj;"
+    "float starHash(vec3 p){p=fract(p*vec3(.1031,.1030,.0973));p+=dot(p,p.yxz+33.33);"
+    "return fract((p.x+p.y)*p.z);}"
+    "void main(){vec2 v=(vNdc+uProj.zw)/uProj.xy;vec3 d=normalize(uRight*v.x+uUp*v.y-uBack);"
+    "vec3 c=skyColor(d);"
+    "if(d.y>.02){vec2 p=uEye.xz+d.xz*(110.-uEye.y)/d.y;"
+    "float cover=cloudCover(p)*uCloudAmount*smoothstep(.03,.3,d.y);"
+    "vec3 lit=mix(vec3(1.,.98,.95),vec3(.10,.12,.17),uNight);"
+    "c=mix(c,mix(lit,uHorizon,.3+.4*uOvercast),cover*.7);"
+    // Sparse stars: one candidate per cell of a direction grid, a pixel or two wide.
+    "if(uNight>0.){vec3 q=d*220.,cell=floor(q);float h=starHash(cell);"
+    "vec3 center=cell+.5+(vec3(starHash(cell+7.),starHash(cell+13.),starHash(cell+29.))-.5)*.6;"
+    "float size=max(length(fwidth(q))*1.5,.001);"
+    "float star=step(.982,h)*max(0.,1.-length(q-center)/size)*(.5+1.3*fract(h*97.));"
+    "c+=vec3(.85,.9,1.)*star*(1.-cover)*smoothstep(.06,.3,d.y)*uNight;}}"
+    "frag=vec4(c,1.);}";
 static const char *post_vs =
     GLSL "out vec2 uv;void main(){vec2 "
          "p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.-1.,0.,1.);}";
-static const char *post_fs = GLSL
-    "in vec2 uv;out vec4 frag;uniform sampler2D uScene;uniform vec2 uResolution;uniform float "
-    "uVignette,uSpeedBlur,uFade;\n"
-    "void main(){vec2 px=1./uResolution;vec3 c=texture(uScene,uv).rgb;vec3 "
-    "n=texture(uScene,uv+vec2(0,px.y)).rgb,s=texture(uScene,uv-vec2(0,px.y)).rgb,e=texture(uScene,"
-    "uv+vec2(px.x,0)).rgb,w=texture(uScene,uv-vec2(px.x,0)).rgb;vec3 l=vec3(.299,.587,.114);float "
-    "hi=max(max(dot(n,l),dot(s,l)),max(dot(e,l),dot(w,l))),lo=min(min(dot(n,l),dot(s,l)),min(dot(e,"
-    "l),dot(w,l)));float edge=smoothstep(.055,.22,hi-lo);c=mix(c,(n+s+e+w+c*2.)/6.,edge*.60);vec2 "
-    "q=uv*(1.-uv);"
+// Scalable ambient obscurance (McGuire et al.) at half resolution. A 4x4
+// rotation pattern spreads the spiral samples; the blur pass averages it away.
+// Distance to the camera is packed beside the result for the blur's depth test.
+// Depth is fetched by whole pixels: a half-resolution pixel centre lies exactly
+// between four full-resolution ones, and rounding would differ from row to row.
+static const char *ao_fs = GLSL QUALITY
+    "in vec2 uv;out vec4 frag;uniform sampler2D uDepth;uniform vec4 uProj,uViewport;"
+    "uniform vec2 uDepthParams,uSize;uniform float uRadius,uScale,uMaxPixels,uIntensity,uFogFar;"
+    "float depthAt(ivec2 c){return texelFetch(uDepth,clamp(c,ivec2(0),ivec2(uSize)-1),0).r;}"
+    "vec3 viewPos(ivec2 c){float z=uDepthParams.y/(depthAt(c)*2.-1.+uDepthParams.x);"
+    "vec2 ndc=((vec2(c)+.5)/uSize-uViewport.xy)/uViewport.zw*2.-1.;"
+    "return vec3((ndc+uProj.zw)/uProj.xy*z,-z);}"
+    "int bayer(int x,int y){return((x^y)<<1)|y;}"
+    "void main(){ivec2 c=ivec2(gl_FragCoord.xy)*2;vec2 t=(vec2(c)+.5)/uSize;"
+    "vec2 lo=uViewport.xy,hi=uViewport.xy+uViewport.zw;"
+    "if(depthAt(c)>=1.||any(lessThan(t,lo))||any(greaterThan(t,hi))){frag=vec4(1.);return;}"
+    "vec3 p=viewPos(c);"
+    "vec3 dx1=viewPos(c+ivec2(1,0))-p,dx2=p-viewPos(c-ivec2(1,0));"
+    "vec3 dy1=viewPos(c+ivec2(0,1))-p,dy2=p-viewPos(c-ivec2(0,1));"
+    "vec3 n=normalize(cross(abs(dx1.z)<abs(dx2.z)?dx1:dx2,abs(dy1.z)<abs(dy2.z)?dy1:dy2));"
+    "ivec2 q=ivec2(gl_FragCoord.xy)&3;"
+    "float spin=float(bayer(q.x&1,q.y&1)*4+bayer(q.x>>1,q.y>>1))*.3927;"
+    // Offsets are measured in sampling radii, so that close-ups capped at
+    // uMaxPixels are not darker than the same shapes seen from afar.
+    "float dist=-p.z,radius=min(uRadius*uScale/dist,uMaxPixels),reach=radius*dist/uScale,sum=0.;"
+    "for(int i=0;i<AO_SAMPLES;i++){float a=(float(i)+.5)/float(AO_SAMPLES),angle=a*43.98+spin;"
+    "vec3 v=(viewPos(c+ivec2(round(vec2(cos(angle),sin(angle))*a*radius)))-p)/reach;"
+    "float vv=dot(v,v),vn=dot(v,n),f=max(1.-vv,0.);"
+    "sum+=f*f*f*max((vn-.03)/(.01+vv),0.);}"
+    "float ao=max(0.,1.-sum*uIntensity*5./float(AO_SAMPLES));"
+    "ao=mix(ao,1.,smoothstep(uFogFar*.35,uFogFar*.8,dist));"
+    "float key=clamp(dist/320.,0.,1.)*255.;frag=vec4(ao,floor(key)/255.,fract(key),1.);}";
+static const char *ao_blur_fs = GLSL
+    "in vec2 uv;out vec4 frag;uniform sampler2D uOcclusion;"
+    "float distanceAt(vec4 s){return(s.g*255.+s.b)/255.*320.;}"
+    "void main(){ivec2 c=ivec2(gl_FragCoord.xy),size=textureSize(uOcclusion,0)-1;"
+    "float key=distanceAt(texelFetch(uOcclusion,c,0)),sum=0.,weight=0.;"
+    "for(int y=-1;y<=2;y++)for(int x=-1;x<=2;x++){"
+    "vec4 s=texelFetch(uOcclusion,clamp(c+ivec2(x,y),ivec2(0),size),0);"
+    "float w=max(0.,1.-abs(distanceAt(s)-key)/(.04*key+.1));sum+=s.r*w;weight+=w;}"
+    "frag=vec4(vec3(sum/max(weight,1e-4)),1.);}";
+// Depth of field for the menu broadcast's lens, at half resolution. Colors are
+// weighted by their blur so that sharp subjects never bleed into the background.
+// The sharp zone is at least a car's length deep, so a close-up stays crisp nose to tail.
+#define COC_GLSL \
+    "uniform vec2 uDepthParams;uniform float uFocus;" \
+    "float blurAt(float d){float z=uDepthParams.y/(d*2.-1.+uDepthParams.x);" \
+    "return clamp((abs(z-uFocus)-max(uFocus*.12,1.8))/z,0.,1.);}"
+static const char *dof_down_fs = GLSL COC_GLSL
+    "in vec2 uv;out vec4 frag;uniform sampler2D uScene,uDepth;"
+    "void main(){ivec2 c=ivec2(gl_FragCoord.xy)*2,last=textureSize(uScene,0)-1;"
+    "vec3 sum=vec3(0.);float weight=0.,blur=0.;"
+    "for(int i=0;i<4;i++){ivec2 t=min(c+ivec2(i&1,i>>1),last);float k=blurAt(texelFetch(uDepth,t,0).r);"
+    "sum+=texelFetch(uScene,t,0).rgb*(k+.001);weight+=k+.001;blur+=k*.25;}"
+    "frag=vec4(sum/weight,blur);}";
+// A golden-angle disc; each tap counts only where its own blur reaches the pixel.
+static const char *dof_blur_fs = GLSL QUALITY
+    "in vec2 uv;out vec4 frag;uniform sampler2D uSource;uniform float uRadius;"
+    "void main(){vec2 texel=1./vec2(textureSize(uSource,0));vec4 center=texture(uSource,uv);"
+    "float r=center.a*uRadius;vec3 sum=center.rgb*(center.a+.001);float weight=center.a+.001;"
+    "for(int i=0;i<DOF_TAPS;i++){float d=sqrt((float(i)+.5)/float(DOF_TAPS))*r,a=float(i)*2.39996;"
+    "vec4 s=texture(uSource,uv+vec2(cos(a),sin(a))*d*texel);"
+    "float w=clamp(s.a*uRadius-d+1.,0.,1.)*(s.a+.001);sum+=s.rgb*w;weight+=w;}"
+    "frag=vec4(sum/weight,center.a);}";
+// Dual-filter bloom pyramid. The first level keeps only light above the
+// threshold, weighted against single bright pixels so glints do not flicker.
+static const char *bloom_down_fs = GLSL
+    "in vec2 uv;out vec4 frag;uniform sampler2D uSource;uniform vec2 uTexel;"
+    "uniform float uThreshold;uniform bool uPrefilter;"
+    "vec4 tap(vec2 p,float k){vec3 c=texture(uSource,p).rgb;if(!uPrefilter)return vec4(c*k,k);"
+    "float l=max(c.r,max(c.g,c.b)),soft=clamp(l-uThreshold+.25,0.,.5);"
+    "c*=max(soft*soft,l-uThreshold)/max(l,1e-4);k/=1.+max(c.r,max(c.g,c.b));return vec4(c*k,k);}"
+    "void main(){vec2 h=uTexel*.5,g=vec2(h.x,-h.y);"
+    "vec4 s=tap(uv,4.)+tap(uv-h,1.)+tap(uv+h,1.)+tap(uv+g,1.)+tap(uv-g,1.);frag=vec4(s.rgb/s.a,1.);}";
+static const char *bloom_up_fs = GLSL
+    "in vec2 uv;out vec4 frag;uniform sampler2D uSource;uniform vec2 uTexel;"
+    "vec3 tap(float x,float y){return texture(uSource,uv+vec2(x,y)*uTexel).rgb;}"
+    "void main(){frag=vec4((tap(-1.,0.)+tap(1.,0.)+tap(0.,-1.)+tap(0.,1.)+"
+    "(tap(-.5,-.5)+tap(.5,-.5)+tap(-.5,.5)+tap(.5,.5))*2.)/12.,1.);}";
+// Combines the scene with its occlusion, depth of field and bloom, then grades
+// it. The luma for antialiasing travels in alpha.
+static const char *post_fs = GLSL COC_GLSL
+    "in vec2 uv;out vec4 frag;uniform sampler2D uScene,uOcclusion,uBloom,uDepth,uDof;uniform vec2 uResolution,"
+    "uOcclusionTexel;uniform float uVignette,uSpeedBlur,uFade,uBloomStrength,uAperture;\n"
+    // A filmic shoulder rolls lamps, glints and sunlit snow off into white
+    // while ordinary surfaces keep their authored colors.
+    "vec3 shoulder(vec3 c){vec3 k=vec3(.84);return mix(c,k+(1.-k)*(1.-exp(-(c-k)/(1.-k))),step(k,c));}"
+    "int bayer(int x,int y){return((x^y)<<1)|y;}"
+    "void main(){vec2 px=1./uResolution;vec3 c=texture(uScene,uv).rgb;"
+    // The blurred occlusion stands a quarter texel off its centre (sampled at the
+    // even full pixel, averaged over texels -1..2).
+    "c*=texture(uOcclusion,uv-.25*uOcclusionTexel).r;vec2 q=uv*(1.-uv);"
+    "if(uAperture>0.){float k=blurAt(texture(uDepth,uv).r)*uAperture*uResolution.y;"
+    "c=mix(c,texture(uDof,uv).rgb,smoothstep(.5,2.5,k));}"
     // A radial trail only at the sides; the road ahead and HUD stay sharp.
     "float blur=uSpeedBlur*smoothstep(.22,.49,abs(uv.x-.5));"
     "if(blur>.0001){vec2 ray=uv-vec2(.5,.58);vec3 trail=c;"
     "for(int i=1;i<=8;i++){vec2 tap=uv-ray*(blur*float(i)/8.);"
     "trail+=texture(uScene,clamp(tap,px*.5,1.-px*.5)).rgb;}"
-    "c=mix(c,trail/9.,.85);}float "
+    "c=mix(c,trail/9.,.85);}"
+    "c=shoulder(c+texture(uBloom,uv).rgb*uBloomStrength);"
+    // Gentle contrast, vibrance for muted colors, cool shadows and warm highlights.
+    "float l=dot(c,vec3(.2126,.7152,.0722)),sat=max(c.r,max(c.g,c.b))-min(c.r,min(c.g,c.b));"
+    "c=max(mix(vec3(l),c,1.+.15*(1.-sat)),0.);c=mix(c,c*c*(3.-2.*c),.14);"
+    "c*=mix(vec3(.985,1.,1.02),vec3(1.02,1.,.98),smoothstep(.08,.7,l));float "
     "vign=clamp(pow(16.*q.x*q.y,.22),.65,1.);c*=mix(1.,vign,uVignette)*(1.-uFade);"
-    "frag=vec4(c,1.);}";
+    // Ordered dither breaks up banding in the sky and haze gradients.
+    "ivec2 d=ivec2(gl_FragCoord.xy)&3;"
+    "c=clamp(c,0.,1.)+(float(bayer(d.x&1,d.y&1)*4+bayer(d.x>>1,d.y>>1))/16.-.47)/255.;"
+    "frag=vec4(c,dot(c,vec3(.299,.587,.114)));}";
+// FXAA 3.11 (Lottes), quality preset with a 12.5-pixel edge search.
+static const char *fxaa_fs = GLSL
+    "in vec2 uv;out vec4 frag;uniform sampler2D uImage;uniform vec2 uResolution;"
+    "float luma(vec2 p){return texture(uImage,p).a;}"
+    "void main(){vec2 px=1./uResolution;vec4 rgbyM=texture(uImage,uv);float lumaM=rgbyM.a;"
+    "float lumaS=luma(uv-vec2(0.,px.y)),lumaE=luma(uv+vec2(px.x,0.)),"
+    "lumaN=luma(uv+vec2(0.,px.y)),lumaW=luma(uv-vec2(px.x,0.));"
+    "float maxL=max(max(lumaN,lumaS),max(lumaE,max(lumaW,lumaM))),"
+    "minL=min(min(lumaN,lumaS),min(lumaE,min(lumaW,lumaM))),range=maxL-minL;"
+    "if(range<max(.0312,maxL*.125)){frag=vec4(rgbyM.rgb,1.);return;}"
+    "float lumaNW=luma(uv+vec2(-px.x,px.y)),lumaSE=luma(uv+vec2(px.x,-px.y)),"
+    "lumaNE=luma(uv+px),lumaSW=luma(uv-px);"
+    "float lumaNS=lumaN+lumaS,lumaWE=lumaW+lumaE,lumaNESE=lumaNE+lumaSE,lumaNWNE=lumaNW+lumaNE,"
+    "lumaNWSW=lumaNW+lumaSW,lumaSWSE=lumaSW+lumaSE;"
+    "float edgeHorz=abs(-2.*lumaW+lumaNWSW)+abs(-2.*lumaM+lumaNS)*2.+abs(-2.*lumaE+lumaNESE);"
+    "float edgeVert=abs(-2.*lumaS+lumaSWSE)+abs(-2.*lumaM+lumaWE)*2.+abs(-2.*lumaN+lumaNWNE);"
+    "bool horzSpan=edgeHorz>=edgeVert;float lengthSign=horzSpan?px.y:px.x;"
+    "float subpixB=((lumaNS+lumaWE)*2.+lumaNWSW+lumaNESE)/12.-lumaM;"
+    "if(!horzSpan){lumaN=lumaW;lumaS=lumaE;}"
+    "float gradientN=lumaN-lumaM,gradientS=lumaS-lumaM,lumaNN=lumaN+lumaM,lumaSS=lumaS+lumaM;"
+    "bool pairN=abs(gradientN)>=abs(gradientS);float gradient=max(abs(gradientN),abs(gradientS));"
+    "if(pairN)lengthSign=-lengthSign;else lumaNN=lumaSS;"
+    "float subpixC=clamp(abs(subpixB)/range,0.,1.);"
+    "vec2 posB=uv,offNP=horzSpan?vec2(px.x,0.):vec2(0.,px.y);"
+    "if(horzSpan)posB.y+=lengthSign*.5;else posB.x+=lengthSign*.5;"
+    "vec2 posN=posB-offNP,posP=posB+offNP;"
+    "float gradientScaled=gradient*.25,lumaMM=lumaM-lumaNN*.5;bool lumaMLTZero=lumaMM<0.;"
+    "float lumaEndN=luma(posN)-lumaNN*.5,lumaEndP=luma(posP)-lumaNN*.5;"
+    "bool doneN=abs(lumaEndN)>=gradientScaled,doneP=abs(lumaEndP)>=gradientScaled;"
+    "const float steps[5]=float[5](1.5,2.,2.,2.,4.);"
+    "for(int i=0;i<5;i++){if(!doneN)posN-=offNP*steps[i];if(!doneP)posP+=offNP*steps[i];"
+    "if(doneN&&doneP)break;"
+    "if(!doneN){lumaEndN=luma(posN)-lumaNN*.5;doneN=abs(lumaEndN)>=gradientScaled;}"
+    "if(!doneP){lumaEndP=luma(posP)-lumaNN*.5;doneP=abs(lumaEndP)>=gradientScaled;}}"
+    "float dstN=horzSpan?uv.x-posN.x:uv.y-posN.y,dstP=horzSpan?posP.x-uv.x:posP.y-uv.y;"
+    "bool directionN=dstN<dstP;"
+    "bool goodSpan=directionN?(lumaEndN<0.)!=lumaMLTZero:(lumaEndP<0.)!=lumaMLTZero;"
+    "float pixelOffset=goodSpan?.5-min(dstN,dstP)/(dstP+dstN):0.;"
+    "float subpixF=(-2.*subpixC+3.)*subpixC*subpixC;"
+    "float offset=max(pixelOffset,subpixF*subpixF*.75);vec2 p=uv;"
+    "if(horzSpan)p.y+=offset*lengthSign;else p.x+=offset*lengthSign;"
+    "frag=vec4(texture(uImage,p).rgb,1.);}";
 
 static GLuint render_program_sources(const char *vs, const char *const *fs, int fs_count) {
     GLuint shaders[2] = {glCreateShader(GL_VERTEX_SHADER), glCreateShader(GL_FRAGMENT_SHADER)};
@@ -465,6 +662,11 @@ static void draw_mesh(Renderer *r, Mesh mesh, Mat4 model, Color paint, bool dept
     glDrawArrays(GL_TRIANGLES, 0, mesh.count);
     r->draw_calls++;
     r->triangles += mesh.count / 3;
+}
+// Reflective finish for the vehicles that follow; zero restores matte scenery.
+static void set_gloss(const Renderer *r, bool depth, float amount) {
+    if (!depth)
+        glUniform1f(glGetUniformLocation(r->shader, "uGloss"), amount);
 }
 // Surfaces of revolution, centered on the same mass origin as the physics hull.
 static Mesh prop_mesh(bool tire) {
@@ -628,18 +830,39 @@ static void create_primitives(Renderer *r) {
     r->fence = mesh_upload(NULL,0);
 }
 
+static void target_storage(GLuint texture, GLenum format, int w, int h) {
+    bool depth = format == GL_DEPTH_COMPONENT24;
+    GLenum type = depth ? GL_UNSIGNED_INT : format == GL_RGBA8 ? GL_UNSIGNED_BYTE : GL_HALF_FLOAT;
+    GLenum layout = depth ? GL_DEPTH_COMPONENT : format == GL_R11F_G11F_B10F ? GL_RGB : GL_RGBA;
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, layout, type, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, depth ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, depth ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
 bool renderer_init(Renderer *r) {
     memset(r, 0, sizeof *r);
     r->last_track = -1;
     r->hero_frame = .30f;
-    r->shader = render_program(world_vs, world_fs);
+    r->shader = render_program_sources(world_vs, world_fs, SDL_arraysize(world_fs));
     r->depth_shader = render_program(depth_vs, depth_fs);
     r->post_shader = render_program(post_vs, post_fs);
     r->weather_shader = render_program(weather_vs, weather_fs);
     r->water_shader = render_program_sources(water_vs, water_fs, SDL_arraysize(water_fs));
     r->spray_shader = render_program(spray_vs, spray_fs);
+    r->sky_shader = render_program(sky_vs, sky_fs);
+    r->ao_shader = render_program(post_vs, ao_fs);
+    r->ao_blur_shader = render_program(post_vs, ao_blur_fs);
+    r->bloom_down_shader = render_program(post_vs, bloom_down_fs);
+    r->bloom_up_shader = render_program(post_vs, bloom_up_fs);
+    r->fxaa_shader = render_program(post_vs, fxaa_fs);
+    r->dof_down_shader = render_program(post_vs, dof_down_fs);
+    r->dof_blur_shader = render_program(post_vs, dof_blur_fs);
     if (!r->shader || !r->depth_shader || !r->post_shader || !r->weather_shader ||
-        !r->water_shader || !r->spray_shader)
+        !r->water_shader || !r->spray_shader || !r->sky_shader || !r->ao_shader ||
+        !r->ao_blur_shader || !r->bloom_down_shader || !r->bloom_up_shader || !r->fxaa_shader ||
+        !r->dof_down_shader || !r->dof_blur_shader)
         return false;
     const char *names[] = {"tracks/country.tcm", "tracks/beach.tcm", "tracks/winter.tcm"};
     for (int i = 0; i < 3; i++)
@@ -694,8 +917,11 @@ bool renderer_init(Renderer *r) {
     glBindTexture(GL_TEXTURE_2D, r->shadow_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 2048, 2048, 0, GL_DEPTH_COMPONENT,
                  GL_UNSIGNED_INT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // Hardware comparison with bilinear filtering: each shadow tap is already soft.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, r->shadow_texture,
@@ -709,49 +935,77 @@ bool renderer_init(Renderer *r) {
     }
     glGenFramebuffers(1, &r->scene_fbo);
     glGenTextures(1, &r->scene_texture);
-    glGenRenderbuffers(1, &r->scene_depth);
+    glGenTextures(1, &r->scene_depth);
     glGenFramebuffers(1, &r->opaque_fbo);
     glGenTextures(1, &r->opaque_texture);
     glGenTextures(1, &r->opaque_depth);
+    glGenFramebuffers(2, r->ao_fbo);
+    glGenTextures(2, r->ao_texture);
+    glGenFramebuffers(BLOOM_LEVELS, r->bloom_fbo);
+    glGenTextures(BLOOM_LEVELS, r->bloom_texture);
+    glGenFramebuffers(1, &r->ldr_fbo);
+    glGenTextures(1, &r->ldr_texture);
+    glGenFramebuffers(2, r->dof_fbo);
+    glGenTextures(2, r->dof_texture);
+    // OpenGL ES 3.0 renders to floating point only with an extension; probe for
+    // the packed 32-bit format first, then half floats, else stay at 8 bits.
+    const GLenum formats[] = {GL_R11F_G11F_B10F, GL_RGBA16F};
+    r->scene_format = GL_RGBA8;
+    for (int f = 0; f < 2 && r->scene_format == GL_RGBA8; f++) {
+        for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; i++) {
+        }
+        GLuint probe;
+        glGenTextures(1, &probe);
+        target_storage(probe, formats[f], 4, 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, probe, 0);
+        if (glGetError() == GL_NO_ERROR &&
+            glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+            r->scene_format = formats[f];
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        glDeleteTextures(1, &probe);
+    }
+    if (r->scene_format == GL_RGBA8)
+        SDL_Log("Floating-point rendering unavailable; using an 8-bit scene");
     glBindFramebuffer(GL_FRAMEBUFFER, r->default_fbo);
     return true;
+}
+static void target_attach(GLuint fbo, GLuint color, GLuint depth, const char *name) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+    if (depth)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        SDL_Log("%s framebuffer incomplete", name);
+}
+static int bloom_size(int size, int level) {
+    return SDL_max(1, size >> (level + 1));
 }
 void renderer_resize(Renderer *r, int w, int h) {
     if (w == r->width && h == r->height)
         return;
     r->width = w;
     r->height = h;
-    glBindTexture(GL_TEXTURE_2D, r->scene_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindRenderbuffer(GL_RENDERBUFFER, r->scene_depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-    glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, r->scene_texture,
-                           0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, r->scene_depth);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        SDL_Log("Scene framebuffer incomplete");
-    glBindTexture(GL_TEXTURE_2D, r->opaque_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, r->opaque_depth);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindFramebuffer(GL_FRAMEBUFFER, r->opaque_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, r->opaque_texture, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, r->opaque_depth, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        SDL_Log("Water refraction framebuffer incomplete");
+    // Depth of field keeps its blur amount in alpha, so it needs a four-channel format.
+    GLenum color = r->scene_format, blurred = color == GL_RGBA8 ? GL_RGBA8 : GL_RGBA16F;
+    target_storage(r->scene_texture, color, w, h);
+    target_storage(r->scene_depth, GL_DEPTH_COMPONENT24, w, h);
+    target_attach(r->scene_fbo, r->scene_texture, r->scene_depth, "Scene");
+    target_storage(r->opaque_texture, color, w, h);
+    target_storage(r->opaque_depth, GL_DEPTH_COMPONENT24, w, h);
+    target_attach(r->opaque_fbo, r->opaque_texture, r->opaque_depth, "Water refraction");
+    for (int i = 0; i < 2; i++) {
+        target_storage(r->ao_texture[i], GL_RGBA8, (w + 1) / 2, (h + 1) / 2);
+        target_attach(r->ao_fbo[i], r->ao_texture[i], 0, "Occlusion");
+        target_storage(r->dof_texture[i], blurred, (w + 1) / 2, (h + 1) / 2);
+        target_attach(r->dof_fbo[i], r->dof_texture[i], 0, "Depth of field");
+    }
+    for (int i = 0; i < BLOOM_LEVELS; i++) {
+        target_storage(r->bloom_texture[i], color, bloom_size(w, i), bloom_size(h, i));
+        target_attach(r->bloom_fbo[i], r->bloom_texture[i], 0, "Bloom");
+    }
+    target_storage(r->ldr_texture, GL_RGBA8, w, h);
+    target_attach(r->ldr_fbo, r->ldr_texture, 0, "Antialiasing");
     glBindFramebuffer(GL_FRAMEBUFFER, r->default_fbo);
 }
 
@@ -1118,7 +1372,9 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
         Mat4 rim = mmul(translate(v3(0, -.36f, 0)), scale3(3.62f, .05f, 3.62f));
         draw_mesh(r, r->cube, rim, rgb(.89f, .29f, .12f), depth);
         Mat4 model = mmul(rotate_y(g->clock * .20f + .5f), scale3(1.65f, 1.65f, 1.65f));
+        set_gloss(r, depth, 1);
         draw_mesh(r, r->car, model, CAR_COLORS[g->profile.color], depth);
+        set_gloss(r, depth, 0);
         return;
     }
     draw_mesh(r, r->tracks[g->selected], identity(), white, depth);
@@ -1144,14 +1400,19 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     glUniform1i(glGetUniformLocation(program, "uWildlife"), 0);
     if (!menu)
         draw_props(r, g, depth);
+    set_gloss(r, depth, .5f);
     draw_railway(r, g, depth);
+    set_gloss(r, depth, .7f);
     if (!menu)
         draw_helicopter(r, g, depth);
+    set_gloss(r, depth, 0);
     if (!depth)
         draw_mesh(r, r->plane, identity(), r->sky, depth);
+    set_gloss(r, depth, 1);
     for (int i = 0; i < CAR_COUNT; i++)
         if (r->car_visible[i])
             draw_mesh(r, r->car, r->car_models[i], r->car_colors[i], depth);
+    set_gloss(r, depth, 0);
     if (!depth && r->night > 0) {
         glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
         for (int i = 0; i < CAR_COUNT; i++)
@@ -1169,8 +1430,10 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
             continue;
         Mat4 model = mmul(translate(vadd(p, v3(0, .7f + sinf(g->clock * 3 + i) * .22f, 0))),
                           mmul(rotate_y(g->clock * 1.5f + i), scale3(1.4f, 1.4f, 1.4f)));
+        set_gloss(r, depth, .6f);
         draw_mesh(r, r->fuel, model, white, depth);
     }
+    set_gloss(r, depth, 0);
     if (!depth)
         glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
     if (!depth) {
@@ -1231,8 +1494,161 @@ static void cloud_uniforms(GLuint program, const Renderer *r, const Game *g, boo
     glUniform1f(glGetUniformLocation(program, "uCloudAmount"), garage ? 0 : amount);
 }
 
-static void draw_water(Renderer *r, const Game *g, Color sky, float overcast,
-                       int vx, int vy, int vw, int vh) {
+static void sky_uniforms(GLuint program, const Renderer *r) {
+    uniform_vec(program, "uHorizon", r->horizon);
+    uniform_vec(program, "uZenith", r->zenith);
+    glUniform1f(glGetUniformLocation(program, "uOvercast"), r->overcast);
+    glUniform1f(glGetUniformLocation(program, "uNight"), r->night);
+}
+
+// Fills the background left after the opaque scene; depth stays at the far plane.
+static void draw_sky(Renderer *r, const Game *g, bool calm) {
+    GLuint p = r->sky_shader;
+    glUseProgram(p);
+    sky_uniforms(p, r);
+    cloud_uniforms(p, r, g, calm, false);
+    uniform_vec(p, "uEye", r->eye);
+    uniform_vec(p, "uRight", v3(r->view.m[0], r->view.m[4], r->view.m[8]));
+    uniform_vec(p, "uUp", v3(r->view.m[1], r->view.m[5], r->view.m[9]));
+    uniform_vec(p, "uBack", v3(r->view.m[2], r->view.m[6], r->view.m[10]));
+    glUniform4f(glGetUniformLocation(p, "uProj"), r->projection.m[0], r->projection.m[5],
+                r->projection.m[8], r->projection.m[9]);
+    glDepthMask(GL_FALSE);
+    glBindVertexArray(r->empty_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDepthMask(GL_TRUE);
+    r->bound_vao = 0;
+    r->draw_calls++;
+    r->triangles++;
+}
+
+static void post_pass(GLuint fbo, int w, int h) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, w, h);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+// Ambient occlusion from the scene depth, the bloom pyramid from its color and,
+// for the menu's lens, the depth-of-field image.
+static void post_effects(Renderer *r) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glBindVertexArray(r->empty_vao);
+    glActiveTexture(GL_TEXTURE0);
+    int hw = (r->width + 1) / 2, hh = (r->height + 1) / 2;
+    GLuint p = r->ao_shader;
+    glUseProgram(p);
+    glBindTexture(GL_TEXTURE_2D, r->scene_depth);
+    glUniform1i(glGetUniformLocation(p, "uDepth"), 0);
+    glUniform4f(glGetUniformLocation(p, "uProj"), r->projection.m[0], r->projection.m[5],
+                r->projection.m[8], r->projection.m[9]);
+    glUniform2f(glGetUniformLocation(p, "uDepthParams"), r->projection.m[10], r->projection.m[14]);
+    glUniform4f(glGetUniformLocation(p, "uViewport"), (float)r->viewport[0] / r->width,
+                (float)r->viewport[1] / r->height, (float)r->viewport[2] / r->width,
+                (float)r->viewport[3] / r->height);
+    glUniform2f(glGetUniformLocation(p, "uSize"), (float)r->width, (float)r->height);
+    // Contact shadows within about a metre: under cars, around trunks, rocks and curbs.
+    float radius = 1.1f;
+    glUniform1f(glGetUniformLocation(p, "uRadius"), radius);
+    glUniform1f(glGetUniformLocation(p, "uScale"), r->projection.m[5] * .5f * r->viewport[3]);
+    glUniform1f(glGetUniformLocation(p, "uMaxPixels"), r->height * .06f);
+    glUniform1f(glGetUniformLocation(p, "uIntensity"), .8f);
+    glUniform1f(glGetUniformLocation(p, "uFogFar"), r->fog_far);
+    post_pass(r->ao_fbo[0], hw, hh);
+    p = r->ao_blur_shader;
+    glUseProgram(p);
+    glBindTexture(GL_TEXTURE_2D, r->ao_texture[0]);
+    glUniform1i(glGetUniformLocation(p, "uOcclusion"), 0);
+    post_pass(r->ao_fbo[1], hw, hh);
+    p = r->bloom_down_shader;
+    glUseProgram(p);
+    glUniform1i(glGetUniformLocation(p, "uSource"), 0);
+    bool hdr = r->scene_format != GL_RGBA8;
+    glUniform1f(glGetUniformLocation(p, "uThreshold"), hdr ? 1 : .82f);
+    for (int i = 0; i < BLOOM_LEVELS; i++) {
+        glBindTexture(GL_TEXTURE_2D, i ? r->bloom_texture[i - 1] : r->scene_texture);
+        float sw = i ? bloom_size(r->width, i - 1) : r->width;
+        float sh = i ? bloom_size(r->height, i - 1) : r->height;
+        glUniform2f(glGetUniformLocation(p, "uTexel"), 1 / sw, 1 / sh);
+        glUniform1i(glGetUniformLocation(p, "uPrefilter"), i == 0);
+        post_pass(r->bloom_fbo[i], bloom_size(r->width, i), bloom_size(r->height, i));
+    }
+    // Each level adds the blurred level below it, so level 0 holds every radius.
+    p = r->bloom_up_shader;
+    glUseProgram(p);
+    glUniform1i(glGetUniformLocation(p, "uSource"), 0);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    for (int i = BLOOM_LEVELS - 2; i >= 0; i--) {
+        glBindTexture(GL_TEXTURE_2D, r->bloom_texture[i + 1]);
+        glUniform2f(glGetUniformLocation(p, "uTexel"), 1.f / bloom_size(r->width, i + 1),
+                    1.f / bloom_size(r->height, i + 1));
+        post_pass(r->bloom_fbo[i], bloom_size(r->width, i), bloom_size(r->height, i));
+    }
+    glDisable(GL_BLEND);
+    if (r->aperture > 0) {
+        p = r->dof_down_shader;
+        glUseProgram(p);
+        GLuint inputs[] = {r->scene_texture, r->scene_depth};
+        const char *names[] = {"uScene", "uDepth"};
+        for (int i = 0; i < 2; i++) {
+            glActiveTexture(GL_TEXTURE0 + i);
+            glBindTexture(GL_TEXTURE_2D, inputs[i]);
+            glUniform1i(glGetUniformLocation(p, names[i]), i);
+        }
+        glUniform2f(glGetUniformLocation(p, "uDepthParams"), r->projection.m[10],
+                    r->projection.m[14]);
+        glUniform1f(glGetUniformLocation(p, "uFocus"), r->focus);
+        post_pass(r->dof_fbo[0], hw, hh);
+        p = r->dof_blur_shader;
+        glUseProgram(p);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, r->dof_texture[0]);
+        glUniform1i(glGetUniformLocation(p, "uSource"), 0);
+        glUniform1f(glGetUniformLocation(p, "uRadius"), r->aperture * hh);
+        post_pass(r->dof_fbo[1], hw, hh);
+    }
+    r->bound_vao = 0;
+}
+
+void renderer_present(Renderer *r) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glBindVertexArray(r->empty_vao);
+    GLuint p = r->post_shader;
+    glUseProgram(p);
+    GLuint textures[] = {r->scene_texture, r->ao_texture[1], r->bloom_texture[0], r->scene_depth,
+                         r->dof_texture[1]};
+    const char *names[] = {"uScene", "uOcclusion", "uBloom", "uDepth", "uDof"};
+    for (int i = 0; i < 5; i++) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, textures[i]);
+        glUniform1i(glGetUniformLocation(p, names[i]), i);
+    }
+    glUniform2f(glGetUniformLocation(p, "uResolution"), (float)r->width, (float)r->height);
+    glUniform2f(glGetUniformLocation(p, "uOcclusionTexel"), 1.f / ((r->width + 1) / 2),
+                1.f / ((r->height + 1) / 2));
+    glUniform1f(glGetUniformLocation(p, "uVignette"), r->vignette);
+    glUniform1f(glGetUniformLocation(p, "uFade"), r->fade);
+    glUniform1f(glGetUniformLocation(p, "uSpeedBlur"), r->speed_blur);
+    glUniform1f(glGetUniformLocation(p, "uAperture"), r->aperture);
+    glUniform1f(glGetUniformLocation(p, "uFocus"), r->focus);
+    glUniform2f(glGetUniformLocation(p, "uDepthParams"), r->projection.m[10], r->projection.m[14]);
+    // The summed pyramid levels: a faint daytime sheen, stronger halos at night.
+    float bloom = (.018f + .045f * r->night) * (r->scene_format != GL_RGBA8 ? 1 : .6f);
+    glUniform1f(glGetUniformLocation(p, "uBloomStrength"), bloom);
+    post_pass(r->ldr_fbo, r->width, r->height);
+    p = r->fxaa_shader;
+    glUseProgram(p);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, r->ldr_texture);
+    glUniform1i(glGetUniformLocation(p, "uImage"), 0);
+    glUniform2f(glGetUniformLocation(p, "uResolution"), (float)r->width, (float)r->height);
+    post_pass(r->default_fbo, r->width, r->height);
+    r->bound_vao = 0;
+}
+
+static void draw_water(Renderer *r, const Game *g, int vx, int vy, int vw, int vh) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, r->scene_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, r->opaque_fbo);
     glBlitFramebuffer(0, 0, r->width, r->height, 0, 0, r->width, r->height,
@@ -1243,11 +1659,9 @@ static void draw_water(Renderer *r, const Game *g, Color sky, float overcast,
     uniform_matrix(p, "uVP", r->vp);
     uniform_matrix(p, "uLight", r->light_vp);
     uniform_vec(p, "uEye", r->eye);
-    uniform_vec(p, "uSky", v3(sky.r, sky.g, sky.b));
+    sky_uniforms(p, r);
     cloud_uniforms(p, r, g, r->hero, false);
     glUniform1f(glGetUniformLocation(p, "uTime"), r->crowd_time);
-    glUniform1f(glGetUniformLocation(p, "uOvercast"), overcast);
-    glUniform1f(glGetUniformLocation(p, "uNight"), r->night);
     glUniform1i(glGetUniformLocation(p, "uTrack"), g->selected);
     glUniform2f(glGetUniformLocation(p, "uResolution"), r->width, r->height);
     glUniform2f(glGetUniformLocation(p, "uDepthParams"), r->projection.m[10], r->projection.m[14]);
@@ -1354,11 +1768,15 @@ static float hero_camera(Renderer *r, const Game *g, float aspect, float *blur) 
     float middle = lead - HERO_GAP * (CAR_COUNT - 1) * .5f;
     float fov = 50;
     *blur = 0;
+    // Each angle has its own lens: the telephoto and low shots blur the most.
+    static const float APERTURE[4] = {.004f, .006f, .010f, .010f};
+    r->aperture = APERTURE[shot];
     if (shot == 0) {
         // Chasing the player's bumper, looking up the road at the leaders.
         float lane = hero_lane(g, 0);
         r->eye = vadd(track_at(t, player - 10.5f, lane, NULL), v3(0, 3.4f, 0));
         r->target = vadd(track_at(t, player + 18, lane, NULL), v3(0, .3f, 0));
+        r->focus = vlen(vsub(track_at(t, player, lane, NULL), r->eye));
         *blur = .035f;
     } else if (shot == 1) {
         // A helicopter circling the bunch; each pass starts from a new side.
@@ -1366,11 +1784,13 @@ static float hero_camera(Renderer *r, const Game *g, float aspect, float *blur) 
         float a = (int)(g->clock / (HERO_SHOT * 4)) * 2.4f + local * .16f;
         r->eye = vadd(c, v3(sinf(a) * 27, 13, cosf(a) * 27));
         r->target = vadd(c, v3(0, 1, 0));
+        r->focus = vlen(vsub(r->target, r->eye));
         fov = 46;
     } else if (shot == 2) {
         // Low on the tarmac ahead of the leader, with the field charging in.
         r->eye = vadd(track_at(t, lead + 7.5f, .6f, NULL), v3(0, 1.15f, 0));
         r->target = vadd(track_at(t, lead - 16, 0, NULL), v3(0, 1.1f, 0));
+        r->focus = vlen(vsub(track_at(t, lead, hero_lane(g, 1), NULL), r->eye));
         fov = 42;
         *blur = .03f;
     } else {
@@ -1384,6 +1804,7 @@ static float hero_camera(Renderer *r, const Game *g, float aspect, float *blur) 
         p.y = fmaxf(p.y + 3.2f, ground + 1.8f);
         r->eye = p;
         r->target = vadd(track_at(t, middle + 4, 0, NULL), v3(0, .8f, 0));
+        r->focus = vlen(vsub(r->target, r->eye));
         fov = 30;
     }
     r->projection = perspective(fov * PI / 180, aspect, .3f, 400);
@@ -1423,6 +1844,15 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     clear.r = lerpf(clear.r, haze.r, overcast * .75f);
     clear.g = lerpf(clear.g, haze.g, overcast * .75f);
     clear.b = lerpf(clear.b, haze.b, overcast * .75f);
+    // Each circuit's haze is the horizon of a deeper sky; the garage car mirrors
+    // a studio's overhead softbox instead.
+    static const Vec3 ZENITH[TRACK_COUNT] = {
+        {.38f, .58f, .82f}, {.22f, .55f, .82f}, {.36f, .55f, .80f}};
+    Vec3 zenith = r->night > 0 ? v3(.006f, .012f, .034f) : ZENITH[g->selected];
+    zenith = vlerp(zenith, vmul(v3(haze.r, haze.g, haze.b), .92f), overcast * .85f);
+    r->horizon = v3(clear.r, clear.g, clear.b);
+    r->zenith = garage ? v3(.62f, .65f, .70f) : zenith;
+    r->overcast = overcast;
     int vx = 0, vy = 0, vw = r->width, vh = r->height;
     if (garage) {
         vx = (int)(r->width * .37f);
@@ -1431,6 +1861,7 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
         vh = (int)(r->height * .645f);
     }
     float aspect = (float)vw / vh, fade = 0, blur = 0;
+    r->aperture = 0;
     if (menu) {
         fade = hero_camera(r, g, aspect, &blur);
     } else if (garage) {
@@ -1459,8 +1890,17 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     r->vp = mmul(r->projection, r->view);
     Vec3 light_target = garage ? v3(0, 0, 0) : r->target;
     float shadow_span = garage ? 9 : menu ? 80 : 65;
-    r->light_vp = mmul(ortho(-shadow_span, shadow_span, -shadow_span, shadow_span, 1, 650),
-                       lookat(vadd(light_target, v3(-180, 300, 135)), light_target, v3(0, 1, 0)));
+    // The frustum follows the camera in whole shadow-map texels, so shadow edges
+    // stay still instead of crawling as the car drives.
+    Mat4 light_view = lookat(v3(-180, 300, 135), v3(0, 0, 0), v3(0, 1, 0));
+    Vec3 light_center = transform_point(light_view, light_target);
+    float texel = 2 * shadow_span / 2048;
+    light_center.x = roundf(light_center.x / texel) * texel;
+    light_center.y = roundf(light_center.y / texel) * texel;
+    r->light_vp = mmul(ortho(light_center.x - shadow_span, light_center.x + shadow_span,
+                             light_center.y - shadow_span, light_center.y + shadow_span,
+                             -light_center.z - 374, -light_center.z + 275),
+                       light_view);
     if (!garage)
         update_cars(r, g, menu);
     glEnable(GL_DEPTH_TEST);
@@ -1486,44 +1926,43 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     uniform_matrix(r->shader, "uLight", r->light_vp);
     uniform_vec(r->shader, "uEye", r->eye);
     cloud_uniforms(r->shader, r, g, calm, garage);
-    uniform_vec(r->shader, "uFog", v3(clear.r, clear.g, clear.b));
+    sky_uniforms(r->shader, r);
     // Night haze closes in a little so distant scenery settles into the dark.
-    glUniform1f(glGetUniformLocation(r->shader, "uFogFar"),
-                garage ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night));
-    glUniform1f(glGetUniformLocation(r->shader, "uOvercast"), overcast);
+    r->fog_far = garage ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night);
+    glUniform1f(glGetUniformLocation(r->shader, "uFogFar"), r->fog_far);
     glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
-    glUniform1f(glGetUniformLocation(r->shader, "uNight"), r->night);
+    glUniform1f(glGetUniformLocation(r->shader, "uGloss"), 0);
+    // Road material colors from tools/build_assets.py.
+    static const Vec3 ROAD[TRACK_COUNT] = {
+        {.28f, .31f, .29f}, {.53f, .44f, .31f}, {.37f, .48f, .54f}};
+    uniform_vec(r->shader, "uRoad", ROAD[g->selected]);
     lamp_uniforms(r);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, r->shadow_texture);
     glUniform1i(glGetUniformLocation(r->shader, "uShadow"), 0);
     render_objects(r, g, false, menu, garage);
-    if (!garage) draw_water(r, g, clear, overcast, vx, vy, vw, vh);
+    if (!garage) {
+        draw_sky(r, g, calm);
+        draw_water(r, g, vx, vy, vw, vh);
+    }
     if (!calm)
         draw_spray(r, g);
     if (!garage && r->night > 0)
         draw_lamp_glows(r, g);
     if (!calm)
         draw_weather(r, g);
-    glBindFramebuffer(GL_FRAMEBUFFER, r->default_fbo);
-    glViewport(0, 0, r->width, r->height);
-    glDisable(GL_DEPTH_TEST);
-    glUseProgram(r->post_shader);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, r->scene_texture);
-    glUniform1i(glGetUniformLocation(r->post_shader, "uScene"), 0);
-    glUniform2f(glGetUniformLocation(r->post_shader, "uResolution"), (float)r->width,
-                (float)r->height);
-    glUniform1f(glGetUniformLocation(r->post_shader, "uVignette"), .3f + .2f * r->night);
-    glUniform1f(glGetUniformLocation(r->post_shader, "uFade"), fade);
+    int viewport[] = {vx, vy, vw, vh};
+    memcpy(r->viewport, viewport, sizeof viewport);
+    post_effects(r);
+    r->vignette = .3f + .2f * r->night;
+    r->fade = fade;
     const Car *player = &g->cars[0];
     float pace = clampf((player->speed - 16.f) / 24.f, 0, 1);
     pace = pace * pace * (3 - 2 * pace);
     if (g->screen == SCREEN_RACE && !player->dnf && !player->finished)
         blur = pace * (.065f + .025f * clampf(player->boost_cooldown / 2, 0, 1));
-    glUniform1f(glGetUniformLocation(r->post_shader, "uSpeedBlur"), blur);
-    glBindVertexArray(r->empty_vao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    r->speed_blur = blur;
+    renderer_present(r);
     r->last_screen = g->screen;
     r->last_track = g->selected;
 }
@@ -1589,6 +2028,22 @@ void renderer_destroy(Renderer *r) {
     glDeleteProgram(r->weather_shader);
     glDeleteProgram(r->water_shader);
     glDeleteProgram(r->spray_shader);
+    glDeleteProgram(r->sky_shader);
+    glDeleteProgram(r->ao_shader);
+    glDeleteProgram(r->ao_blur_shader);
+    glDeleteProgram(r->bloom_down_shader);
+    glDeleteProgram(r->bloom_up_shader);
+    glDeleteProgram(r->fxaa_shader);
+    glDeleteFramebuffers(2, r->ao_fbo);
+    glDeleteTextures(2, r->ao_texture);
+    glDeleteFramebuffers(BLOOM_LEVELS, r->bloom_fbo);
+    glDeleteTextures(BLOOM_LEVELS, r->bloom_texture);
+    glDeleteFramebuffers(1, &r->ldr_fbo);
+    glDeleteTextures(1, &r->ldr_texture);
+    glDeleteProgram(r->dof_down_shader);
+    glDeleteProgram(r->dof_blur_shader);
+    glDeleteFramebuffers(2, r->dof_fbo);
+    glDeleteTextures(2, r->dof_texture);
     glDeleteVertexArrays(1, &r->spray_vao);
     glDeleteBuffers(1, &r->spray_vbo);
     glDeleteTextures(1, &r->opaque_texture);
@@ -1599,5 +2054,5 @@ void renderer_destroy(Renderer *r) {
     glDeleteTextures(1, &r->scene_texture);
     glDeleteFramebuffers(1, &r->shadow_fbo);
     glDeleteFramebuffers(1, &r->scene_fbo);
-    glDeleteRenderbuffers(1, &r->scene_depth);
+    glDeleteTextures(1, &r->scene_depth);
 }
