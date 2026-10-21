@@ -1,0 +1,43 @@
+ToyCars soundtrack
+==================
+
+All music in assets/music is by MintoDog, from the "For Racing Game
+(MintoDog's music)" collection on OpenGameArt:
+https://opengameart.org/content/for-racing-game-mintodogs-music
+
+Every file is dedicated to the public domain under Creative Commons Zero 1.0
+(CC0 1.0): https://creativecommons.org/publicdomain/zero/1.0/
+Attribution is not required; it is given here with thanks. The files are the
+published Ogg Vorbis releases, unmodified apart from their names.
+
+File                                Original release
+----------------------------------  ---------------------------------------------------------------
+racing-game-menu.ogg                Racing Game Menu
+                                    https://opengameart.org/content/racing-game-menu
+blossom-mountain.ogg                Blossom Mountain [Remake], 140 BPM
+blossom-mountain-climax.ogg         Blossom Mountain Climax [Remake], 155 BPM
+                                    https://opengameart.org/content/blossom-mountainremake
+joyful-jungle.ogg                   Joyful Jungle, 140 BPM
+joyful-jungle-climax.ogg            Joyful Jungle Climax, 155 BPM
+                                    https://opengameart.org/content/joyful-jungle
+sky-blue-street.ogg                 Sky Blue Street, 165 BPM
+sky-blue-street-climax.ogg          Sky Blue Street Climax, 180 BPM
+                                    https://opengameart.org/content/sky-blue-street
+sunny-city.ogg                      Sunny City, 120 BPM
+sunny-city-climax.ogg               Sunny City Climax, 135 BPM
+                                    https://opengameart.org/content/sunny-city
+fever-stadium.ogg                   Fever Stadium, 165 BPM
+fever-stadium-climax.ogg            Fever Stadium Climax, 180 BPM
+                                    https://opengameart.org/content/fever-stadium
+cool-highway.ogg                    Cool Highway [Remake], 140 BPM
+cool-highway-climax.ogg             Cool Highway Climax [Remake], 155 BPM
+                                    https://opengameart.org/content/cool-highway-remake
+final-lap.ogg                       Final Lap (Jingle)
+finish-best.ogg, finish-best-loop.ogg
+                                    Race Finish Best (Jingle) and (Loop), 132 BPM
+finish-good.ogg, finish-good-loop.ogg
+                                    Race Finish Good (Jingle) and (Loop), 130 BPM
+finish-bad.ogg, finish-bad-loop.ogg Race Finish Bad (Jingle) and (Loop), 100 BPM
+                                    https://opengameart.org/content/racing-game-finish-jingle
+
+Retrieved 21 October 2026.

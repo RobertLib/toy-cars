@@ -1,12 +1,15 @@
 #include "audio.h"
 #include <string.h>
 
+#define AUDIO_RATE MUSIC_RATE
+#define AUDIO_FRAMES (AUDIO_RATE / 20)
+
 void audio_init(Audio *a) {
     memset(a, 0, sizeof *a);
-    music_init(&a->music);
+    music_init(&a->music, asset_read);
     a->music_duck = 1;
     a->noise = 84131;
-    SDL_AudioSpec spec = {.format = SDL_AUDIO_F32, .channels = 2, .freq = 48000};
+    SDL_AudioSpec spec = {.format = SDL_AUDIO_F32, .channels = 2, .freq = AUDIO_RATE};
     a->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
     if (a->stream)
         SDL_ResumeAudioStreamDevice(a->stream);
@@ -44,23 +47,13 @@ static MusicContext soundtrack_context(const Game *g) {
     default:
         break;
     }
-    float intensity = 0;
-    if (scene == MUSIC_RACE) {
-        const Car *player = &g->cars[0];
-        intensity = .18f + .48f * clampf(player->speed / 28.f, 0, 1);
-        if (player->lap == RACE_LAPS)
-            intensity += .18f;
-        for (int i = 1; i < CAR_COUNT; i++) {
-            if (!g->cars[i].finished && !g->cars[i].dnf &&
-                fabsf(g->cars[i].progress - player->progress) < 9.f) {
-                intensity += .16f;
-                break;
-            }
-        }
-        if (player->fuel <= 0)
-            intensity = .1f;
-    }
-    return (MusicContext){scene, g->selected, intensity, g->profile.music};
+    const Car *player = &g->cars[0];
+    MusicFinish finish = MUSIC_BAD;
+    if (g->championship_celebration || (!player->dnf && g->finish_rank == 1))
+        finish = MUSIC_BEST;
+    else if (!player->dnf && g->finish_rank > 0 && g->finish_rank <= 4)
+        finish = MUSIC_GOOD;
+    return (MusicContext){scene, g->selected, finish, player->lap >= RACE_LAPS, g->profile.music};
 }
 void audio_update(Audio *a, Game *g) {
     if (!a->stream || a->paused) {
@@ -69,24 +62,28 @@ void audio_update(Audio *a, Game *g) {
     }
     music_context(&a->music, soundtrack_context(g));
     if (g->sound_event) {
-        a->effect = g->sound_event;
-        a->effect_time = 0;
+        // With music on, the finish jingles take the place of the synthesized fanfares.
+        bool fanfare = g->sound_event == 7 || g->sound_event == 9;
+        if (!fanfare || !g->profile.music) {
+            a->effect = g->sound_event;
+            a->effect_time = 0;
+        }
         g->sound_event = 0;
     }
     int queued = SDL_GetAudioStreamQueued(a->stream);
-    int frames = 2400 - queued / (int)(sizeof(float) * 2);
+    int frames = AUDIO_FRAMES - queued / (int)(sizeof(float) * 2);
     if (frames <= 0)
         return;
-    if (frames > 2400)
-        frames = 2400;
-    float data[4800];
+    if (frames > AUDIO_FRAMES)
+        frames = AUDIO_FRAMES;
+    float data[AUDIO_FRAMES * 2];
+    music_render(&a->music, data, frames);
     bool racing = g->screen == SCREEN_RACE;
     float speed = g->cars[0].speed;
     for (int i = 0; i < frames; i++) {
-        float out = 0, right = 0;
+        float out = data[i * 2], right = data[i * 2 + 1];
         a->noise = a->noise * 1664525u + 1013904223u;
         float noise = ((a->noise >> 9) / 8388607.f) * 2 - 1;
-        music_sample(&a->music, &out, &right);
         float duck = g->profile.sound && a->effect && a->effect_time < .28f ? .68f : 1;
         a->music_duck += (duck - a->music_duck) * .0004f;
         out *= a->music_duck;
@@ -94,7 +91,7 @@ void audio_update(Audio *a, Game *g) {
         if (g->profile.sound) {
             if (racing && g->cars[0].fuel > 0) {
                 float hz = 44 + speed * 5.4f;
-                a->engine_phase += hz / 48000.;
+                a->engine_phase += hz / (double)AUDIO_RATE;
                 if (a->engine_phase >= 1)
                     a->engine_phase -= 1;
                 float engine = (sinf((float)a->engine_phase * 2 * PI) +
@@ -171,11 +168,12 @@ void audio_update(Audio *a, Game *g) {
         }
         data[i * 2] = clampf(out, -.8f, .8f);
         data[i * 2 + 1] = clampf(right, -.8f, .8f);
-        a->effect_time += 1.f / 48000;
+        a->effect_time += 1.f / AUDIO_RATE;
     }
     SDL_PutAudioStreamData(a->stream, data, frames * 2 * (int)sizeof(float));
 }
 void audio_destroy(Audio *a) {
     SDL_DestroyAudioStream(a->stream);
+    music_destroy(&a->music);
     a->stream = NULL;
 }

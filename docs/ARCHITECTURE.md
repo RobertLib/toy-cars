@@ -10,7 +10,8 @@
 | `src/renderer.c` | OpenGL/GLES scene, shadow pass, follow camera, fog, postprocess, screenshot |
 | `src/ui.c` | Batched vector/text UI, responsive layouts, multitouch tracking, screens |
 | `src/audio.c` | Gameplay music direction, engine and event audio through SDL_AudioStream |
-| `src/music.c` | Seven composed scores, bar-aligned sequencing and adaptive stereo synthesis |
+| `src/music.c` | Recorded soundtrack cues, race-aware sequencing, crossfades, loudness matching |
+| `third_party/stb_vorbis` | Vendored public-domain Ogg Vorbis decoder used by the soundtrack |
 | `tools/build_assets.py` | Blender-only modeling, scene saving and geometry/path export |
 
 The runtime has no Python dependency and no network calls. On Android the

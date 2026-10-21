@@ -1,425 +1,253 @@
 #include "music.h"
+#include <SDL3/SDL.h>
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
-#define TAU 6.2831853071795864769f
-enum { KEYS, PLUCK, PAD, BASS, LEAD, KICK, SNARE, HAT, TOM };
-enum { HARMONY, LOW, RHYTHM, MELODY, DRIVE };
+#define STB_VORBIS_HEADER_ONLY
+#define STB_VORBIS_NO_STDIO
+#define STB_VORBIS_NO_PUSHDATA_API
+#include "stb_vorbis.c"
 
-typedef struct {
-    const char *name;
-    int tonic, mode, bpm, groove, timbre;
-    float swing;
-    int chords[2][8];
-    /* Two composed eight-bar phrases, four possible entries per bar; -1 is a rest.
-       Pitches are scale degrees, so the score and its extended chords share a key. */
-    int melody[2][32];
-} Song;
+/* Every cue is normalized to this loudness. The masters are around -11 LUFS;
+   the engine is near -28 LUFS at speed and event sounds stay clearly above both. */
+#define MUSIC_LOUDNESS -26.f
+#define PAUSE_LEVEL .45f
+#define ATTACK .005f
+// A 2 ms settle from the last emitted sample removes steps at loop seams.
+#define SEAM_DECAY .9887f
 
-static const Song songs[MUSIC_SONGS] = {{"Pocket Paddock",
-                                         48,
-                                         0,
-                                         96,
-                                         0,
-                                         KEYS,
-                                         .10f,
-                                         {{0, 5, 1, 4, 2, 5, 3, 4}, {3, 2, 1, 4, 5, 3, 1, 4}},
-                                         {{4, -1, 6, 8,  7, 5,  -1, 4, 3, -1, 5,  8, 6, 4,  -1, -1,
-                                           4, 6,  9, -1, 7, -1, 5,  4, 5, 3,  -1, 1, 2, -1, 1,  -1},
-                                          {5, -1, 7, 9, 8, 6, -1, 4, 3, 5,  8, -1, 6, -1, 4, 2,
-                                           7, -1, 9, 7, 5, 3, -1, 2, 3, -1, 5, 3,  2, -1, 1, -1}}},
-                                        {"Orchard Run",
-                                         50,
-                                         0,
-                                         116,
-                                         0,
-                                         PLUCK,
-                                         .12f,
-                                         {{0, 0, 5, 3, 1, 4, 3, 4}, {5, 2, 3, 0, 1, 5, 3, 4}},
-                                         {{2, 4, -1, 7, 6, 4, 2, -1, 7, 5, 4, -1, 5, 3,  2, 0,
-                                           3, 5, -1, 8, 6, 4, 2, -1, 5, 7, 5, 3,  4, -1, 2, -1},
-                                          {7, 9, 7, 5, 6, -1, 4, 2, 5, 7, 9, -1, 8, 7, 4,  -1,
-                                           3, 5, 8, 5, 7, -1, 5, 4, 5, 3, 2, -1, 4, 2, -1, -1}}},
-                                        {"Golden Switchback",
-                                         45,
-                                         2,
-                                         122,
-                                         1,
-                                         KEYS,
-                                         .06f,
-                                         {{0, 2, 3, 6, 0, 5, 3, 4}, {3, 6, 2, 5, 1, 3, 0, 4}},
-                                         {{0, -1, 2, 4,  6, 4, 2,  -1, 5, -1, 7, 5, 6, 3,  -1, 1,
-                                           4, 2,  0, -1, 7, 5, -1, 4,  5, 3,  2, 0, 1, -1, 4,  -1},
-                                          {5, 7,  -1, 9, 8, 6, 3, -1, 6, 4, -1, 2, 7, 5,  4, -1,
-                                           3, -1, 5,  8, 7, 5, 3, -1, 4, 2, 0,  2, 4, -1, 1, -1}}},
-                                        {"Saltwater Skylines",
-                                         48,
-                                         0,
-                                         112,
-                                         2,
-                                         KEYS,
-                                         .16f,
-                                         {{0, 2, 5, 4, 3, 2, 1, 4}, {3, 4, 2, 5, 1, 4, 0, 0}},
-                                         {{4, -1, 7,  6, 4, 2, -1, 6,  7, -1, 5,  4, 6, 4, -1, 2,
-                                           5, 7,  -1, 9, 8, 6, 4,  -1, 5, 3,  -1, 1, 2, 4, -1, -1},
-                                          {9, 7, -1, 5,  6, -1, 8, 6, 8, 6, 4, -1, 7, 9,  -1, 7,
-                                           5, 3, 1,  -1, 4, -1, 6, 8, 7, 4, 2, -1, 0, -1, -1, -1}}},
-                                        {"Tidal Circuit",
-                                         53,
-                                         1,
-                                         124,
-                                         3,
-                                         PLUCK,
-                                         .02f,
-                                         {{0, 3, 0, 6, 2, 3, 5, 6}, {3, 3, 0, 2, 5, 3, 1, 6}},
-                                         {{0, 4, -1, 6,  5, 3,  -1, 2, 4, 2, 0, -1, 3, 6, -1, 8,
-                                           6, 4, 2,  -1, 5, -1, 7,  5, 7, 5, 4, -1, 6, 3, 1,  -1},
-                                          {5, -1, 7,  9, 8, 7, 5, -1, 7, 4,  2, 0, 6, 4,  -1, 2,
-                                           7, 9,  -1, 7, 5, 3, 2, -1, 3, -1, 5, 3, 1, -1, 6,  -1}}},
-                                        {"Aurora Apex",
-                                         47,
-                                         2,
-                                         128,
-                                         3,
-                                         LEAD,
-                                         .00f,
-                                         {{0, 5, 2, 6, 3, 0, 5, 4}, {3, 5, 0, 6, 2, 3, 1, 4}},
-                                         {{4, -1, 2, 0,  5, 7, -1, 9, 8, 6, 4, -1, 6, -1, 3, 1,
-                                           5, 7,  5, -1, 4, 2, -1, 0, 7, 5, 4, 2,  1, -1, 4, -1},
-                                          {5, 7, 9, -1, 7, -1, 5, 4, 7, 4, 2, -1, 6, 8, -1, 6,
-                                           8, 6, 4, 2,  5, -1, 7, 5, 3, 5, 3, -1, 4, 1, -1, -1}}},
-                                        {"Glacier Afterglow",
-                                         50,
-                                         1,
-                                         118,
-                                         1,
-                                         KEYS,
-                                         .04f,
-                                         {{0, 3, 5, 2, 0, 6, 3, 4}, {5, 3, 0, 6, 1, 3, 2, 4}},
-                                         {{2, -1, 4,  6, 7, 5, -1, 3,  7, -1, 5, 4, 6, 4, 2,  -1,
-                                           4, 7,  -1, 6, 8, 6, 3,  -1, 5, -1, 3, 2, 4, 1, -1, -1},
-                                          {7, 9, -1, 7, 5, -1, 7, 5,  7, 4, 2, -1, 6, 8,  6, -1,
-                                           5, 3, -1, 1, 5, 7,  9, -1, 8, 6, 4, 2,  4, -1, 1, -1}}}};
+// Original recordings by MintoDog (CC0), see assets/licenses/MUSIC.txt.
+static const MusicCue cues[MUSIC_CUES] = {
+    {"music/racing-game-menu.ogg", "Racing Game Menu", -10.55f, true},
+    // Harvest Hills, Sunshine Coast and Alpine Rush alternate between two songs.
+    {"music/blossom-mountain.ogg", "Blossom Mountain", -10.50f, true},
+    {"music/joyful-jungle.ogg", "Joyful Jungle", -10.91f, true},
+    {"music/sky-blue-street.ogg", "Sky Blue Street", -12.93f, true},
+    {"music/sunny-city.ogg", "Sunny City", -10.84f, true},
+    {"music/fever-stadium.ogg", "Fever Stadium", -10.96f, true},
+    {"music/cool-highway.ogg", "Cool Highway", -11.51f, true},
+    // Faster final-lap versions, in the same order.
+    {"music/blossom-mountain-climax.ogg", "Blossom Mountain (Climax)", -11.86f, true},
+    {"music/joyful-jungle-climax.ogg", "Joyful Jungle (Climax)", -10.66f, true},
+    {"music/sky-blue-street-climax.ogg", "Sky Blue Street (Climax)", -13.00f, true},
+    {"music/sunny-city-climax.ogg", "Sunny City (Climax)", -10.98f, true},
+    {"music/fever-stadium-climax.ogg", "Fever Stadium (Climax)", -12.10f, true},
+    {"music/cool-highway-climax.ogg", "Cool Highway (Climax)", -12.38f, true},
+    {"music/final-lap.ogg", "Final Lap", -12.54f, false},
+    {"music/finish-best.ogg", "Race Finish Best", -12.05f, false},
+    {"music/finish-good.ogg", "Race Finish Good", -11.30f, false},
+    {"music/finish-bad.ogg", "Race Finish Bad", -10.57f, false},
+    {"music/finish-best-loop.ogg", "Race Finish Best (Loop)", -11.80f, true},
+    {"music/finish-good-loop.ogg", "Race Finish Good (Loop)", -12.56f, true},
+    {"music/finish-bad-loop.ogg", "Race Finish Bad (Loop)", -11.34f, true}};
 
-static float limit(float value, float low, float high) {
-    return fminf(high, fmaxf(low, value));
+const MusicCue *music_cue(int cue) {
+    return cue >= 0 && cue < MUSIC_CUES ? &cues[cue] : NULL;
 }
 
-static float wave(const Music *m, float phase) {
-    float index = (phase - floorf(phase)) * 2048.f;
-    int i = (int)index;
-    // Tiny negative phase modulation can round the fractional part up to 1.
-    float a = m->sine[i & 2047], b = m->sine[(i + 1) & 2047];
-    return a + (b - a) * (index - i);
+static void close_deck(MusicDeck *d) {
+    if (d->vorbis)
+        stb_vorbis_close(d->vorbis);
+    SDL_free(d->data);
+    *d = (MusicDeck){.cue = -1, .then = -1};
 }
 
-static int pitch(const Song *s, int degree) {
-    static const int scales[3][7] = {
-        {0, 2, 4, 5, 7, 9, 11}, {0, 2, 3, 5, 7, 9, 10}, {0, 2, 3, 5, 7, 8, 10}};
-    int octave = 0;
-    while (degree < 0) {
-        degree += 7;
-        octave--;
+// Replaces the deck's decoder and keeps its gain, so a jingle can hand over to a loop.
+static bool open_deck(Music *m, MusicDeck *d, int cue) {
+    size_t size = 0;
+    void *data = m->load ? m->load(cues[cue].file, &size) : NULL;
+    int error = 0;
+    stb_vorbis *v =
+        data && size <= INT_MAX ? stb_vorbis_open_memory(data, (int)size, &error, NULL) : NULL;
+    if (v && (stb_vorbis_get_info(v).sample_rate != MUSIC_RATE ||
+              stb_vorbis_get_info(v).channels != 2)) {
+        stb_vorbis_close(v);
+        v = NULL;
     }
-    return s->tonic + 12 * (octave + degree / 7) + scales[s->mode][degree % 7];
+    if (!v) {
+        SDL_Log("Music unavailable: %s", cues[cue].file);
+        SDL_free(data);
+        return false;
+    }
+    if (d->vorbis)
+        stb_vorbis_close(d->vorbis);
+    SDL_free(d->data);
+    d->vorbis = v;
+    d->data = data;
+    d->cue = cue;
+    return true;
 }
 
-static void note(Music *m, int instrument, int layer, int midi, float beats, float gain,
-                 float pan) {
-    MusicVoice *v = NULL;
-    for (int i = 0; i < MUSIC_VOICES; i++) {
-        if (!m->voices[i].active) {
-            v = &m->voices[i];
-            break;
+static void fade(Music *m, float seconds) {
+    for (int i = 0; i < MUSIC_DECKS; i++) {
+        MusicDeck *d = &m->decks[i];
+        if (d->vorbis && d->target > 0) {
+            d->target = 0;
+            d->step = 1 / (seconds * MUSIC_RATE);
+            d->then = -1;
         }
     }
-    /* The score peaks below 40 voices. Dropping an excess ornament is preferable
-       to stealing a sustaining chord and introducing a discontinuity. */
-    if (!v)
-        return;
-    static const float attacks[] = {.006f, .004f, .12f, .006f, .018f, .002f, .002f, .001f, .003f};
-    static const float releases[] = {.30f, .20f, .45f, .06f, .16f, .08f, .10f, .025f, .10f};
-    static const float decays[] = {2.4f, 5.0f, .12f, 1.9f, 1.1f, 19.f, 18.f, 65.f, 12.f};
-    *v = (MusicVoice){.increment = m->frequency[(int)limit((float)midi, 0, 127)] / MUSIC_RATE,
-                      .duration = beats * 60.f / songs[m->song].bpm,
-                      .attack = attacks[instrument],
-                      .release = releases[instrument],
-                      .decay = expf(-decays[instrument] / MUSIC_RATE),
-                      .envelope = 1,
-                      .gain = gain,
-                      .left = sqrtf((1 - pan) * .5f),
-                      .right = sqrtf((1 + pan) * .5f),
-                      .instrument = instrument,
-                      .layer = layer,
-                      .active = true};
 }
 
-static void start_song(Music *m, int song) {
-    m->song = song;
-    m->pending_song = -1;
-    m->tick = 0;
-    m->transition = 0;
-    m->variation++;
-    memset(m->voices, 0, sizeof m->voices);
-    memset(m->delay, 0, sizeof m->delay);
-    memset(m->delay_low, 0, sizeof m->delay_low);
+/* Fades out everything audible and starts a cue on a free deck. A jingle names
+   the loop that follows it without a gap. */
+static void play(Music *m, int cue, int then, float fade_out, float fade_in) {
+    fade(m, fade_out);
+    MusicDeck *d = &m->decks[0];
+    for (int i = 1; i < MUSIC_DECKS && d->vorbis; i++)
+        if (!m->decks[i].vorbis || m->decks[i].gain < d->gain)
+            d = &m->decks[i];
+    close_deck(d);
+    if (!open_deck(m, d, cue)) {
+        if (then < 0 || !open_deck(m, d, then))
+            return;
+        then = -1;
+    }
+    d->then = then;
+    d->target = 1;
+    d->step = 1 / (fmaxf(fade_in, ATTACK) * MUSIC_RATE);
 }
 
-void music_init(Music *m) {
+static float cue_level(int cue) {
+    return powf(10, (MUSIC_LOUDNESS - cues[cue].loudness) / 20);
+}
+
+static void mix(Music *m, MusicDeck *d, float *out, int frames) {
+    float level = d->vorbis ? cue_level(d->cue) : 0;
+    bool wrapped = false;
+    for (int done = 0; d->vorbis && done < frames;) {
+        int want = frames - done < MUSIC_BLOCK ? frames - done : MUSIC_BLOCK;
+        int got = stb_vorbis_get_samples_float_interleaved(d->vorbis, 2, m->block, want * 2);
+        if (got <= 0) {
+            // Loops wrap sample-accurately; a jingle continues into its loop.
+            if (cues[d->cue].loop && !wrapped) {
+                stb_vorbis_seek_start(d->vorbis);
+                wrapped = true;
+            } else if (d->then >= 0 && open_deck(m, d, d->then)) {
+                d->then = -1;
+                level = cue_level(d->cue);
+            } else {
+                close_deck(d);
+                break;
+            }
+            d->seam = true;
+            continue;
+        }
+        wrapped = false;
+        if (d->seam) {
+            // Continue from the last emitted sample and settle onto the new material.
+            d->carry[0] = d->last[0] - m->block[0];
+            d->carry[1] = d->last[1] - m->block[1];
+            d->seam = false;
+        }
+        for (int i = 0; i < got; i++) {
+            if (d->gain < d->target)
+                d->gain = fminf(d->target, d->gain + d->step);
+            else if (d->gain > d->target)
+                d->gain = fmaxf(d->target, d->gain - d->step);
+            for (int c = 0; c < 2; c++) {
+                float x = m->block[i * 2 + c] + d->carry[c];
+                d->carry[c] = fabsf(d->carry[c]) > 1e-6f ? d->carry[c] * SEAM_DECAY : 0;
+                d->last[c] = x;
+                out[(done + i) * 2 + c] += x * d->gain * level;
+            }
+        }
+        done += got;
+        if (d->target == 0 && d->gain == 0)
+            close_deck(d);
+    }
+}
+
+void music_init(Music *m, MusicLoader load) {
     memset(m, 0, sizeof *m);
-    m->noise = 0x6d757369;
-    m->pending_song = -1;
+    for (int i = 0; i < MUSIC_DECKS; i++)
+        m->decks[i] = (MusicDeck){.cue = -1, .then = -1};
+    m->load = load;
+    m->program = -1;
+    m->song_track = -1;
+    m->cutoff = 1;
     m->context = (MusicContext){.scene = MUSIC_MENU, .enabled = true};
-    for (int i = 0; i <= 2048; i++)
-        m->sine[i] = sinf(TAU * i / 2048.f);
-    for (int i = 0; i < 128; i++)
-        m->frequency[i] = 440.f * powf(2.f, (i - 69) / 12.f);
     m->initialized = true;
 }
 
-void music_context(Music *m, MusicContext context) {
-    context.track = (int)limit((float)context.track, 0, 2);
-    context.intensity = limit(context.intensity, 0, 1);
-    bool racing = context.scene == MUSIC_RACE || context.scene == MUSIC_COUNTDOWN;
-    bool was_racing = m->context.scene == MUSIC_RACE || m->context.scene == MUSIC_COUNTDOWN ||
-                      m->context.scene == MUSIC_PAUSE;
-    bool restart = context.scene == MUSIC_COUNTDOWN && m->context.scene != MUSIC_COUNTDOWN &&
-                   m->context.scene != MUSIC_PAUSE;
-    if (racing && (!was_racing || restart || context.track != m->context.track)) {
-        int variant = (int)(m->visits[context.track]++ % 2);
-        m->pending_song = 1 + context.track * 2 + variant;
-    } else if (context.scene == MUSIC_MENU && m->context.scene != MUSIC_MENU) {
-        m->pending_song = m->song == 0 ? -1 : 0;
-    }
-    m->context = context;
+void music_destroy(Music *m) {
+    for (int i = 0; i < MUSIC_DECKS; i++)
+        close_deck(&m->decks[i]);
+    m->initialized = false;
 }
 
-static void sequence(Music *m) {
-    int step = (int)(m->tick % 16);
-    int bar = (int)(m->tick / 16);
-    if (step == 0) {
-        // A request arriving just before the downbeat waits one more bar if the
-        // outgoing music has not faded yet. Never cut live voices at full gain.
-        if (m->pending_song >= 0 && (m->tick == 0 || m->transition < .003f)) {
-            start_song(m, m->pending_song);
-            bar = 0;
-        } else if (bar == 64) {
-            if (m->pending_song < 0 && m->song > 0 && m->context.scene != MUSIC_MENU &&
-                m->context.scene != MUSIC_RESULTS)
-                start_song(m, 1 + ((m->song - 1) / 2) * 2 + (m->song % 2));
-            else {
-                m->tick = 0;
-                m->variation++;
-            }
-            bar = 0;
-        }
-        m->arranged_scene = m->context.scene;
-    }
-    const Song *s = &songs[m->song];
-    /* 64 bars: opening, theme, answer, lift, development, breathing space and return.
-       Four-bar sections keep short races moving; eight-bar phrases give melodies room. */
-    static const int form[16] = {0, 1, 1, 2, 2, 3, 3, 4, 1, 1, 2, 2, 3, 3, 1, 0};
-    int section = form[bar / 4];
-    int section_start = bar / 4;
-    while (section_start > 0 && form[section_start - 1] == section)
-        section_start--;
-    int phrase_bar = (bar - section_start * 4) % 8;
-    bool quiet = section == 0 || section == 4;
-    bool results = m->arranged_scene == MUSIC_RESULTS;
-    int phrase = (section == 2 || section == 3) ? 1 : 0;
-    int chord = results ? (bar % 4 == 3 ? 4 : 0) : s->chords[phrase][phrase_bar];
-    float beat_seconds = 60.f / s->bpm;
-
-    if (step == 0) {
-        for (int n = 0; n < 4; n++) {
-            int degree = chord + 2 + n * 2;
-            while (degree > 13)
-                degree -= 7;
-            note(m, PAD, HARMONY, pitch(s, degree) + 12, 3.7f, .026f, -.65f + n * .43f);
-        }
-        if (section == 3 && bar % 4 == 0 && !results)
-            note(m, HAT, DRIVE, 80, .7f, .035f, .4f);
-    }
-
-    /* Syncopated bass lines use the root, fifth and a diatonic approach to the next chord. */
-    static const unsigned bass_masks[4] = {0x2949, 0x4545, 0x4949, 0x5555};
-    unsigned bass_mask = quiet || results ? 0x0101 : bass_masks[s->groove];
-    if (bass_mask & (1u << step)) {
-        int degree = chord;
-        if (step == 6 || step == 10)
-            degree += 4;
-        if (step >= 14)
-            degree = s->chords[phrase][(phrase_bar + 1) % 8] - 1;
-        note(m, BASS, LOW, pitch(s, degree) - 12, step >= 12 ? .35f : .65f, .095f, 0);
-    }
-
-    /* Offbeat keyboard/guitar comping leaves room for the bass and the lead. */
-    static const unsigned comp_masks[4] = {0x0440, 0x0404, 0x2424, 0x4444};
-    if ((comp_masks[s->groove] & (1u << step)) && !quiet && !results) {
-        for (int n = 0; n < 3; n++)
-            note(m, s->groove == 0 ? PLUCK : KEYS, HARMONY, pitch(s, chord + n * 2 + 2) + 12, .42f,
-                 .025f, -.35f + n * .28f);
-    }
-
-    /* Composed calls and answers, with deliberate rests. No continuous lead ostinato. */
-    static const int onsets[4][4] = {{0, 3, 8, 12}, {0, 6, 10, 14}, {2, 6, 8, 14}, {0, 3, 7, 10}};
-    if (!quiet && !results && m->arranged_scene != MUSIC_COUNTDOWN) {
-        for (int n = 0; n < 4; n++) {
-            if (step != onsets[s->groove][n])
-                continue;
-            int degree = s->melody[phrase][phrase_bar * 4 + n];
-            if (degree < 0 || (section == 1 && bar % 4 == 3 && n > 0))
-                continue;
-            // Alternate returns have a different register and a shortened answer.
-            if ((m->variation & 1u) && section == 2 && n == 3)
-                continue;
-            int octave = section == 2 && (m->variation & 1u) ? 0 : 12;
-            note(m, s->timbre, MELODY, pitch(s, degree) + octave, n == 3 ? .85f : .55f, .055f,
-                 -.16f);
-        }
-    }
-
-    /* A sparse answering arpeggio is an intensity layer, not a second competing lead. */
-    if (section == 3 && (step == 2 || step == 6 || step == 14) && !results) {
-        int degree = chord + (step == 2 ? 4 : step == 6 ? 6 : 2);
-        note(m, PLUCK, DRIVE, pitch(s, degree) + 12, .35f, .029f, .48f);
-    }
-    if ((quiet || results) && step == 6 && bar % 2 == 0)
-        note(m, KEYS, MELODY, pitch(s, chord + 4) + 12, 1.5f, .032f, .25f);
-
-    if (!results) {
-        static const unsigned kicks[4] = {0x0141, 0x0501, 0x0901, 0x1111};
-        unsigned kick_mask = quiet ? 0x0001 : kicks[s->groove];
-        if (kick_mask & (1u << step))
-            note(m, KICK, RHYTHM, 36, .22f / beat_seconds, quiet ? .10f : .15f, 0);
-        if (!quiet && (step == 4 || step == 12))
-            note(m, SNARE, RHYTHM, 50, .14f / beat_seconds, .075f, -.1f);
-        if ((!quiet && step % 2 == 0) || (quiet && step == 10))
-            note(m, HAT, RHYTHM, 80, .035f / beat_seconds, step % 4 == 0 ? .021f : .034f, .38f);
-        if (!quiet && step % 2 == 1)
-            note(m, HAT, DRIVE, 80, .025f / beat_seconds, .013f, -.45f);
-        // Fills only at phrase boundaries; two alternating endings rather than every bar.
-        if (!quiet && phrase_bar == 7 && step >= 13)
-            note(m, (bar / 8 + m->variation) % 2 ? TOM : SNARE, RHYTHM, 48 - (step - 13) * 3,
-                 .13f / beat_seconds, .048f, (step - 14) * .35f);
-    }
-}
-
-void music_sample(Music *m, float *left, float *right) {
-    if (!m->initialized) {
-        *left = *right = 0;
+void music_context(Music *m, MusicContext c) {
+    if (!m->initialized)
         return;
+    if (c.track < 0 || c.track > 2)
+        c.track = 0;
+    MusicScene was = m->context.scene;
+    // Each new race alternates the environment's two songs; restarting from pause keeps it.
+    bool racing = c.scene == MUSIC_COUNTDOWN || c.scene == MUSIC_RACE;
+    bool start = c.scene == MUSIC_COUNTDOWN && was != MUSIC_COUNTDOWN && was != MUSIC_PAUSE;
+    if (racing && (start || c.track != m->song_track)) {
+        m->song = c.track * 2 + m->visits[c.track]++ % 2;
+        m->song_track = c.track;
     }
-    if (m->until_tick <= 0) {
-        sequence(m);
-        const Song *s = &songs[m->song];
-        float swing = m->tick % 2 == 0 ? 1 + s->swing : 1 - s->swing;
-        m->until_tick += MUSIC_RATE * 60.0 / s->bpm / 4 * swing;
-        m->tick++;
-    }
-    m->until_tick--;
-
-    m->intensity += (m->context.intensity - m->intensity) * .000025f;
-    float energy = m->intensity;
-    bool subdued = m->context.scene == MUSIC_MENU || m->context.scene == MUSIC_PAUSE ||
-                   m->context.scene == MUSIC_RESULTS;
-    float target[5] = {.78f, .75f, .55f + .35f * energy, .72f, energy * .8f};
-    if (subdued) {
-        target[RHYTHM] = m->context.scene == MUSIC_MENU ? .45f : .12f;
-        target[DRIVE] = 0;
-        target[MELODY] = .5f;
-    }
-    if (m->context.scene == MUSIC_COUNTDOWN) {
-        target[MELODY] = .12f;
-        target[DRIVE] = .15f;
-    }
-    for (int i = 0; i < 5; i++)
-        m->layers[i] += (target[i] - m->layers[i]) * .00012f;
-    float volume = m->context.enabled ? (m->context.scene == MUSIC_PAUSE ? .42f : .82f) : 0;
-    m->volume += (volume - m->volume) * .0003f;
-    /* Fade across the last beat before a bar-aligned change. The ending also
-       prepares an automatic move to the companion track after 64 bars. */
-    unsigned last_step = (m->tick - 1) % 16;
-    bool ending = m->tick > 63 * 16 && m->song > 0 && m->context.scene != MUSIC_RESULTS &&
-                  m->context.scene != MUSIC_MENU;
-    float transition = (m->pending_song >= 0 || ending) && last_step >= 12 ? 0 : 1;
-    m->transition += (transition - m->transition) * (transition == 0 ? .0004f : .00012f);
-
-    m->noise = m->noise * 1664525u + 1013904223u;
-    float noise = (m->noise >> 9) / 4194304.f - 1;
-    m->noise_low += (noise - m->noise_low) * .22f;
-    float l = 0, r = 0, send_l = 0, send_r = 0;
-    for (int i = 0; i < MUSIC_VOICES; i++) {
-        MusicVoice *v = &m->voices[i];
-        if (!v->active)
-            continue;
-        v->age += 1.f / MUSIC_RATE;
-        if (v->age >= v->duration + v->release) {
-            v->active = false;
-            continue;
-        }
-        v->envelope *= v->decay;
-        float envelope = fminf(1, v->age / v->attack) * v->envelope;
-        if (v->age > v->duration) {
-            float release = 1 - (v->age - v->duration) / v->release;
-            envelope *= release * release;
-        }
-        float p = v->phase, value = 0;
-        switch (v->instrument) {
-        case KEYS:
-            value = wave(m, p + .16f * v->envelope * wave(m, p * 2)) * .8f +
-                    wave(m, p * 3) * .12f * v->envelope;
-            break;
-        case PLUCK:
-            value = wave(m, p) * .72f + wave(m, p * 2) * .2f * v->envelope +
-                    wave(m, p * 3) * .08f * v->envelope;
-            break;
-        case PAD:
-            value = wave(m, p) * .7f + wave(m, p + v->age * .32f) * .22f + wave(m, p * 3) * .06f;
-            break;
-        case BASS:
-            value = wave(m, p) * .83f + wave(m, p * 2) * .14f;
-            break;
-        case LEAD:
-            value = wave(m, p + .002f * wave(m, v->age * 4.8f)) * .8f +
-                    wave(m, p * 3) * .13f * v->envelope;
-            break;
-        case KICK:
-            value = wave(m, p);
-            break;
-        case SNARE:
-            value = m->noise_low * 1.5f + wave(m, p) * .25f;
-            break;
-        case HAT:
-            value = (noise - m->noise_low) * .65f;
-            break;
-        case TOM:
-            value = wave(m, p) * .85f + m->noise_low * .12f;
-            break;
-        }
-        v->phase += v->instrument == KICK ? (45 + 95 * v->envelope) / MUSIC_RATE : v->increment;
-        v->phase -= floorf(v->phase);
-        value *= envelope * v->gain * m->layers[v->layer];
-        l += value * v->left;
-        r += value * v->right;
-        if (v->instrument <= PAD || v->instrument == LEAD) {
-            send_l += value * v->left * .22f;
-            send_r += value * v->right * .22f;
-        }
-    }
-    // Dark, cross-fed dotted-eighth echo adds space without washing out the engine cues.
-    int delay_frames = (int)(MUSIC_RATE * 60.f / songs[m->song].bpm * .75f);
-    int read = (m->delay_pos + MUSIC_DELAY - delay_frames) % MUSIC_DELAY;
-    m->delay_low[0] += (m->delay[read][0] - m->delay_low[0]) * .12f;
-    m->delay_low[1] += (m->delay[read][1] - m->delay_low[1]) * .12f;
-    m->delay[m->delay_pos][0] = send_l + m->delay_low[1] * .28f;
-    m->delay[m->delay_pos][1] = send_r + m->delay_low[0] * .28f;
-    m->delay_pos = (m->delay_pos + 1) % MUSIC_DELAY;
-    float gain = m->volume * m->transition;
-    *left = (l + m->delay_low[0]) * gain;
-    *right = (r + m->delay_low[1]) * gain;
+    // The result is kept for the screen. It only improves, to a celebration, once a
+    // championship medal is settled after the rivals finish.
+    if (c.scene == MUSIC_RESULTS && (was != MUSIC_RESULTS || c.finish == MUSIC_BEST))
+        m->finish = c.finish;
+    int want = m->program;
+    if (c.scene == MUSIC_MENU)
+        want = MUSIC_CUE_MENU;
+    else if (c.scene == MUSIC_COUNTDOWN)
+        want = -1;
+    else if (c.scene == MUSIC_RACE)
+        want = (c.final_lap ? MUSIC_CUE_CLIMAX : MUSIC_CUE_RACE) + m->song;
+    else if (c.scene == MUSIC_RESULTS)
+        want = MUSIC_CUE_FINISH_LOOP + m->finish;
+    m->context = c;
+    if (want == m->program)
+        return;
+    int from = m->program;
+    m->program = want;
+    if (want < 0)
+        fade(m, .6f); // The start lights and their beeps have the countdown to themselves.
+    else if (want >= MUSIC_CUE_FINISH_LOOP)
+        play(m, MUSIC_CUE_FINISH + m->finish, want, .35f, 0);
+    else if (want >= MUSIC_CUE_CLIMAX && from == want - MUSIC_SONGS)
+        play(m, MUSIC_CUE_FINAL_LAP, want, .25f, 0);
+    else if (from < 0)
+        play(m, want, -1, .3f, 0); // On GO the song starts on its first downbeat.
+    else
+        play(m, want, -1, 1.2f, .8f);
 }
 
-const char *music_song_name(int song) {
-    return song >= 0 && song < MUSIC_SONGS ? songs[song].name : "";
+void music_render(Music *m, float *out, int frames) {
+    memset(out, 0, sizeof *out * 2 * (size_t)frames);
+    if (!m->initialized)
+        return;
+    for (int i = 0; i < MUSIC_DECKS; i++)
+        mix(m, &m->decks[i], out, frames);
+    bool paused = m->context.scene == MUSIC_PAUSE;
+    float volume = m->context.enabled ? paused ? PAUSE_LEVEL : 1 : 0;
+    // Pause also muffles the music with two one-pole low-pass stages near 700 Hz.
+    float cutoff = paused ? .095f : 1;
+    for (int i = 0; i < frames; i++) {
+        m->volume += (volume - m->volume) * .0003f;
+        m->cutoff += (cutoff - m->cutoff) * .0002f;
+        if (fabsf(volume - m->volume) < 1e-4f)
+            m->volume = volume;
+        if (fabsf(cutoff - m->cutoff) < 1e-4f)
+            m->cutoff = cutoff;
+        for (int c = 0; c < 2; c++) {
+            m->low[c][0] += (out[i * 2 + c] - m->low[c][0]) * m->cutoff;
+            m->low[c][1] += (m->low[c][0] - m->low[c][1]) * m->cutoff;
+            out[i * 2 + c] = m->low[c][1] * m->volume;
+        }
+    }
+}
+
+int music_playing(const Music *m) {
+    for (int i = 0; i < MUSIC_DECKS; i++)
+        if (m->decks[i].vorbis && m->decks[i].target > 0)
+            return m->decks[i].cue;
+    return -1;
 }

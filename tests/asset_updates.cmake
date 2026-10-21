@@ -15,6 +15,7 @@ set(build "${TEST_BINARY_DIR}/build")
 file(MAKE_DIRECTORY "${source}/assets/tracks")
 file(COPY "${PROJECT_SOURCE_DIR}/CMakeLists.txt" "${PROJECT_SOURCE_DIR}/main.c"
   "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/tests" DESTINATION "${source}")
+file(COPY "${PROJECT_SOURCE_DIR}/third_party/stb_vorbis" DESTINATION "${source}/third_party")
 file(WRITE "${source}/assets/tracks/fixture.tcp" "initial track contents\n")
 
 run_checked("${CMAKE_COMMAND}" -S "${source}" -B "${build}"

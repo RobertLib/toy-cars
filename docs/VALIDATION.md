@@ -571,6 +571,35 @@ verified. This pass does not add mobile-device validation.
   95,950 triangles for country / beach / winter. This pass does not include mobile
   rebuilds or device performance measurements.
 
+## Recorded soundtrack (21 October 2026)
+
+- A Release build without warnings passed all six enabled CTest entries:
+  `track_layouts`, `progression`, `props`, `music`, `simulation` and
+  `asset_updates`. The asset-copy fixture now also copies `third_party/stb_vorbis`.
+- ASan/UBSan music checks passed.
+- All 20 Ogg Vorbis files decode to exactly their declared lengths, as finite
+  44.1 kHz stereo with peaks up to 0.93. Their measured loudness matches the
+  normalization table within 0.2 LU.
+- The flow checks cover:
+  - countdown silence, the start at GO, pause muffling and resume, and the
+    final-lap jingle into the climax;
+  - finish jingles into their loops, the latched result and its championship
+    upgrade, alternating songs and environment changes;
+  - the crossfade back to the menu, the mute switch, missing files and
+    independence from block size.
+- Blossom Mountain steps by 0.2244 at its loop point; the played step is 0.
+  With the seam settling disabled in a scratch copy, the check failed as intended,
+  with a played step of 0.047.
+- The 64-second walkthrough previews in `build/music-preview` measure
+  −26.9 / −27.3 / −26.7 LUFS integrated (including pause and countdown) for
+  country / beach / winter. Their peaks are 0.17–0.20, below the 0.8 output clamp.
+- On desktop (Apple M5), a 1500-frame autoplay race on Alpine Rush and a 600-frame
+  results screen ran at 60 FPS on the real audio device, without music load errors.
+  Graphics integration tests had one failure, "mobile recovery target recovers the
+  car". It was already failing before this change and does not involve audio.
+- This pass does not include listening on headphones, speakers or phones, or
+  Android and iOS rebuilds. The APK grows by about 42 MB of music.
+
 ## Still required before public release
 
 - Playtesting with people on physical phones, particularly steering feel,

@@ -1,70 +1,118 @@
 # ToyCars soundtrack
 
-The soundtrack is an original, offline C11 score, synthesized at 48 kHz. It uses
-no recordings, samples, services or additional runtime dependencies. The musical
-research informed the arrangement system; melodies are original to this project.
+The soundtrack is a recorded racing-game score by MintoDog, released under CC0 on
+OpenGameArt (see [the credits](../assets/licenses/MUSIC.txt)). The 20 published
+Ogg Vorbis files (225–305 kb/s, 44.1 kHz stereo, 42 MB) ship unmodified in
+`assets/music`. The vendored public-domain decoder
+[stb_vorbis](../third_party/stb_vorbis/stb_vorbis.c) v1.22 decodes them in
+process, so SDL3 stays the only runtime library. The game does not stream or
+download music.
 
-## Compositions
+## Music
 
-| Setting | Composition | Tempo | Character |
+| Setting | Song | Final-lap version | Character |
 | --- | --- | --- | --- |
-| Menu, garage, help, settings | Pocket Paddock | 96 BPM | Relaxed C-major electric keys, lightly swung pocket groove |
-| Harvest Hills | Orchard Run | 116 BPM | D-major plucked melody, syncopated bass and warm chords |
-| Harvest Hills | Golden Switchback | 122 BPM | A-minor keys, broken beat and a contrasting rising answer |
-| Sunshine Coast | Saltwater Skylines | 112 BPM | C-major extended chords, offbeat keys and a laid-back swing |
-| Sunshine Coast | Tidal Circuit | 124 BPM | F-Dorian plucks, straight dance pulse and spacious answers |
-| Alpine Rush | Aurora Apex | 128 BPM | B-minor soft synth lead and a driving four-beat kick |
-| Alpine Rush | Glacier Afterglow | 118 BPM | D-Dorian electric keys and a restrained broken beat |
+| Menu, garage, help, settings, records | Racing Game Menu (165 BPM) | — | Bright synth menu loop |
+| Harvest Hills | Blossom Mountain [Remake] (140 BPM) | Climax, 155 BPM | Bright, harp and tambourine |
+| Harvest Hills | Joyful Jungle (140 BPM) | Climax, 155 BPM | Joyful, outdoor |
+| Sunshine Coast | Sky Blue Street (165 BPM) | Climax, 180 BPM | Happy, open sky |
+| Sunshine Coast | Sunny City (120 BPM) | Climax, 135 BPM | Saxophone and piano, summery |
+| Alpine Rush | Fever Stadium (165 BPM) | Climax, 180 BPM | Eurobeat |
+| Alpine Rush | Cool Highway [Remake] (140 BPM) | Climax, 155 BPM | Techno |
 
-Each score has two eight-bar melodic phrases and two harmonic progressions inside
-a 64-bar form (about two to two-and-a-half minutes). Four-bar sections move through
-an opening, theme, answer, lift, development, breakdown and return. Melodies rest
-during the opening and breakdowns, leave gaps between calls and answers, and change
-register or omit their last answer on alternate cycles. Seventh/ninth chord
-voicings, bass approaches, offbeat comping and occasional end-of-phrase fills add
-motion without continuously filling every subdivision.
-
-The palette combines FM-style electric keys, harmonic plucks, softly detuned pads,
-rounded bass, a soft lead, pitched kick/toms, filtered snare and short hats.
-Attack/release envelopes avoid hard note edges. Stereo placement and a dark
-dotted-eighth echo provide space; bass and kick stay centered. Oscillators use an
-interpolated sine table and note frequencies are cached, keeping per-sample work
-bounded. The engine preallocates 64 voices and a stereo delay; playback allocates
-no memory and never uses the simulation's random-number generator.
+Each climax version is the same song at a higher tempo, with added handclaps.
+There are four jingles: Final Lap, and Race Finish Best, Good and Bad. Each Race
+Finish jingle leads into its own loop.
 
 ## Following the race
 
-- Entering a race selects a composition for that environment. Starting again
-  from the menu or results alternates the two scores. A long race moves to the
-  companion score after 64 bars; restarting from pause preserves the current score.
-- Speed, a rival within nine progress units and the last lap increase a smoothed
-  intensity value. This brings in extra percussion and, in the lift sections,
-  answering plucks. Tempo and pitch stay stable while the car accelerates/brakes.
-- Countdown reduces the lead; pause lowers the mix and percussion. Resume keeps
-  the ongoing score. Results resolve into sparse tonic/dominant harmony without
-  drums at the next bar. Menu navigation shares the paddock piece.
-- Track changes fade through a bar boundary. Very late requests wait another bar
-  so a live chord is not cut off. The incoming piece fades in from its opening.
-- Sound events briefly lower music by 32%. The independent music switch fades
-  both direct sound and echoes, preserving the musical clock while muted.
-- Application backgrounding still suspends the audio stream and its musical clock.
+- **Menu screens** play the menu loop.
+- **Countdown:** the music fades out over 0.6 s and the start beeps play alone.
+- **Race start:** the song starts at GO, from its first downbeat, with a 5 ms
+  attack. Each new race in an environment alternates between its two songs.
+  Restarting from pause keeps the current song.
+- **Final lap:** the song fades over 0.25 s and the Final Lap jingle plays. The
+  climax version then starts from its first sample as the jingle ends.
+- **Pause:** the music keeps playing at 45% volume, through two one-pole low-pass
+  stages near 700 Hz. Resuming continues the song where it was.
+- **Finish:** a finish jingle and its loop play, chosen by the result:
+  - Best: first place, or a championship medal.
+  - Good: second to fourth place.
+  - Bad: fifth or lower, or a DNF.
 
-`tests/music.c` renders complete forms without an audio device, checks finite
-samples, headroom, adjacent-sample jumps, stereo output, playlist behavior,
-late transitions, deterministic rendering, adaptive layers and mute. Its optional
-`--render DIRECTORY` argument writes seven 45-second WAV previews. Automated
-signal checks cannot judge musical taste; headphone, speaker and in-game listening
-remain useful when tuning the mix, especially on physical mobile devices.
+  The result is fixed while rivals finish. It only upgrades to Best when a
+  championship medal is settled. With music on, these jingles replace the
+  synthesized finish and championship fanfares (sound events 7 and 9). With
+  music off, the fanfares still play.
+- **Back to the menu:** the current music crossfades into the menu loop (1.2 s
+  out, 0.8 s in).
+- **Music switch:** turning music off fades it to silence. Turning it back on
+  resumes the same song without reloading it. Event sounds still lower the music
+  by 32%.
+- **Backgrounding the app** suspends the audio stream and playback.
 
-## Research applied (16 September 2026)
+## Playback
 
-Winifred Phillips describes rearranging musical sections and adding/removing
-simultaneous instrument layers, including the risk of cutting a theme midway
-through a transition. Here that informs complete phrase development, a musically
-useful backing when the lead rests, and changes aligned to bars. See her
-[Game Composers and the Importance of Themes: Interactivity in Game Music](https://www.gamedeveloper.com/audio/game-composers-and-the-importance-of-themes-interactivity-in-game-music-pt-5-).
+- **Loudness:** `src/music.c` lists each file's integrated loudness (ITU-R
+  BS.1770-4). Playback gain brings every cue to `MUSIC_LOUDNESS` (−26 LUFS). The
+  masters are between −10.5 and −13 LUFS. The engine is near −28 LUFS at speed,
+  and event sounds stay above both. Change `MUSIC_LOUDNESS` to rebalance the mix;
+  the previous synthesized score played near −30 LUFS.
+- **Decks:** up to three decks cover a crossfade plus a jingle. When a cue starts,
+  its whole file is read into memory and decoded progressively. A deck releases
+  its file and decoder once it has faded out. At most about 11 MB is held, during
+  a crossfade.
+- **Loops:** loops wrap sample-accurately. At each loop seam or jingle-to-loop
+  handover, playback continues from the last emitted sample and settles onto the
+  new material with a 2 ms decay. Blossom Mountain's recording ends 0.22 above its
+  first sample; the played step at its seam is 0.
+- **Sample rate:** the output stream runs at 44.1 kHz, the files' native rate.
+  SDL performs the only conversion, to the device rate. Engine and event synthesis
+  use the same rate.
+- **Missing files:** a missing or invalid file logs `Music unavailable` and that
+  cue stays silent.
 
-Audiokinetic's [Creating interactive music](https://www.audiokinetic.com/en/public-library/2024.1.8_8893/?id=creating_interactive_music&source=Help)
-organizes interactive music around segments, tracks and playback behavior. This
-project implements a small score sequencer with those broad principles in C;
-it does not embed Wwise.
+### Replacing a track
+
+1. Add a 44.1 kHz stereo Ogg Vorbis file under `assets/music`.
+2. Change its entry in the cue table in `src/music.c`: file, title and loudness.
+3. Run `ToyCarsMusicTests`. It measures every file and fails if the table differs
+   from the measurement by more than 0.2 LU. The printed value is the one to use.
+
+## Tests and previews
+
+`tests/music.c` covers:
+
+- **Every file:** each one decodes to its declared length as finite, unclipped
+  44.1 kHz stereo. Songs are full loops and jingles are short. Measured loudness
+  matches the table.
+- **Race flow:** it plays through menu, countdown, GO, pause and resume, final
+  lap, the jingle-to-climax handover, finish results and upgrades, alternating
+  songs, environment changes, the crossfade to the menu, and mute.
+- **Clicks:** it checks the GO attack and Blossom Mountain's loop seam. It also
+  checks that output does not depend on the audio block size, that the mix leaves
+  headroom, and that missing files are silent.
+
+`./build/ToyCarsMusicTests --render DIRECTORY` additionally writes a 64-second
+WAV walkthrough for each environment: menu, countdown, race, pause, final lap,
+results and menu. It needs no game window or audio device. Automated checks
+cannot judge musical taste; listen on headphones, on speakers and in game,
+especially on phones.
+
+## Selection (21 October 2026)
+
+MintoDog's "For Racing Game" collection was chosen for these reasons:
+
+- It is one coherent racing soundtrack, with menu music, course songs with
+  matching final-lap versions, and finish jingles with result loops.
+- It is CC0.
+- It is published as high-bitrate Ogg Vorbis.
+- The measured loops are seamless apart from the Blossom Mountain step handled
+  above.
+
+Alternatives and exclusions:
+
+- **Neon Sign Circuit** from the same collection is excluded because it contains
+  impacts from a Ghosthack sample kit, which has its own terms.
+- **elevchyt's PS1-era Jungle/Drum & Bass pack** (CC BY 4.0) was considered as
+  a darker alternative. Its download goes through a pay-what-you-want flow.

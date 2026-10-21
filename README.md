@@ -229,11 +229,11 @@ an internet connection to run.
   blinking beacon stay readable in the dark; rain, snow, spray and water dim to match.
   The menu broadcast previews the selected race's time of day, while the garage stays
   a daylight studio. Night changes only the visuals, not handling or AI.
-- Seven original synthesized compositions: a relaxed paddock theme and two
-  distinct tracks per environment. Extended harmonies, evolving 64-bar arrangements,
-  melodic answers and breathing spaces; adaptive layers follow speed, close racing
-  and the final lap. Engine audio and event sounds remain audible in the mix.
-  No external audio files or streaming service.
+- A recorded racing soundtrack by MintoDog (CC0): a menu theme and two songs per
+  environment. On the final lap, a jingle leads into a faster climax version of
+  the song. Finishing plays a best, good or bad result jingle and loop. Pausing
+  muffles the music, and every track is loudness-matched under the engine and
+  event sounds. The music ships as Ogg Vorbis files and is never streamed.
 
 ## Controls
 
@@ -347,16 +347,18 @@ onto the shoulder and back overturn the car.
 See [Validation](docs/VALIDATION.md)
 for executed checks and remaining release work.
 
-The headless music test renders every complete composition, checks output levels,
-transitions, playlist rotation, mute and adaptive layers. To export 45-second stereo
-WAV previews of all seven tracks (without starting the game or an audio device):
+The headless music test decodes every soundtrack file. It checks format, length
+and loudness against the normalization table, and plays through the menu,
+countdown, race, pause, final lap, results and mute transitions, including loop
+seams. To export a 64-second stereo WAV walkthrough of each environment's music,
+without starting the game or an audio device:
 
 ```sh
 mkdir -p build/music-preview
 ./build/ToyCarsMusicTests --render build/music-preview
 ```
 
-See [Soundtrack](docs/SOUNDTRACK.md) for the track list and arrangement design.
+See [Soundtrack](docs/SOUNDTRACK.md) for the track list, credits and playback design.
 
 After rebuilding the Blender scenes, verify road markings, terrain contact and spectators:
 
@@ -416,7 +418,9 @@ clang-format -i main.c src/*.c src/*.h tools/bake_fonts.c
 specific decisions drawn from them. ToyCars uses original environments and
 models, not copied game assets. Barlow fonts are bundled under the SIL Open Font
 License in `assets/fonts/`. SDL3 uses the zlib license; its source download keeps
-that license in `third_party/SDL/LICENSE.txt`.
+that license in `third_party/SDL/LICENSE.txt`. The music is by MintoDog under CC0
+([credits](assets/licenses/MUSIC.txt)). It is decoded by the vendored stb_vorbis
+(public domain or MIT, see `assets/licenses/stb_vorbis-LICENSE.txt`).
 
 This is a playable first release candidate for iteration. Physical-device
 performance profiling, broader playtesting, store signing and store submission
