@@ -236,13 +236,13 @@ int main(int argc, char **argv) {
             if (celebration) {
                 g->championship_celebration = true;
                 g->celebration_time = 0;
-                g->sound_event = 9;
+                game_sound(g, SOUND_CELEBRATION, 0, 1, g->cars[0].pos);
             }
         }
     } else if (autoplay)
         game_start(g);
     if (!noaudio)
-        audio_init(&audio);
+        audio_init(&audio, true);
     SDL_Gamepad *pad = open_gamepad();
     SDL_Cursor *pointer = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER),
                *normal = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
@@ -430,7 +430,8 @@ int main(int argc, char **argv) {
         renderer_resize(r, w, h);
         renderer_draw(r, g, dt, (float)(accumulator / FIXED_DT));
         ui_draw(u, g, r);
-        audio_update(&audio, g);
+        Listener listener = {r->eye, r->target, r->helicopter_pos, r->helicopter_ready};
+        audio_update(&audio, g, &listener, (float)dt);
         SDL_SetCursor(u->hovered ? pointer : normal);
         frame++;
         elapsed += dt;

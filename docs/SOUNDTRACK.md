@@ -41,23 +41,25 @@ Finish jingle leads into its own loop.
   - Bad: fifth or lower, or a DNF.
 
   The result is fixed while rivals finish. It only upgrades to Best when a
-  championship medal is settled. With music on, these jingles replace the
-  synthesized finish and championship fanfares (sound events 7 and 9). With
-  music off, the fanfares still play.
+  championship medal is settled. The recorded crowd cheer (or, for a medal, the
+  roaring crowd with air horns) plays with the jingle, and on its own with music
+  off.
 - **Back to the menu:** the current music crossfades into the menu loop (1.2 s
   out, 0.8 s in).
 - **Music switch:** turning music off fades it to silence. Turning it back on
-  resumes the same song without reloading it. Event sounds still lower the music
-  by 32%.
+  resumes the same song without reloading it. With music off, a hand bell
+  announces the final lap instead of the jingle.
 - **Backgrounding the app** suspends the audio stream and playback.
 
 ## Playback
 
 - **Loudness:** `src/music.c` lists each file's integrated loudness (ITU-R
   BS.1770-4). Playback gain brings every cue to `MUSIC_LOUDNESS` (−26 LUFS). The
-  masters are between −10.5 and −13 LUFS. The engine is near −28 LUFS at speed,
-  and event sounds stay above both. Change `MUSIC_LOUDNESS` to rebalance the mix;
-  the previous synthesized score played near −30 LUFS.
+  masters are between −10.5 and −13 LUFS. The player's engine plays near
+  −26 LUFS at full throttle and a whole race near −21 LUFS, with the effects
+  about 4 dB above the music. Change `MUSIC_LOUDNESS`, or `MIX_TRIM` in
+  `src/audio.c` for all effects, to rebalance the mix (see
+  [Sound effects](SOUND.md)).
 - **Decks:** up to three decks cover a crossfade plus a jingle. When a cue starts,
   its whole file is read into memory and decoded progressively. A deck releases
   its file and decoder once it has faded out. At most about 11 MB is held, during
@@ -67,8 +69,8 @@ Finish jingle leads into its own loop.
   new material with a 2 ms decay. Blossom Mountain's recording ends 0.22 above its
   first sample; the played step at its seam is 0.
 - **Sample rate:** the output stream runs at 44.1 kHz, the files' native rate.
-  SDL performs the only conversion, to the device rate. Engine and event synthesis
-  use the same rate.
+  SDL performs the only conversion, to the device rate. The sound effects use the
+  same rate.
 - **Missing files:** a missing or invalid file logs `Music unavailable` and that
   cue stays silent.
 

@@ -1,0 +1,79 @@
+ToyCars sound effects
+=====================
+
+Every recording in assets/sounds is dedicated to the public domain under
+Creative Commons Zero 1.0 (CC0 1.0):
+https://creativecommons.org/publicdomain/zero/1.0/
+Attribution is not required; it is given here with thanks.
+
+The files are edited from the sources below: trimmed, mixed to mono (ambience
+beds stay stereo), filtered, looped, layered where noted, normalized and
+encoded as Ogg Vorbis. tools/build_sounds.py lists every edit and rebuilds them.
+Freesound sources are its public high-quality previews.
+
+File                  Source
+--------------------  ---------------------------------------------------------------
+engine-idle.ogg       GiocoSound, SFX_Car_Engine_Outside_Idle.wav (BMW 120d)
+engine-low.ogg        GiocoSound, SFX_Car_Engine_Outside_RPMLow.wav
+engine-mid.ogg        GiocoSound, SFX_Car_Engine_Outside_RPMMed.wav
+engine-high.ogg       GiocoSound, SFX_Car_Engine_Outside_RPMHigh.wav
+                      https://freesound.org/people/GiocoSound/packs/22622/
+skid.ogg              audible-edge, Chrysler LHS tire squeal 04 (04-25-2009).wav
+                      https://freesound.org/s/71739/
+dirt.ogg, sand.ogg    mhad, tire_rolling_1.wav
+                      https://freesound.org/s/390798/
+snow.ogg              Kenney, Impact Sounds: footstep_snow_000 to 004
+                      https://kenney.nl/assets/impact-sounds
+wade.ogg              paulprit, River Wading Fast.mp3
+                      https://freesound.org/s/563555/
+wind.ogg              kyles, loop smooth muffled rushing air tone skyline traffic
+                      distant wind trees forest.flac
+                      https://freesound.org/s/454072/
+helicopter.ogg        unikumpu, Helicopter loop
+                      https://freesound.org/s/609460/
+ambience-country.ogg  Kinoton, Countryside Ambience Spring
+                      https://freesound.org/s/514550/
+ambience-beach.ogg    jackmichaelking, Gentle ocean waves birdsong and gull.WAV
+                      https://freesound.org/s/518637/
+ambience-winter.ogg   xkeril, Morning in swiss mountain
+                      https://freesound.org/s/757868/
+ambience-night.ogg    sengjinn, AMBIENCE NIGHT FIELD CRICKET 01.wav
+                      https://freesound.org/s/175020/
+rain.ogg              speakwithanimals, Rain Slowly Passing TREATED
+                      LOOP_Edgewater_06192020.wav
+                      https://freesound.org/s/525046/
+gusts.ogg             Fission9, Polar Wind
+                      https://freesound.org/s/521820/
+beep.ogg, go.ogg      Pól, S001_Countdown_Signal.wav
+gear.ogg              Pól, S011_Gear_Change_Mono.wav
+backfire.ogg          Pól, S012_Engine_Backfire_Mono.wav
+landing.ogg           Pól, S019_Landing_Impact_Mono.wav
+car-hit.ogg           Pól, S021_Metal_Impact_Mono.wav
+cone.ogg              Pól, S022_Plastic_Impact_Mono.wav
+cheer.ogg             Pól, S005_Crowd_Cheering_Clapping_Mono.wav
+roar.ogg              Pól, S004_Crowd_Roar_Clapping_Mono.wav
+                      https://freesound.org/people/P%C3%B3l/packs/21668/
+sputter.ogg           Pól, S012_Engine_Backfire_Mono.wav, twice, then
+                      GiocoSound, SFX_Car_Engine_Outside_Stop.wav
+                      https://freesound.org/s/401557/
+boost.ogg             Pól, S012_Engine_Backfire_Mono.wav, with
+                      florianreichelt, Woosh
+takeoff.ogg,          florianreichelt, Woosh (recover.ogg plays it reversed)
+recover.ogg           https://freesound.org/s/683096/
+fuel.ogg              IENBA, Game Pickup
+                      https://freesound.org/s/698768/
+splash.ogg            qubodup, Big Water Splash
+                      https://freesound.org/s/442773/
+bell.ogg              domrodrig, Ringing bell - happy.wav
+                      https://freesound.org/s/116779/
+tire.ogg              Kenney, Impact Sounds: impactPunch_heavy_000, with
+                      DDT197, Punching rubber tire.WAV
+                      https://freesound.org/s/445781/
+fence.ogg             Pól, S022_Plastic_Impact_Mono.wav, with
+                      qubodup, Whoosh
+                      https://freesound.org/s/60013/
+ui-move.ogg           Kenney, UI Audio: click1
+ui-select.ogg         Kenney, UI Audio: switch7
+                      https://kenney.nl/assets/ui-audio
+
+Retrieved 21 October 2026.

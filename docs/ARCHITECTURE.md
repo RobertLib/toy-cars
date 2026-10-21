@@ -9,10 +9,12 @@
 | `src/assets.c` | Checked binary loading, APK asset lookup, local profile persistence |
 | `src/renderer.c` | OpenGL/GLES scene, shadow pass, follow camera, fog, postprocess, screenshot |
 | `src/ui.c` | Batched vector/text UI, responsive layouts, multitouch tracking, screens |
-| `src/audio.c` | Gameplay music direction, engine and event audio through SDL_AudioStream |
+| `src/audio.c` | Audio direction: music, engine model, positional effects, mix and limiter through SDL_AudioStream |
 | `src/music.c` | Recorded soundtrack cues, race-aware sequencing, crossfades, loudness matching |
-| `third_party/stb_vorbis` | Vendored public-domain Ogg Vorbis decoder used by the soundtrack |
+| `src/sfx.c` | Recorded sound effects: decoding, loudness table, voices, pitch, panning, streamed beds |
+| `third_party/stb_vorbis` | Vendored public-domain Ogg Vorbis decoder used by the soundtrack and effects |
 | `tools/build_assets.py` | Blender-only modeling, scene saving and geometry/path export |
+| `tools/build_sounds.py` | Rebuilds `assets/sounds` from recorded sources (numpy, scipy, oggenc) |
 
 The runtime has no Python dependency and no network calls. On Android the
 manifest requests no internet permission. Font atlases are baked in advance,

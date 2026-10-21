@@ -600,6 +600,44 @@ verified. This pass does not add mobile-device validation.
 - This pass does not include listening on headphones, speakers or phones, or
   Android and iOS rebuilds. The APK grows by about 42 MB of music.
 
+## Recorded sound effects (21 October 2026)
+
+- A Release build without warnings passed all seven enabled CTest entries:
+  `track_layouts`, `progression`, `sound`, `props`, `music`, `simulation` and
+  `asset_updates`. ASan/UBSan sound checks passed.
+- Landings below 2.2 m/s (settling over crests) stay silent, and rival boosts
+  are now heard where they happen; the simulation and touch input tests still
+  pass after the sound cues were added to the physics.
+- All 37 effect files decode as 44.1 kHz audio (mono effects, stereo beds) with
+  peaks at or below −0.2 dBFS. Measured loudness matches the table in `src/sfx.c`
+  within 0.2 LU, and every loop seam is within its own 99.9th-percentile step.
+  Engine layers measure seam steps of 0.002–0.003 against typical steps of
+  0.06–0.11; a first build that high-passed them non-circularly stepped 0.19
+  at the idle seam, and the check caught it.
+- Mixer checks: held loops start and stop with steps below 0.05, released voices
+  free, a held handle crossfades to a new sound, 68 one-shots share the 48 voices,
+  and missing files stay silent.
+- Race checks, a full autoplay race per track mixed at 60 frames per second:
+  every cue is consumed, the gearbox reaches fourth gear, engine speed stays
+  within 900–6719 rpm, menus and pause leave at most one voice, resuming
+  restores the race. Races measure −23.0 / −23.4 / −23.9 dBFS RMS with peaks
+  0.57 / 0.65 / 0.54 for country / beach / winter; the limiter never engaged.
+  A first mix measured −17 dBFS RMS with the limiter engaged: seven idling
+  rivals on the grid played nearly as loud as the player. Rivals, the
+  helicopter, impacts and pops were lowered and `MIX_TRIM` added.
+- The 47-second race previews measure −20.9 / −21.0 / −21.7 LUFS over the race
+  and −26.4 LUFS for the menu music alone. The player's engine, rendered alone
+  through a full-throttle run, plays at −26.3 LUFS (idle −38.3 LUFS), and its
+  0–700 Hz spectrogram shows the launch, three upshifts in the first three
+  seconds, the darker coast and the downshift on relaunch. With five gears the
+  first shifts came every half second, so the gearbox now has four.
+- Discontinuity scans of the previews flag only sound onsets and the menu click
+  at pause and resume.
+- The windowed game could not be run in this session: with no visible display
+  the first buffer swap blocked for over three minutes. This pass does not
+  include listening on headphones, speakers or phones, or Android and iOS
+  rebuilds. The APK grows by about 5.8 MB of effects.
+
 ## Still required before public release
 
 - Playtesting with people on physical phones, particularly steering feel,

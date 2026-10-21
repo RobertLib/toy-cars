@@ -232,8 +232,19 @@ an internet connection to run.
 - A recorded racing soundtrack by MintoDog (CC0): a menu theme and two songs per
   environment. On the final lap, a jingle leads into a faster climax version of
   the song. Finishing plays a best, good or bad result jingle and loop. Pausing
-  muffles the music, and every track is loudness-matched under the engine and
-  event sounds. The music ships as Ogg Vorbis files and is never streamed.
+  muffles the music, and every track is loudness-matched with the sound effects.
+  The music ships as Ogg Vorbis files and is never streamed.
+- Recorded sound effects (CC0), mostly from a rally car library: a four-speed
+  engine built from four recorded engine-speed layers, with gear changes,
+  exhaust pops on lift-off, free revving in the air and on the grid, and a
+  sputtering stall when the fuel runs out. Rivals are heard where they are, with
+  their own engines and a Doppler shift as they pass. Tires squeal in slides and
+  crunch over gravel, sand or snow off the road; fords splash, wind builds with
+  speed, and cars thud on landing and bang into each other, rails, cones, tire
+  stacks and nets. Each track has its own countryside, coastal, alpine or night
+  ambience, rain and gusts follow the weather, the camera helicopter can be heard
+  overhead, and rally crowds cheer the finish. Menus click for every change,
+  whatever the input. See [Sound effects](docs/SOUND.md).
 
 ## Controls
 
@@ -360,6 +371,19 @@ mkdir -p build/music-preview
 
 See [Soundtrack](docs/SOUNDTRACK.md) for the track list, credits and playback design.
 
+The headless sound test checks every effect file (format, headroom, loudness
+against the table in `src/sfx.c`, click-free loop seams), the effects mixer, and
+the audio direction of a full race on each track: gear changes, engine speed,
+pause, resume and the mix level. To export a 47-second WAV of each race with
+music and effects, without a window or an audio device:
+
+```sh
+mkdir -p build/sound-preview
+./build/ToyCarsSoundTests build/sound-test-profile --render build/sound-preview
+```
+
+See [Sound effects](docs/SOUND.md) for the sources, the engine model and the mix.
+
 After rebuilding the Blender scenes, verify road markings, terrain contact and spectators:
 
 ```sh
@@ -419,7 +443,9 @@ specific decisions drawn from them. ToyCars uses original environments and
 models, not copied game assets. Barlow fonts are bundled under the SIL Open Font
 License in `assets/fonts/`. SDL3 uses the zlib license; its source download keeps
 that license in `third_party/SDL/LICENSE.txt`. The music is by MintoDog under CC0
-([credits](assets/licenses/MUSIC.txt)). It is decoded by the vendored stb_vorbis
+([credits](assets/licenses/MUSIC.txt)); the sound effects are CC0 recordings by
+Pól, GiocoSound, Kenney and other Freesound contributors
+([credits](assets/licenses/SOUNDS.txt)). Both are decoded by the vendored stb_vorbis
 (public domain or MIT, see `assets/licenses/stb_vorbis-LICENSE.txt`).
 
 This is a playable first release candidate for iteration. Physical-device

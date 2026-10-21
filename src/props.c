@@ -54,7 +54,8 @@ static Vec3 contact_velocity(const TrackProp *p, Vec3 r) {
         return vcross(p->omega,vadd(r,rotated(p->rotation,v3(0,.60f,0))));
     return vadd(p->velocity, vcross(p->omega,r));
 }
-static void contact(TrackProp *a, TrackProp *b, Vec3 ra, Vec3 rb, Vec3 n, float depth) {
+// Returns the closing speed of the contact in m/s (0 when separating).
+static float contact(TrackProp *a, TrackProp *b, Vec3 ra, Vec3 rb, Vec3 n, float depth) {
     a->asleep = false;
     if (b) b->asleep = false;
     float inverse = a->inv_mass + (b ? b->inv_mass : 0);
@@ -63,7 +64,7 @@ static void contact(TrackProp *a, TrackProp *b, Vec3 ra, Vec3 rb, Vec3 n, float 
     if (b && b->kind!=PROP_POST) b->pos = vsub(b->pos, vmul(n, correction*b->inv_mass));
     Vec3 relative = vsub(contact_velocity(a,ra), b ? contact_velocity(b,rb) : v3(0,0,0));
     float speed = vdot(relative,n);
-    if (speed >= 0) return;
+    if (speed >= 0) return 0;
     float denom = effective(a,ra,n) + (b ? effective(b,rb,n) : 0);
     float bounce = a->kind != PROP_POST && speed < -1.5f ? (a->kind == PROP_TIRE ? .28f : .12f) : 0;
     float j = -(1+bounce)*speed/denom;
@@ -72,11 +73,12 @@ static void contact(TrackProp *a, TrackProp *b, Vec3 ra, Vec3 rb, Vec3 n, float 
     relative = vsub(contact_velocity(a,ra), b ? contact_velocity(b,rb) : v3(0,0,0));
     Vec3 tangent = vsub(relative,vmul(n,vdot(relative,n)));
     float slip = vlen(tangent);
-    if (slip < .00001f) return;
+    if (slip < .00001f) return -speed;
     tangent = vmul(tangent,1/slip);
     float friction = fminf(j*.7f, slip/(effective(a,ra,tangent)+(b ? effective(b,rb,tangent) : 0)));
     impulse(a,ra,vmul(tangent,-friction));
     if (b) impulse(b,rb,vmul(tangent,friction));
+    return -speed;
 }
 static void add_prop(Game *g, PropKind kind, Vec3 pos) {
     if (g->prop_count == MAX_TRACK_PROPS) return;
@@ -203,6 +205,9 @@ void props_tick(Game *g, float dt) {
     if (steps < 1) return;
     float h=dt/steps;
     for (int step=0;step<steps;step++) {
+        // Strongest contact of each prop this step, for its impact sound.
+        float knock[MAX_TRACK_PROPS]={0};
+        int knocker[MAX_TRACK_PROPS];
         fences_tick(g,h);
         for (int i=0;i<g->prop_count;i++) {
             TrackProp *p=&g->props[i];
@@ -235,7 +240,8 @@ void props_tick(Game *g, float dt) {
                         float gx=track_height(t,vadd(q,v3(.04f,0,0)),NULL);
                         float gz=track_height(t,vadd(q,v3(0,0,.04f)),NULL);
                         Vec3 n=vnorm(v3(clampf((ground-gx)/.04f,-2,2),1,clampf((ground-gz)/.04f,-2,2)));
-                        contact(a,NULL,vsub(ra[k],vmul(n,ar[k])),v3(0,0,0),n,depth);
+                        float hit=contact(a,NULL,vsub(ra[k],vmul(n,ar[k])),v3(0,0,0),n,depth);
+                        if (iteration==0 && hit>knock[i]) { knock[i]=hit; knocker[i]=-1; }
                     }
                 }
                 for (int j=i+1;j<g->prop_count;j++) {
@@ -246,7 +252,8 @@ void props_tick(Game *g, float dt) {
                         Vec3 d=vsub(vadd(a->pos,ra[k]),vadd(b->pos,rb[l])); float len=vlen(d);
                         if (len<ar[k]+br[l] && len>.00001f) {
                             Vec3 n=vmul(d,1/len);
-                            contact(a,b,vsub(ra[k],vmul(n,ar[k])),vadd(rb[l],vmul(n,br[l])),n,ar[k]+br[l]-len);
+                            float hit=contact(a,b,vsub(ra[k],vmul(n,ar[k])),vadd(rb[l],vmul(n,br[l])),n,ar[k]+br[l]-len);
+                            if (iteration==0 && hit>knock[i]) { knock[i]=hit; knocker[i]=-1; }
                         }
                     }
                 }
@@ -274,7 +281,10 @@ void props_tick(Game *g, float dt) {
                                             car.velocity=vsub(car.velocity,vmul(j,car.inv_mass));
                                         }
                                     }
-                                } else contact(a,&car,vsub(ra[k],vmul(n,ar[k])),v3(0,0,0),n,ar[k]+.82f-len);
+                                } else {
+                                    float hit=contact(a,&car,vsub(ra[k],vmul(n,ar[k])),v3(0,0,0),n,ar[k]+.82f-len);
+                                    if (iteration==0 && hit>knock[i]) { knock[i]=hit; knocker[i]=j; }
+                                }
                             }
                         }
                     }
@@ -287,6 +297,10 @@ void props_tick(Game *g, float dt) {
                 if (a->kind==PROP_POST && !a->asleep) seat_post(a,t);
             }
         }
+        for (int i=0;i<g->prop_count;i++)
+            if (knock[i]>1.2f && g->props[i].kind!=PROP_POST)
+                game_sound(g, g->props[i].kind==PROP_CONE ? SOUND_CONE_HIT : SOUND_TIRE_HIT,
+                           knocker[i], knock[i], g->props[i].pos);
     }
     for (int i=0;i<g->prop_count;i++) {
         TrackProp *p=&g->props[i];
@@ -389,6 +403,7 @@ static void fences_tick(Game *g,float h) {
                 node->previous=old;
             }
         }
+        float push=0; int pusher=-1;
         for (int iteration=0;iteration<6;iteration++) {
             for (int row=0;row<FENCE_ROWS;row++) for (int col=0;col<FENCE_COLS;col++) {
                 int n=row*FENCE_COLS+col;
@@ -416,6 +431,7 @@ static void fences_tick(Game *g,float h) {
                         node->pos=vadd(center,vmul(normal,.9f));
                         if (iteration!=0) continue;
                         float speed=fmaxf(0,vdot(c->velocity,normal));
+                        if (speed>push) { push=speed; pusher=j; }
                         float kick=fminf(speed*.16f,2.f)*h*8;
                         // Lightweight fabric transfers a small reaction to the car and
                         // bends both stakes around their feet without launching them.
@@ -434,5 +450,8 @@ static void fences_tick(Game *g,float h) {
                 }
             }
         }
+        // Only a fresh push into the net rustles it; leaning on it stays quiet.
+        if (push>1.5f && !f->touched) game_sound(g, SOUND_FENCE_HIT, pusher, push, middle);
+        f->touched=pusher>=0;
     }
 }

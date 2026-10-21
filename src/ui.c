@@ -762,7 +762,6 @@ static void time_switch(UI *u, Game *g, Rect r, float size) {
         u->menu_layout.times[i] = b;
         if (hit(u, b) && !active) {
             g->profile.arcade_night = i == 1;
-            g->sound_event = 8;
             game_save_profile(g);
             ui_clear_input(u);
         }
@@ -888,7 +887,6 @@ static void track_cards(UI *u, Game *g, Rect area, float name_size, float info_s
         u->menu_layout.cards[i] = card;
         if (hit(u, card)) {
             g->selected = i;
-            g->sound_event = 8;
         }
     }
 }
@@ -1116,7 +1114,6 @@ static void garage(UI *u, Game *g) {
             g->profile.color = i;
             game_save_profile(g);
             ui_clear_input(u);
-            g->sound_event = 8;
         }
     }
     italic(u, 1, 22, m, cy + 38, WHITE, CAR_COLOR_NAMES[g->profile.color]);

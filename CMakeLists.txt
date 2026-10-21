@@ -25,7 +25,7 @@ else()
   find_package(SDL3 REQUIRED CONFIG HINTS /opt/homebrew/opt/sdl3/lib/cmake/SDL3)
 endif()
 
-set(GAME_SOURCES main.c src/game.c src/props.c src/renderer.c src/ui.c src/audio.c src/music.c src/assets.c
+set(GAME_SOURCES main.c src/game.c src/props.c src/renderer.c src/ui.c src/audio.c src/music.c src/sfx.c src/assets.c
   third_party/stb_vorbis/stb_vorbis.c)
 # The vendored Ogg Vorbis decoder is built as-is, without the project's warnings.
 set_source_files_properties(third_party/stb_vorbis/stb_vorbis.c PROPERTIES
@@ -119,6 +119,21 @@ if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_options(ToyCarsMusicTests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(ToyCarsMusicTests PRIVATE -fsanitize=address,undefined)
   endif()
+  add_executable(ToyCarsSoundTests tests/sound.c src/audio.c src/music.c src/sfx.c src/game.c
+    src/props.c third_party/stb_vorbis/stb_vorbis.c)
+  target_include_directories(ToyCarsSoundTests PRIVATE src third_party/stb_vorbis)
+  target_link_libraries(ToyCarsSoundTests PRIVATE SDL3::SDL3)
+  target_compile_options(ToyCarsSoundTests PRIVATE -Wall -Wextra -Wpedantic)
+  if(NOT APPLE)
+    target_link_libraries(ToyCarsSoundTests PRIVATE m)
+  endif()
+  if(TOYCARS_SANITIZE)
+    target_compile_options(ToyCarsSoundTests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(ToyCarsSoundTests PRIVATE -fsanitize=address,undefined)
+  endif()
+  add_dependencies(ToyCarsSoundTests toycars_assets)
+  add_test(NAME sound COMMAND ToyCarsSoundTests "${CMAKE_BINARY_DIR}/sound-test-profile")
+  set_tests_properties(sound PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
   add_executable(ToyCarsPropsTests tests/props.c src/props.c src/game.c src/assets.c)
   target_include_directories(ToyCarsPropsTests PRIVATE src)
   target_link_libraries(ToyCarsPropsTests PRIVATE SDL3::SDL3)

@@ -10,7 +10,7 @@
 #include "stb_vorbis.c"
 
 /* Every cue is normalized to this loudness. The masters are around -11 LUFS;
-   the engine is near -28 LUFS at speed and event sounds stay clearly above both. */
+   the player's engine is near -26 LUFS at full throttle, a whole race near -21. */
 #define MUSIC_LOUDNESS -26.f
 #define PAUSE_LEVEL .45f
 #define ATTACK .005f

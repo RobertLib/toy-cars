@@ -324,8 +324,10 @@ static bool car_uneven_support(const Car *c, const Track *t) {
 
 // The rail occupies the band from the deck to the top beam. Sweep against
 // its plane before testing ground support so an edge exit cannot become a fall.
-static void car_guardrails(Car *c, const Track *t) {
+// Returns the strongest speed into a rail, in m/s.
+static float car_guardrails(Car *c, const Track *t) {
     const float radius = .94f; // Tire half-width plus the rail tube.
+    float impact = 0;
     for (int pass = 0; pass < 2; pass++)
         for (int i = 0; i < t->guardrail_count; i++) {
             Guardrail rail = t->guardrails[i];
@@ -364,11 +366,14 @@ static void car_guardrails(Car *c, const Track *t) {
                 float speed = vdot(c->velocity, n);
                 if (speed < 0) c->velocity = vsub(c->velocity, vmul(n, speed * 1.12f));
                 c->speed = hypotf(c->velocity.x, c->velocity.z);
+                impact = fmaxf(impact, -speed);
             }
         }
+    return impact;
 }
 
-static void car_body_tick(Car *c, const Track *t, float dt) {
+// Returns the strongest ground impact of the step as a speed change in m/s.
+static float car_body_tick(Car *c, const Track *t, float dt) {
     // Integrate around the center of mass; pos remains the model's tire origin.
     Vec3 center = vadd(c->pos, car_rotated(c->body_rotation, v3(0, .55f, 0)));
     c->prev_body_rotation = c->body_rotation;
@@ -392,6 +397,7 @@ static void car_body_tick(Car *c, const Track *t, float dt) {
     car_guardrails(c, t);
     center = vadd(c->pos, car_rotated(c->body_rotation, v3(0, .55f, 0)));
     bool contact = false;
+    float impact = 0;
     // Four tire contacts and four roof corners support either resting attitude.
     // Sequential normal/friction impulses also turn an uneven landing into spin.
     for (int iteration = 0; iteration < 6; iteration++) {
@@ -409,6 +415,7 @@ static void car_body_tick(Car *c, const Track *t, float dt) {
             Vec3 velocity = vadd(v3(c->velocity.x, c->vy, c->velocity.z), vcross(c->omega, r));
             float normal_mass = 1 + (r.x*r.x + r.z*r.z) / .8f;
             float j = fmaxf(0, -velocity.y / normal_mass);
+            impact = fmaxf(impact, j);
             Vec3 impulse = v3(0, j, 0);
             float slip = hypotf(velocity.x, velocity.z);
             if (slip > .0001f) {
@@ -448,6 +455,7 @@ static void car_body_tick(Car *c, const Track *t, float dt) {
     }
     c->rollover_rest = contact && upright < .5f && c->speed < 1 && vlen(c->omega) < 1
                          ? c->rollover_rest + dt : 0;
+    return impact;
 }
 
 bool game_track_unlocked(const Profile *p, int track) {
@@ -635,7 +643,8 @@ void game_start(Game *g) {
         c->name = names[i];
     }
     props_reset(g);
-    g->sound_event = 1;
+    g->sound_count = 0;
+    game_sound(g, SOUND_COUNTDOWN, -1, 1, g->cars[0].pos);
 }
 
 void game_reset_car(Game *g, int index) {
@@ -666,6 +675,7 @@ void game_reset_car(Game *g, int index) {
     c->nearest = -1;
     c->last_s = track_nearest(t, c->pos, &c->nearest, NULL, NULL);
     c->route_pos = c->pos;
+    game_sound(g, SOUND_RECOVER, index, 1, c->pos);
     if (index == 0) {
         SDL_strlcpy(g->toast, "BACK ON TRACK", sizeof g->toast);
         g->toast_time = 1.5f;
@@ -892,6 +902,14 @@ static bool wheel_spray(Game *g, const Car *c, float dt) {
     return wet;
 }
 
+void game_sound(Game *g, SoundKind kind, int car, float strength, Vec3 pos) {
+    if (g->sound_count == MAX_SOUND_EVENTS) {
+        memmove(g->sounds, g->sounds + 1, sizeof g->sounds[0] * (MAX_SOUND_EVENTS - 1));
+        g->sound_count--;
+    }
+    g->sounds[g->sound_count++] = (SoundEvent){kind, car, strength, pos};
+}
+
 static void toast(Game *g, const char *s, float seconds) {
     SDL_strlcpy(g->toast, s, sizeof g->toast);
     g->toast_time = seconds;
@@ -925,7 +943,7 @@ static void update_lap(Game *g, int index, float previous_progress, float dt) {
     if (index == 0 && lap <= RACE_LAPS) {
         g->last_lap = car->lap_time;
         toast(g, "FINAL LAP", 2);
-        g->sound_event = 3;
+        game_sound(g, SOUND_FINAL_LAP, index, 1, car->pos);
     }
 }
 
@@ -1014,13 +1032,21 @@ static void car_boost(Game *g, int index) {
                      vadd(vmul(forward, -4), v3((random01(g)-.5f)*3, random01(g)*2,
                                                (random01(g)-.5f)*3)),
                      .45f, .12f, rgb(.12f, 1, .8f));
+        game_sound(g, SOUND_BOOST, index, impulse, c->pos);
         if (index == 0) {
             toast(g, "BOOST!", .9f);
-            g->sound_event = 10;
             g->shake = .10f;
         }
         break;
     }
+}
+
+// Tumbling contact reports a bump only for a fresh, firm hit with the ground.
+static void car_tumble_tick(Game *g, int index, float dt) {
+    Car *c = &g->cars[index];
+    float impact = car_body_tick(c, &g->tracks[g->selected], dt);
+    if (impact > 2.5f)
+        game_sound(g, SOUND_LANDING, index, impact, c->pos);
 }
 
 static void update_car(Game *g, int index, Controls in, float dt) {
@@ -1060,8 +1086,11 @@ static void update_car(Game *g, int index, Controls in, float dt) {
     float throttle = c->fuel > 0
                          ? fmaxf(in.throttle, in.reverse && forward_speed <= 0 ? in.brake : 0)
                          : 0;
+    c->throttle = clampf(throttle, 0, 1);
+    c->verge = off;
+    c->slip = 0;
     if (c->tumbling) {
-        car_body_tick(c, t, dt);
+        car_tumble_tick(g, index, dt);
         if (track_height(t, c->pos, NULL) == NO_SURFACE_HEIGHT ||
             c->rollover_rest > 3) {
             game_reset_car(g, index);
@@ -1094,12 +1123,18 @@ static void update_car(Game *g, int index, Controls in, float dt) {
         }
     }
     if (c->tumbling) {
-        car_body_tick(c, t, dt);
+        car_tumble_tick(g, index, dt);
         goto race_progress;
+    }
+    if (c->grounded) {
+        Vec3 right = v3(cosf(c->yaw), 0, -sinf(c->yaw));
+        c->slip = fabsf(vdot(c->velocity, right));
     }
     car_boost(g, index);
     c->pos = vadd(c->pos, vmul(c->velocity, dt));
-    car_guardrails(c, t);
+    float rail = car_guardrails(c, t);
+    if (rail > 1)
+        game_sound(g, SOUND_RAIL_HIT, index, rail, c->pos);
     bool was_ramp = false, is_ramp = false;
     float old_ground = track_height(t, c->prev, &was_ramp);
     float ground = track_height(t, c->pos, &is_ramp);
@@ -1137,7 +1172,7 @@ static void update_car(Game *g, int index, Controls in, float dt) {
             c->ramp_cooldown = 1.5f;
             if (index == 0 && !c->finished) {
                 toast(g, "TAKE FLIGHT!", 1.2f);
-                g->sound_event = 4;
+                game_sound(g, SOUND_TAKEOFF, index, takeoff_speed, c->pos);
             }
         }
     }
@@ -1167,7 +1202,8 @@ static void update_car(Game *g, int index, Controls in, float dt) {
             float dp = angle_delta(c->pitch, pitch), dr = angle_delta(c->roll, roll);
             if (fabsf(dp) > .75f || fabsf(dr) > .5f) {
                 car_release(c);
-                car_body_tick(c, t, dt);
+                game_sound(g, SOUND_LANDING, index, -c->vy, c->pos);
+                car_tumble_tick(g, index, dt);
                 goto race_progress;
             }
             // The suspension absorbs this attitude difference. Judge wheel
@@ -1176,6 +1212,7 @@ static void update_car(Game *g, int index, Controls in, float dt) {
             c->roll = roll;
             c->pos.y = ground;
             c->grounded = true;
+            game_sound(g, SOUND_LANDING, index, -c->vy, c->pos);
             c->vy = 0;
             c->velocity = vmul(c->velocity, .97f);
             c->speed = vlen(c->velocity);
@@ -1183,10 +1220,8 @@ static void update_car(Game *g, int index, Controls in, float dt) {
                 particle(g, c->pos,
                          v3((random01(g) - .5f) * 4, 1 + random01(g) * 2, (random01(g) - .5f) * 4),
                          .55f, .3f, t->sky);
-            if (index == 0 && !c->finished) {
+            if (index == 0 && !c->finished)
                 g->shake = .23f;
-                g->sound_event = 5;
-            }
         }
     }
     if (c->grounded && c->speed > 14 && car_uneven_support(c, t)) {
@@ -1316,7 +1351,7 @@ race_progress:
                     char message[32];
                     SDL_snprintf(message, sizeof message, "+%d FUEL", FUEL_PICKUP_AMOUNT);
                     toast(g, message, 1.3f);
-                    g->sound_event = 2;
+                    game_sound(g, SOUND_FUEL, index, 1, cp);
                     for (int k = 0; k < 20; k++)
                         particle(g, vadd(cp, v3(0, 1, 0)),
                                  v3((random01(g) - .5f) * 5, 2 + random01(g) * 4,
@@ -1329,7 +1364,7 @@ race_progress:
         c->empty_time += dt;
         if (index == 0 && c->empty_time < .03f) {
             toast(g, "OUT OF FUEL", 3);
-            g->sound_event = 6;
+            game_sound(g, SOUND_OUT_OF_FUEL, index, 1, c->pos);
         }
         if (c->speed < .5f && c->empty_time > 2) {
             c->dnf = true;
@@ -1345,6 +1380,7 @@ race_progress:
     float side = c->velocity.x * forward.z - c->velocity.z * forward.x;
     float dust_rate = (off > .4f || fabsf(side) > 2) ? 24.f : g->selected == 0 ? 5.f : 12.f;
     bool wet = wheel_spray(g, c, dt);
+    c->wet = wet;
     if (!wet && c->grounded && c->speed > 6 && random01(g) < dt * dust_rate) {
         Color color = g->selected == 2   ? rgb(.91, .95, .96)
                       : g->selected == 1 ? rgb(.80, .70, .48)
@@ -1423,7 +1459,7 @@ void game_leave_results(Game *g) {
          step++)
         game_tick(g, (Controls){0}, FIXED_DT, false);
     g->championship_celebration = false;
-    g->sound_event = 0;
+    g->sound_count = 0;
     // The menu previews the stage the Championship continues with.
     if (g->mode == MODE_CHAMPIONSHIP)
         game_set_mode(g, MODE_CHAMPIONSHIP);
@@ -1537,7 +1573,7 @@ static void championship_score(Game *g) {
             g->profile.championship_medal = medal;
         g->championship_celebration = medal > 0;
         g->celebration_time = 0;
-        g->sound_event = medal > 0 ? 9 : 7;
+        game_sound(g, medal > 0 ? SOUND_CELEBRATION : SOUND_FINISH, 0, 1, g->cars[0].pos);
     }
     game_save_profile(g);
 }
@@ -1559,7 +1595,7 @@ void game_results(Game *g) {
         game_save_profile(g);
     }
     championship_score(g);
-    g->sound_event = g->championship_celebration ? 9 : 7;
+    game_sound(g, g->championship_celebration ? SOUND_CELEBRATION : SOUND_FINISH, 0, 1, p->pos);
 }
 
 bool game_start_hint_visible(const Game *g) {
@@ -1600,6 +1636,8 @@ static void resolve_car_collisions(Game *g) {
                 b->pos = vsub(b->pos, vmul(n, push));
                 float speed = vdot(vsub(a->velocity, b->velocity), n);
                 if (speed < 0) {
+                    if (speed < -1)
+                        game_sound(g, SOUND_CAR_HIT, i, -speed, vmul(vadd(a->pos, b->pos), .5f));
                     car_impact(a, vmul(n, -speed * .58f), v3(0, -.45f, 0));
                     car_impact(b, vmul(n, speed * .58f), v3(0, -.45f, 0));
                     a->velocity = vsub(a->velocity, vmul(n, speed * .58f));
@@ -1613,7 +1651,9 @@ static void resolve_car_collisions(Game *g) {
     // cars at that final position, including cars pushed onto the shoulder.
     for (int i = 0; i < CAR_COUNT; i++) {
         Car *c = &g->cars[i];
-        if (!c->dnf) car_guardrails(c, &g->tracks[g->selected]);
+        float rail = c->dnf ? 0 : car_guardrails(c, &g->tracks[g->selected]);
+        if (rail > 1)
+            game_sound(g, SOUND_RAIL_HIT, i, rail, c->pos);
         if (c->grounded && !c->tumbling && !c->dnf)
             car_surface_pose(&g->tracks[g->selected], &c->pos, c->yaw, &c->pitch, &c->roll);
     }
@@ -1890,10 +1930,15 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
         }
     }
     if (g->screen == SCREEN_COUNTDOWN) {
+        // Cars wait on the grid; the player can already rev the engine.
+        for (int i = 0; i < CAR_COUNT; i++)
+            g->cars[i].throttle = i == 0 && !autopilot && !g->profile.auto_accel
+                                      ? clampf(controls.throttle, 0, 1)
+                                      : 0;
         int last = (int)ceilf(g->countdown);
         g->countdown -= dt;
         if ((int)ceilf(g->countdown) != last)
-            g->sound_event = g->countdown <= 0 ? 3 : 1;
+            game_sound(g, g->countdown <= 0 ? SOUND_GO : SOUND_COUNTDOWN, -1, 1, g->cars[0].pos);
         if (g->countdown <= 0) {
             g->screen = SCREEN_RACE;
             toast(g, "GO!", .9f);

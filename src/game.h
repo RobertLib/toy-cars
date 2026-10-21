@@ -32,6 +32,7 @@ typedef struct {
     int posts[2];
     FenceNode nodes[FENCE_NODES];
     float width, awake_time;
+    bool touched; // A car pressed into the net during the previous step.
 } FencePanel;
 typedef enum { PROP_CONE, PROP_TIRE, PROP_POST } PropKind;
 typedef struct {
@@ -118,6 +119,10 @@ typedef struct {
     float target_lane, stuck_time, air_time, ramp_cooldown, empty_time;
     float boost_cooldown;
     float reset_protection; // Seconds of collision immunity after recovery.
+    // Audio cues from the latest step: engine power (0..1), sideways tire speed
+    // in m/s, depth beyond the road edge in meters, and tires in water.
+    float throttle, slip, verge;
+    bool wet;
     float can_cooldown[MAX_CANS];
     int nearest, lap, checkpoints, collected, jumps;
     bool grounded, finished, dnf, offroad;
@@ -129,6 +134,33 @@ typedef struct {
     int quip_count, quip_topics[QUIP_MEMORY];
     float quip_marks[QUIP_MEMORY]; // Race progress when each recent topic was spoken.
 } Car;
+/* Sound cues raised by the simulation. A step can raise several; the audio
+   producer consumes them once per frame. */
+typedef enum {
+    SOUND_COUNTDOWN = 1,
+    SOUND_GO,
+    SOUND_FUEL,
+    SOUND_FINAL_LAP,
+    SOUND_TAKEOFF,
+    SOUND_LANDING,
+    SOUND_OUT_OF_FUEL,
+    SOUND_FINISH,
+    SOUND_CELEBRATION,
+    SOUND_BOOST,
+    SOUND_RECOVER,
+    SOUND_CAR_HIT,
+    SOUND_RAIL_HIT,
+    SOUND_CONE_HIT,
+    SOUND_TIRE_HIT,
+    SOUND_FENCE_HIT
+} SoundKind;
+#define MAX_SOUND_EVENTS 24
+typedef struct {
+    SoundKind kind;
+    int car;        // Car that caused it, or -1
+    float strength; // Impact or landing speed in m/s; 1 for plain cues
+    Vec3 pos;
+} SoundEvent;
 typedef enum { PARTICLE_DUST, PARTICLE_SPRAY, PARTICLE_RIPPLE } ParticleKind;
 typedef struct {
     Vec3 pos, vel;
@@ -211,7 +243,8 @@ typedef struct {
     uint32_t rng;
     bool test_mode;
     bool force_night; // Diagnostic override for every mode.
-    int sound_event;
+    SoundEvent sounds[MAX_SOUND_EVENTS];
+    int sound_count;
     float last_lap;
     unsigned result_id;
     float previous_best;
@@ -241,6 +274,8 @@ int game_championship_points(const Game *g, int driver);
 bool game_championship_precedes(const Game *g, int a, int b);
 int game_championship_rank(const Game *g);
 void game_tick(Game *g, Controls controls, float dt, bool autopilot);
+/* Queues a sound cue; the oldest cue gives way when the queue is full. */
+void game_sound(Game *g, SoundKind kind, int car, float strength, Vec3 pos);
 bool game_start_hint_visible(const Game *g);
 void game_ai(const Game *g, int index, Controls *out);
 void game_reset_car(Game *g, int index);

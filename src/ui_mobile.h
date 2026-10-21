@@ -179,7 +179,6 @@ static void mobile_garage(UI *u, Game *g) {
             g->profile.color = i;
             game_save_profile(g);
             ui_clear_input(u);
-            g->sound_event = 8;
         }
     }
     italic(u, 1, 30, b.x, cy + 44, WHITE, CAR_COLOR_NAMES[g->profile.color]);
