@@ -1068,7 +1068,7 @@ def build_track(theme,name):
     from export_guardrails import export_guardrails
     export_guardrails(os.path.join(ROOT,'assets/tracks',name+'.tcg'))
     cans=[]
-    for k,idx in enumerate([130,260,410,580]):cans.append((float(idx),(-1 if k%2 else 1)*3.8))
+    for k,idx in enumerate([40,130,240,360,455,580]):cans.append((float(idx),(-1 if k%2 else 1)*3.8))
     with open(os.path.join(ROOT,'assets/tracks',name+'.tcp'),'wb') as f:
         f.write(b'TCP1');f.write(struct.pack('<IIIf',N,len(cans),len(ramps),length))
         for p in path:f.write(struct.pack('<7f',*p))

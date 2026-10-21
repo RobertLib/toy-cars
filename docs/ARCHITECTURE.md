@@ -105,10 +105,10 @@ passing side based on traffic position, including lapped cars. Low fuel changes
 the target toward an available can, with a shorter lookahead and a slower
 approach for precise collection within the tire grip limit.
 All drivers, including the demonstration player, use the same vehicle update,
-fuel consumption and pickup decisions. Four cans per circuit sit near alternating
-road edges, restore 18 percentage points within a 1.5-meter collection radius,
-and have a 35-second per-driver cooldown so a lead car cannot deny the entire
-field access to fuel.
+fuel consumption and pickup decisions. Six evenly spaced cans per circuit sit
+near alternating road edges, restore 18 percentage points within a 1.5-meter
+collection radius, and have a 35-second per-driver cooldown so a lead car
+cannot deny the entire field access to fuel.
 
 Track projection searches a bounded neighborhood around the previous segment.
 Signed, unwrapped progress and sequential quarter-lap gates prevent finish-line

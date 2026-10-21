@@ -68,7 +68,7 @@ an internet connection to run.
   lobes (0.99 km, three crossings); Alpine Rush has long switchbacks and a
   diagonal return (0.96 km, two crossings). Each has bridges with open underpasses,
   smooth elevated approaches,
-  banking, three physical jump ramps and four fuel pickups near the road edges.
+  banking, three physical jump ramps and six fuel pickups near the road edges.
   [Compare the three layouts](screenshots/track-layouts.svg).
 - Habitat-specific surroundings: flowering meadow and hedgerow patches in
   Harvest Hills, dune grass, coastal scrub and driftwood on Sunshine Coast,
@@ -250,7 +250,7 @@ the accelerator in manual mode.
 | Fullscreen | F11 | Automatic | — |
 
 **Fuel:** a can restores 18 percentage points and respawns after 35 seconds for
-each driver independently. Four cans per circuit alternate between the road edges;
+each driver independently. Six cans per circuit alternate between the road edges;
 you need to steer toward them to collect them. Consumption scales with circuit
 length, and AI drivers plan fuel stops before entering reserve. A full tank cannot cover a complete
 race at race speed without pickups, and a recently collected can can still be
