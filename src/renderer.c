@@ -1189,8 +1189,8 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     r->draw_calls = 0;
     r->triangles = 0;
     r->bound_vao = 0;
-    // The garage stays a daylight studio; menus preview the chosen time of day.
-    r->night = g->profile.night && !garage ? 1.f : 0.f;
+    // The garage stays a daylight studio; menus preview the selected race.
+    r->night = game_night(g) && !garage ? 1.f : 0.f;
     r->sky = t->sky;
     if (r->night > 0)
         r->sky = rgb(.012f + t->sky.r * .07f, .02f + t->sky.g * .08f, .045f + t->sky.b * .1f);

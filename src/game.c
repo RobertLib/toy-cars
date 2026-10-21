@@ -441,6 +441,17 @@ void game_set_mode(Game *g, RaceMode mode) {
                           ? g->profile.championship_stages : 0;
 }
 
+// Each Championship stage has a fixed time of day: the final runs under the moon.
+const bool CHAMPIONSHIP_NIGHT[TRACK_COUNT] = {false, false, true};
+
+// Arcade races use the player's choice; menus preview the selected race.
+bool game_night(const Game *g) {
+    if (g->force_night)
+        return true;
+    return g->mode == MODE_CHAMPIONSHIP ? CHAMPIONSHIP_NIGHT[g->selected]
+                                        : g->profile.arcade_night;
+}
+
 const char *game_player_name(const Game *g) {
     return g->profile.initials_set ? g->profile.initials : "YOU";
 }

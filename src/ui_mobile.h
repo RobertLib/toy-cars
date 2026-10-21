@@ -145,9 +145,29 @@ static void mobile_menu(UI *u, Game *g) {
             game_set_mode(g, MODE_CHAMPIONSHIP);
     }
     float rx = b.x + left_w + 24, rw = b.w - left_w - 24;
-    if (!championship && mobile_button(u, (Rect){rx, by, rw, 72}, "TRACK RECORDS", false)) {
-        game_open_records(g);
-        ui_clear_input(u);
+    bool night = game_night(g);
+    if (championship) {
+        // The stage's fixed time of day, as a status rather than a button.
+        Rect status = {rx, by, rw, 72};
+        rounded(u, status, 14, PAPER);
+        time_icon(u, status.x + 40, status.y + 36, 13, night, INK, PAPER);
+        label(u, 1, 30, status.x + 72, status.y + 18, INK, night ? "NIGHT STAGE" : "DAY STAGE");
+    } else {
+        float tw = 112;
+        if (mobile_button(u, (Rect){rx, by, rw - 2 * (tw + 12), 72}, "TRACK RECORDS", false)) {
+            game_open_records(g);
+            ui_clear_input(u);
+        }
+        for (int i = 0; i < 2; i++) {
+            Rect choice = {rx + rw - (2 - i) * tw - (1 - i) * 12, by, tw, 72};
+            if (mobile_button(u, choice, i ? "NIGHT" : "DAY", night == (i == 1)) &&
+                night != (i == 1)) {
+                g->profile.arcade_night = i == 1;
+                g->sound_event = 8;
+                game_save_profile(g);
+                ui_clear_input(u);
+            }
+        }
     }
     rect(u, (Rect){0, cards_y - 8, u->width, u->height - cards_y + 8}, PAPER);
     float cw = (b.w - 24) / 3;
@@ -161,7 +181,9 @@ static void mobile_menu(UI *u, Game *g) {
         const char *status =
             !unlocked ? "LOCKED"
             : championship
-                ? i < g->profile.championship_stages ? "STAGE SCORED" : "CHAMPIONSHIP STAGE"
+                ? i < g->profile.championship_stages ? "STAGE SCORED"
+                  : CHAMPIONSHIP_NIGHT[i]                ? "NIGHT STAGE"
+                                                         : "DAY STAGE"
                 : "READY TO RACE";
         if (!championship && unlocked && g->profile.best[i] > 0) {
             char best[32];
@@ -241,16 +263,13 @@ static void mobile_settings(UI *u, Game *g) {
         }
     }
     bool *values[] = {&g->profile.auto_accel, &g->profile.touch, &g->profile.sound,
-                      &g->profile.music, &g->profile.night};
-    const char *names[] = {"AUTO ACCELERATE", "TOUCH CONTROLS", "SOUND EFFECTS", "MUSIC",
-                           "NIGHT RACING"};
-    // Rows stay clear of the ALL SET button on the shortest landscape canvas.
-    float by = b.y + b.h - 72, pitch = fminf(84, (by - 12 - b.y) / 5);
-    for (int i = 0; i < 5; i++) {
-        Rect row = {rx, b.y + i * pitch, rw, pitch - 12};
+                      &g->profile.music};
+    const char *names[] = {"AUTO ACCELERATE", "TOUCH CONTROLS", "SOUND EFFECTS", "MUSIC"};
+    for (int i = 0; i < 4; i++) {
+        Rect row = {rx, b.y + i * 84, rw, 72};
         rounded(u, row, 14, WHITE);
-        label(u, 1, 30, rx + 18, row.y + (row.h - 36) * .5f, INK, names[i]);
-        Rect toggle = {rx + rw - 118, row.y + (row.h - 44) * .5f, 100, 44};
+        label(u, 1, 30, rx + 18, row.y + 18, INK, names[i]);
+        Rect toggle = {rx + rw - 118, row.y + 14, 100, 44};
         rounded(u, toggle, 22, *values[i] ? ORANGE : MUTED);
         circle(u, toggle.x + (*values[i] ? 78 : 22), toggle.y + 22, 16, WHITE);
         label(u, 1, 20, toggle.x + (*values[i] ? 15 : 43), toggle.y + 9, WHITE,
@@ -261,6 +280,7 @@ static void mobile_settings(UI *u, Game *g) {
             ui_clear_input(u);
         }
     }
+    float by = b.y + b.h - 72;
     if (mobile_button(u, (Rect){b.x, by, 240, 72}, "RESET DATA", false)) {
         u->reset_failed = false;
         g->screen = SCREEN_RESET_DATA;

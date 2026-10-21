@@ -319,7 +319,7 @@ static void profile_defaults(Profile *p) {
                    .touch = true,
                    .sound = true,
                    .music = true,
-                   .night = false,
+                   .arcade_night = false,
                    .initials = "AAA"};
 }
 void profile_load(Profile *p) {
@@ -408,7 +408,7 @@ void profile_load(Profile *p) {
                 SDL_free(d);
                 return;
             }
-            p->night = night == 1;
+            p->arcade_night = night == 1;
             offset += used;
         }
         // Legacy saves retain unlocks and records; start a new scored Championship.
@@ -434,7 +434,7 @@ bool profile_save(const Profile *p) {
         for (int i = 0; i < CAR_COUNT; i++)
             len += SDL_snprintf(data + len, sizeof data - len, "%d%c",
                 p->championship_places[stage][i], i == CAR_COUNT - 1 ? '\n' : ' ');
-    len += SDL_snprintf(data + len, sizeof data - len, "OPTIONS %d\n", p->night);
+    len += SDL_snprintf(data + len, sizeof data - len, "OPTIONS %d\n", p->arcade_night);
     len += SDL_snprintf(data + len, sizeof data - len, "RECORDS %u %s %d\n",
                         p->record_serial, p->initials, p->initials_set);
     for (int track = 0; track < TRACK_COUNT; track++) {

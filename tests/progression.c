@@ -156,7 +156,7 @@ static void test_reset(Game *g, const char *path) {
     g->profile.difficulty = 2;
     g->profile.auto_accel = true;
     g->profile.touch = g->profile.sound = g->profile.music = false;
-    g->profile.night = true;
+    g->profile.arcade_night = true;
     EXPECT(profile_save(&g->profile));
     Profile before = g->profile;
     g->selected = 2;
@@ -189,19 +189,35 @@ static void test_reset(Game *g, const char *path) {
 }
 
 static void test_night_option(Game *g, const char *path) {
+    // Championship stages keep their own time of day; Arcade follows the choice.
+    profile_load(&g->profile);
+    for (int track = 0; track < TRACK_COUNT; track++) {
+        game_set_mode(g, MODE_CHAMPIONSHIP);
+        g->selected = track;
+        g->profile.arcade_night = !CHAMPIONSHIP_NIGHT[track];
+        EXPECT(game_night(g) == CHAMPIONSHIP_NIGHT[track]);
+        game_set_mode(g, MODE_ARCADE);
+        g->selected = track;
+        EXPECT(game_night(g) == g->profile.arcade_night);
+    }
+    EXPECT(!CHAMPIONSHIP_NIGHT[0] && CHAMPIONSHIP_NIGHT[TRACK_COUNT - 1]);
+    g->profile.arcade_night = false;
+    g->force_night = true;
+    EXPECT(game_night(g));
+    g->force_night = false;
     // Version 6 predates the option and keeps racing by day.
     const char *v6 = "TOYCARS 6\n0 1 0 1 1 1\n82 0 0\n0 0 0\n1\n"
                      "CHAMPIONSHIP 0 0 0\n0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0\n"
                      "0 0 0 0 0 0 0 0\nRECORDS 0 AAA 0\n0 0\n0 0\n0 0\n";
     EXPECT(SDL_SaveFile(path, v6, strlen(v6)));
     profile_load(&g->profile);
-    EXPECT(!g->profile.night && g->profile.championship_completed == 1);
+    EXPECT(!g->profile.arcade_night && g->profile.championship_completed == 1);
     EXPECT(g->profile.best[0] == 82);
-    g->profile.night = true;
+    g->profile.arcade_night = true;
     EXPECT(profile_save(&g->profile));
     Profile saved;
     profile_load(&saved);
-    EXPECT(saved.night && memcmp(&saved, &g->profile, sizeof saved) == 0);
+    EXPECT(saved.arcade_night && memcmp(&saved, &g->profile, sizeof saved) == 0);
     const char *invalid[] = {
         "TOYCARS 7\n0 1 0 1 1 1\n82 0 0\n0 0 0\n1\nCHAMPIONSHIP 0 0 0\n0 0 0 0 0 0 0 0\n"
         "0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0\nOPTIONS 2\nRECORDS 0 AAA 0\n0 0\n0 0\n0 0\n",
@@ -210,7 +226,7 @@ static void test_night_option(Game *g, const char *path) {
     for (size_t i = 0; i < SDL_arraysize(invalid); i++) {
         EXPECT(SDL_SaveFile(path, invalid[i], strlen(invalid[i])));
         profile_load(&saved);
-        EXPECT(!saved.night && saved.best[0] == 0 && saved.championship_completed == 0);
+        EXPECT(!saved.arcade_night && saved.best[0] == 0 && saved.championship_completed == 0);
     }
 }
 

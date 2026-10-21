@@ -311,9 +311,11 @@ The final overall top three earn gold, silver or bronze; other places lose.
 Starting another series clears its classifications but preserves unlocks and records.
 Championship always starts the next unscored stage; Arcade permits single-track replays.
 
-Profile version 7 adds an `OPTIONS` line with the night racing preference
-before the records; a missing or out-of-range value is treated as a malformed
-profile. Versions 1–6 load with daytime racing.
+Profile version 7 adds an `OPTIONS` line with the Arcade time of day before the
+records; a missing or out-of-range value is treated as a malformed profile.
+Versions 1–6 load with daytime Arcade races. Championship lighting is not saved:
+`CHAMPIONSHIP_NIGHT` fixes it per stage, and `game_night` resolves the current
+race (or menu preview) from the mode, the selected track and that choice.
 
 Profile version 6 also persists elimination separately from permanent unlocks.
 Version 5 retains its current series without retroactively applying elimination.

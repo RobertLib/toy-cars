@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
                    "  --fps                      Show FPS and rendering statistics\n"
                    "  --no-audio                 Do not open an audio device\n  "
                    "--touch                    Preview mobile layout and touch controls\n"
-                   "  --night                    Race at night (not saved unless settings change)\n");
+                   "  --night                    Race at night in every mode\n");
             return 0;
         } else {
             fprintf(stderr, "Unknown or incomplete option: %s\n", argv[i]);
@@ -212,8 +212,7 @@ int main(int argc, char **argv) {
         g->profile.touch = true;
         u->mobile = true;
     }
-    if (night)
-        g->profile.night = true;
+    g->force_night = night;
     g->test_mode = autoplay || frames > 0 || screen != NULL;
     if (screen) {
         if (!strcmp(screen, "race")) {
@@ -347,6 +346,11 @@ int main(int argc, char **argv) {
                 if (e.key.key == SDLK_TAB && g->screen == SCREEN_MENU)
                     game_set_mode(g,
                                   g->mode == MODE_CHAMPIONSHIP ? MODE_ARCADE : MODE_CHAMPIONSHIP);
+                if (e.key.key == SDLK_N && g->screen == SCREEN_MENU && g->mode == MODE_ARCADE) {
+                    g->profile.arcade_night = !g->profile.arcade_night;
+                    game_save_profile(g);
+                    ui_clear_input(u);
+                }
                 if (e.key.key == SDLK_F1)
                     u->show_stats = !u->show_stats;
                 if (e.key.key == SDLK_F2)

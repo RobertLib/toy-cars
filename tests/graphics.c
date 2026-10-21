@@ -719,13 +719,15 @@ static void test_night_rendering(Renderer *r, const Game *g) {
         game_start(scene);
         scene->screen = SCREEN_PAUSE;
         scene->weather = (Weather){.kind = WEATHER_CLEAR};
-        scene->profile.night = false;
+        // Arcade can race every circuit by day or night.
+        scene->mode = MODE_ARCADE;
+        scene->profile.arcade_night = false;
         r->camera_ready = false;
         renderer_draw(r, scene, 0, 1);
         int day_calls = r->draw_calls;
         glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
         glReadPixels(0, 0, r->width, r->height, GL_RGBA, GL_UNSIGNED_BYTE, day);
-        scene->profile.night = true;
+        scene->profile.arcade_night = true;
         renderer_draw(r, scene, 0, 1);
         int night_calls = r->draw_calls;
         glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
@@ -767,15 +769,26 @@ static void test_night_rendering(Renderer *r, const Game *g) {
     }
     // The garage remains a daylight studio whatever the race setting.
     scene->screen = SCREEN_GARAGE;
-    scene->profile.night = false;
+    scene->profile.arcade_night = false;
     renderer_draw(r, scene, 0, 1);
     glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
     glReadPixels(0, 0, r->width, r->height, GL_RGBA, GL_UNSIGNED_BYTE, day);
-    scene->profile.night = true;
+    scene->profile.arcade_night = true;
     renderer_draw(r, scene, 0, 1);
     glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
     glReadPixels(0, 0, r->width, r->height, GL_RGBA, GL_UNSIGNED_BYTE, night);
     EXPECT(memcmp(day, night, bytes) == 0, "garage ignores night racing");
+    // A Championship stage keeps its own time of day whatever Arcade last chose.
+    scene->mode = MODE_CHAMPIONSHIP;
+    scene->screen = SCREEN_PAUSE;
+    for (int track = 0; track < TRACK_COUNT; track++) {
+        scene->selected = track;
+        game_start(scene);
+        scene->screen = SCREEN_PAUSE;
+        scene->profile.arcade_night = !CHAMPIONSHIP_NIGHT[track];
+        renderer_draw(r, scene, 0, 1);
+        EXPECT((r->night > 0) == CHAMPIONSHIP_NIGHT[track], "Championship stage lighting");
+    }
 done:
     SDL_free(scene);
     SDL_free(day);
@@ -791,6 +804,7 @@ static void click_ui(UI *u, Game *g, Renderer *r, float x, float y) {
     u->clicks[0] = (UIClick){x, y, x, y, false};
     ui_draw(u, g, r);
 }
+
 
 static void capture_ui(UI *u, Game *g, Renderer *r, const char *name) {
     if (u->mobile) {
@@ -1184,10 +1198,38 @@ static void test_save_failure_ui(UI *u, Game *g, Renderer *r) {
     renderer_resize(r, w, h);
 }
 
+static void test_time_of_day_ui(UI *u, Game *g, Renderer *r) {
+    Profile before = g->profile;
+    g->screen = SCREEN_MENU;
+    game_set_mode(g, MODE_ARCADE);
+    g->profile.arcade_night = false;
+    bool tight = u->height - u->safe_top - u->safe_bottom < 560;
+    float cards_y = u->height - (tight ? 94 : 116) - 54 - u->safe_bottom;
+    float x = u->width - 572 - u->safe_right, y = cards_y - (tight ? 58 : 80) + 22;
+    click_ui(u, g, r, x + 160, y);
+    Profile disk;
+    profile_load(&disk);
+    EXPECT(g->profile.arcade_night && disk.arcade_night && game_night(g),
+           "Arcade night choice applies and is saved");
+    capture_ui(u, g, r, "menu-arcade-night");
+    click_ui(u, g, r, x + 60, y);
+    EXPECT(!g->profile.arcade_night && !game_night(g), "Arcade day choice applies");
+    // Championship shows each stage's fixed time of day; the same spot is inert.
+    g->profile.championship_completed = g->profile.championship_stages = TRACK_COUNT - 1;
+    game_set_mode(g, MODE_CHAMPIONSHIP);
+    click_ui(u, g, r, x + 160, y);
+    EXPECT(g->selected == TRACK_COUNT - 1 && game_night(g) && !g->profile.arcade_night,
+           "Championship final keeps its night setting");
+    capture_ui(u, g, r, "menu-championship-night");
+    g->profile = before;
+    game_set_mode(g, MODE_CHAMPIONSHIP);
+    EXPECT(game_save_profile(g), "restore time-of-day fixture");
+}
+
 static void test_settings_save_ui(UI *u, Game *g, Renderer *r) {
     char temp[2300];
     SDL_snprintf(temp, sizeof temp, "%sprofile.txt.tmp", pref_directory);
-    for (int setting = 0; setting < 6; setting++) {
+    for (int setting = 0; setting < 5; setting++) {
         EXPECT(game_reset_profile(g), "reset settings-save fixture");
         Profile before = g->profile;
         bool compact = u->height - u->safe_top - u->safe_bottom < 690;
@@ -1205,12 +1247,11 @@ static void test_settings_save_ui(UI *u, Game *g, Renderer *r) {
             EXPECT(g->profile.difficulty == 0, "difficulty click applies requested level");
         } else {
             int index = setting - 2;
-            float pitch = compact ? (by - y - 84) / 4 : fminf(72, (by - y - 95) / 4);
+            float pitch = compact ? (by - y - 84) / 3 : 72;
             click_ui(u, g, r, m + 20, y + (compact ? 74 : 85) + index * pitch + 10);
             const bool values[] = {g->profile.auto_accel, g->profile.sound,
-                                   g->profile.music, g->profile.night};
-            const bool previous[] = {before.auto_accel, before.sound, before.music,
-                                     before.night};
+                                   g->profile.music};
+            const bool previous[] = {before.auto_accel, before.sound, before.music};
             EXPECT(values[index] != previous[index], "settings click applies requested toggle");
         }
         EXPECT(game_save_warning(g), "every settings and garage save failure is visible");
@@ -1308,6 +1349,12 @@ static void test_mobile_ui(UI *u, Game *g, Renderer *r) {
     EXPECT(g->mode == MODE_ARCADE, "mobile mode selector opens Arcade");
     click_ui(u, g, r, x + w - 50, bottom - 80);
     EXPECT(g->selected == 2, "mobile cards preview locked tracks");
+    g->profile.arcade_night = false;
+    click_ui(u, g, r, x + w - 56, bottom - 192);
+    EXPECT(g->profile.arcade_night && game_night(g), "mobile Arcade night choice");
+    capture_ui(u, g, r, "mobile-arcade-night");
+    click_ui(u, g, r, x + w - 180, bottom - 192);
+    EXPECT(!g->profile.arcade_night, "mobile Arcade day choice");
     capture_ui(u, g, r, "mobile-locked");
     click_ui(u, g, r, x + 100, bottom - 192);
     EXPECT(g->screen == SCREEN_MENU && g->mode == MODE_CHAMPIONSHIP && g->selected == 0,
@@ -1775,6 +1822,7 @@ static void test_ui_draw(UI *u, Game *g, Renderer *r) {
         test_save_failure_ui(u, g, r);
         test_settings_save_ui(u, g, r);
         test_reset_ui(u, g, r);
+        test_time_of_day_ui(u, g, r);
         g->test_mode = true;
         game_start(g);
         lifecycle_countdown = g->countdown;

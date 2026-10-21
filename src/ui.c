@@ -170,6 +170,46 @@ static bool button(UI *u, Rect r, const char *s, bool primary) {
                  primary ? WHITE : INK, s);
     return clicked;
 }
+// A sun or a crescent moon from plain shapes; the moon's bite uses the backdrop.
+static void time_icon(UI *u, float x, float y, float s, bool night, Color c, Color bg) {
+    if (night) {
+        circle(u, x, y, s, c);
+        circle(u, x + s * .48f, y - s * .32f, s * .80f, bg);
+        return;
+    }
+    circle(u, x, y, s * .52f, c);
+    for (int i = 0; i < 8; i++) {
+        float a = i * PI / 4;
+        line(u, x + cosf(a) * s * .80f, y + sinf(a) * s * .80f, x + cosf(a) * s * 1.12f,
+             y + sinf(a) * s * 1.12f, s * .20f, c);
+    }
+}
+// Arcade picks the time of day per race; a Championship stage only shows its own.
+static void time_of_day(UI *u, Game *g, Rect r) {
+    bool night = game_night(g);
+    rounded(u, r, 12, WHITE);
+    if (g->mode == MODE_CHAMPIONSHIP) {
+        time_icon(u, r.x + 28, r.y + r.h * .5f, 8, night, INK, WHITE);
+        label(u, 0, 15, r.x + 48, r.y + (r.h - 21) * .5f, INK,
+              night ? "NIGHT STAGE" : "DAY STAGE");
+        return;
+    }
+    float w = (r.w - 14) * .5f;
+    for (int i = 0; i < 2; i++) {
+        Rect b = {r.x + 5 + i * (w + 4), r.y + 5, w, r.h - 10};
+        bool active = night == (i == 1);
+        Color bg = active ? INK : WHITE, fg = active ? WHITE : INK;
+        rounded(u, b, 8, bg);
+        time_icon(u, b.x + 22, b.y + b.h * .5f, 7, i == 1, fg, bg);
+        label(u, 0, 15, b.x + 38, b.y + (b.h - 21) * .5f, fg, i ? "NIGHT" : "DAY");
+        if (hit(u, b) && !active) {
+            g->profile.arcade_night = i == 1;
+            g->sound_event = 8;
+            game_save_profile(g);
+            ui_clear_input(u);
+        }
+    }
+}
 static void checker(UI *u, float x, float y, float s, Color a, Color b) {
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
@@ -607,8 +647,10 @@ static void menu(UI *u, Game *g) {
         SDL_strlcpy(goal, "Pick an unlocked track. Chase your personal best.", sizeof goal);
     label(u, 0, 18, m, yy, MUTED, goal);
     label(u, 0, 15, m, yy + 27, MUTED,
-          championship ? "Stages 1-2: finish top 4 to advance. Final: overall top 3 wins a medal."
-                       : "Single races. Unlock more tracks in Championship.");
+          !championship ? "Single races. Pick day or night. Unlock more tracks in Championship."
+          : CHAMPIONSHIP_NIGHT[TRACK_COUNT - 1]
+              ? "Stages 1-2: finish top 4 to advance. Night final: overall top 3 wins a medal."
+              : "Stages 1-2: finish top 4 to advance. Final: overall top 3 wins a medal.");
     float by = yy + (compact ? 48 : 65), button_h = compact ? 50 : 58;
     if (unlocked) {
         if (button(u, (Rect){m, by, 231, button_h},
@@ -644,6 +686,7 @@ static void menu(UI *u, Game *g) {
     SDL_snprintf(s, sizeof s, "%.0f M LOOP    /    %.0f M CLIMB    /    3 JUMPS", t->length,
                  t->elevation);
     center_label(u, 0, 13, u->width - 194 - u->safe_right, stats_y + 12, INK, s);
+    time_of_day(u, g, (Rect){u->width - 572 - u->safe_right, stats_y, 220, 44});
     if (!tight) {
         caps(u, m, cards_y - 32, INK,
              championship ? "YOUR CHAMPIONSHIP ROUTE" : "PICK YOUR PLAYGROUND");
@@ -686,6 +729,9 @@ static void menu(UI *u, Game *g) {
             circle(u, x + cw - 18, cards_y + 20, 6, tr->accent);
             circle(u, x + cw - 18, cards_y + 20, 2, WHITE);
         }
+        if (championship)
+            time_icon(u, x + cw - 40, cards_y + 20, 6, CHAMPIONSHIP_NIGHT[i], MUTED,
+                      open ? WHITE : rgb(.88, .89, .85));
         if (hit(u, card)) {
             g->selected = i;
             g->sound_event = 8;
@@ -797,16 +843,13 @@ static void settings(UI *u, Game *g) {
             ui_clear_input(u);
         }
     }
-    bool *values[] = {&g->profile.auto_accel, &g->profile.sound, &g->profile.music,
-                      &g->profile.night};
-    const char *names[] = {"AUTO ACCELERATE", "SOUND EFFECTS", "MUSIC", "NIGHT RACING"};
+    bool *values[] = {&g->profile.auto_accel, &g->profile.sound, &g->profile.music};
+    const char *names[] = {"AUTO ACCELERATE", "SOUND EFFECTS", "MUSIC"};
     const char *desc[] = {"Accelerate automatically while you steer.",
                           "Engine, tires, pickups and a perfect landing.",
-                          "An original, laid-back electronic soundtrack.",
-                          "Race under the moon with your headlights on."};
-    for (int i = 0; i < 4; i++) {
-        float pitch = compact ? (by - y - 84) / 4 : fminf(72, (by - y - 95) / 4),
-              yy = y + (compact ? 74 : 85) + i * pitch;
+                          "An original, laid-back electronic soundtrack."};
+    for (int i = 0; i < 3; i++) {
+        float pitch = compact ? (by - y - 84) / 3 : 72, yy = y + (compact ? 74 : 85) + i * pitch;
         line(u, x, yy + pitch - 3, x + w, yy + pitch - 3, 1, rgb(.84, .85, .80));
         label(u, 1, compact ? 23 : 25, x + 7, yy + 1, INK, names[i]);
         label(u, 0, compact ? 14 : 15, x + 280, yy + 8, MUTED, desc[i]);

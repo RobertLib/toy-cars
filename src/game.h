@@ -160,7 +160,7 @@ typedef struct {
 typedef struct {
     int color, difficulty;
     bool auto_accel, touch, sound, music;
-    bool night; // Race under moonlight with headlights.
+    bool arcade_night; // Championship stages set their own time of day.
     float best[TRACK_COUNT];
     int medals[TRACK_COUNT];
     int championship_completed; // Permanent track unlock progress.
@@ -198,6 +198,7 @@ typedef struct {
     char toast[80];
     uint32_t rng;
     bool test_mode;
+    bool force_night; // Diagnostic override for every mode.
     int sound_event;
     float last_lap;
     unsigned result_id;
@@ -211,6 +212,7 @@ typedef struct {
 } Game;
 extern const Color CAR_COLORS[6];
 extern const char *CAR_COLOR_NAMES[6];
+extern const bool CHAMPIONSHIP_NIGHT[TRACK_COUNT];
 bool game_load(Game *g);
 void track_place_boosts(Track *t);
 void game_start(Game *g);
@@ -219,6 +221,7 @@ void props_tick(Game *g, float dt);
 void game_continue(Game *g);
 bool game_track_unlocked(const Profile *p, int track);
 void game_set_mode(Game *g, RaceMode mode);
+bool game_night(const Game *g);
 int game_next_track(const Game *g);
 bool game_championship_finished(const Game *g);
 int game_championship_points(const Game *g, int driver);
