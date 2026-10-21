@@ -805,6 +805,12 @@ static void click_ui(UI *u, Game *g, Renderer *r, float x, float y) {
     ui_draw(u, g, r);
 }
 
+// Lay the race menu out for the current state, then click the middle of a target.
+static void click_menu(UI *u, Game *g, Renderer *r, const Rect *target) {
+    ui_draw(u, g, r);
+    click_ui(u, g, r, target->x + target->w * .5f, target->y + target->h * .5f);
+}
+
 
 static void capture_ui(UI *u, Game *g, Renderer *r, const char *name) {
     if (u->mobile) {
@@ -829,23 +835,19 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
     memset(g->profile.championship_places, 0, sizeof g->profile.championship_places);
     g->screen = SCREEN_MENU;
     game_set_mode(g, MODE_CHAMPIONSHIP);
-    float m = 46 + u->safe_left, hero = 105 + u->safe_top;
-    float card_y = u->height - 116 - 54 - u->safe_bottom;
-    float cw = (u->width - m - (46 + u->safe_right) - 32) / 3;
-    bool compact = u->height - u->safe_top - u->safe_bottom < 690;
-    float start_y = hero + (compact ? 151 + 48 : 205 + 65) + 20;
-    click_ui(u, g, r, m + 290, hero + 50);
+    const MenuLayout *menu = &u->menu_layout;
+    click_menu(u, g, r, &menu->modes[1]);
     EXPECT(g->mode == MODE_ARCADE, "mode button selects Arcade");
-    click_ui(u, g, r, m + 2 * (cw + 16) + 40, card_y + 40);
+    click_menu(u, g, r, &menu->cards[2]);
     EXPECT(g->selected == 2, "locked cards allow a preview");
     capture_ui(u, g, r, "arcade-locked");
-    click_ui(u, g, r, m + 80, start_y);
+    click_menu(u, g, r, &menu->start);
     EXPECT(g->screen == SCREEN_MENU, "locked track has no active start button");
-    click_ui(u, g, r, m + 300, start_y);
+    click_menu(u, g, r, &menu->secondary);
     EXPECT(g->mode == MODE_CHAMPIONSHIP && g->selected == 0,
            "locked preview offers the current Championship stage");
     capture_ui(u, g, r, "championship-menu");
-    click_ui(u, g, r, m + 80, start_y);
+    click_menu(u, g, r, &menu->start);
     EXPECT(g->screen == SCREEN_COUNTDOWN, "current stage starts from its menu button");
     EXPECT(strcmp(game_player_name(g), "YOU") == 0 && strcmp(g->cars[0].name, "YOU") == 0,
            "a new player's race label is YOU before initials are confirmed");
@@ -1005,7 +1007,7 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
         EXPECT(g->screen == SCREEN_MENU && g->selected == 0,
                "elimination result returns to the opening track in the menu");
         capture_ui(u, g, r, "championship-eliminated-menu");
-        click_ui(u, g, r, m + 80, start_y);
+        click_menu(u, g, r, &menu->start);
         EXPECT(g->screen == SCREEN_COUNTDOWN && g->selected == 0 &&
                    !g->profile.championship_eliminated && g->profile.championship_stages == 0,
                "new championship button clears the eliminated run");
@@ -1203,21 +1205,19 @@ static void test_time_of_day_ui(UI *u, Game *g, Renderer *r) {
     g->screen = SCREEN_MENU;
     game_set_mode(g, MODE_ARCADE);
     g->profile.arcade_night = false;
-    bool tight = u->height - u->safe_top - u->safe_bottom < 560;
-    float cards_y = u->height - (tight ? 94 : 116) - 54 - u->safe_bottom;
-    float x = u->width - 572 - u->safe_right, y = cards_y - (tight ? 58 : 80) + 22;
-    click_ui(u, g, r, x + 160, y);
+    click_menu(u, g, r, &u->menu_layout.times[1]);
+    Rect night = u->menu_layout.times[1];
     Profile disk;
     profile_load(&disk);
     EXPECT(g->profile.arcade_night && disk.arcade_night && game_night(g),
            "Arcade night choice applies and is saved");
     capture_ui(u, g, r, "menu-arcade-night");
-    click_ui(u, g, r, x + 60, y);
+    click_menu(u, g, r, &u->menu_layout.times[0]);
     EXPECT(!g->profile.arcade_night && !game_night(g), "Arcade day choice applies");
     // Championship shows each stage's fixed time of day; the same spot is inert.
     g->profile.championship_completed = g->profile.championship_stages = TRACK_COUNT - 1;
     game_set_mode(g, MODE_CHAMPIONSHIP);
-    click_ui(u, g, r, x + 160, y);
+    click_ui(u, g, r, night.x + night.w * .5f, night.y + night.h * .5f);
     EXPECT(g->selected == TRACK_COUNT - 1 && game_night(g) && !g->profile.arcade_night,
            "Championship final keeps its night setting");
     capture_ui(u, g, r, "menu-championship-night");
@@ -1345,21 +1345,24 @@ static void test_mobile_ui(UI *u, Game *g, Renderer *r) {
     g->screen = SCREEN_MENU;
     game_set_mode(g, MODE_CHAMPIONSHIP);
     capture_ui(u, g, r, "mobile-championship");
-    click_ui(u, g, r, x + w * .48f, 138);
+    const MenuLayout *menu = &u->menu_layout;
+    click_menu(u, g, r, &menu->modes[1]);
     EXPECT(g->mode == MODE_ARCADE, "mobile mode selector opens Arcade");
-    click_ui(u, g, r, x + w - 50, bottom - 80);
+    click_menu(u, g, r, &menu->cards[2]);
     EXPECT(g->selected == 2, "mobile cards preview locked tracks");
     g->profile.arcade_night = false;
-    click_ui(u, g, r, x + w - 56, bottom - 192);
+    click_menu(u, g, r, &menu->times[1]);
     EXPECT(g->profile.arcade_night && game_night(g), "mobile Arcade night choice");
     capture_ui(u, g, r, "mobile-arcade-night");
-    click_ui(u, g, r, x + w - 180, bottom - 192);
+    click_menu(u, g, r, &menu->times[0]);
     EXPECT(!g->profile.arcade_night, "mobile Arcade day choice");
     capture_ui(u, g, r, "mobile-locked");
-    click_ui(u, g, r, x + 100, bottom - 192);
+    EXPECT(menu->start.h >= 72 && menu->start.w >= 400,
+           "the mobile start button stays a large thumb target");
+    click_menu(u, g, r, &menu->start);
     EXPECT(g->screen == SCREEN_MENU && g->mode == MODE_CHAMPIONSHIP && g->selected == 0,
            "mobile locked track action returns to the unlocked championship stage");
-    click_ui(u, g, r, x + 100, bottom - 192);
+    click_menu(u, g, r, &menu->start);
     EXPECT(g->screen == SCREEN_COUNTDOWN, "large mobile start button starts countdown");
     g->profile.touch = true;
     g->profile.auto_accel = true;

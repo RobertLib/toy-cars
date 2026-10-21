@@ -40,6 +40,10 @@ typedef struct {
     bool car_visible[CAR_COUNT];
     Color sky;
     float night;
+    // The main menu films the selected track. Its layout sets hero_frame, a
+    // sideways lens shift that keeps the cars clear of the menu panel.
+    bool hero;
+    float hero_frame;
     int width, height, draw_calls, triangles;
     float ui_width, ui_height, alpha;
     GLuint bound_vao, default_fbo;

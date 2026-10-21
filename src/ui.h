@@ -24,6 +24,10 @@ typedef struct {
     float press_x, press_y, x, y;
     bool consumed;
 } UIClick;
+// Targets of the race menu as last drawn, shared by both layouts and scripted tests.
+typedef struct {
+    Rect modes[2], start, secondary, times[2], cards[TRACK_COUNT];
+} MenuLayout;
 typedef struct {
     GLuint program, vao, vbo, white, current_texture;
     UIFont fonts[2];
@@ -48,6 +52,7 @@ typedef struct {
     bool menu_seen;
     Screen menu_screen;
     float menu_transition_start, menu_fade, nav_from, nav_position;
+    MenuLayout menu_layout;
 } UI;
 bool ui_init(UI *u);
 void ui_size(UI *u, int w, int h, SDL_Window *window);

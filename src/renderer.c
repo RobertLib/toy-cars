@@ -203,7 +203,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "uniform sampler2D uOpaque,uDepth,uShadow;uniform mat4 uVP,uLight;"
     "uniform vec3 uEye,uSky;uniform vec2 uResolution,uDepthParams;"
     "uniform vec4 uViewport,uWakes[8];uniform float uTime,uOvercast,uNight;"
-    "uniform bool uOrtho;uniform int uTrack;"
+    "uniform int uTrack;"
     "float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
     "float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);"
     "return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),"
@@ -214,8 +214,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "vec2 u=f*f*f*(f*(f*6.-15.)+10.),du=30.*f*f*(f*(f-2.)+1.);"
     "float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+1.);"
     "return du*(vec2(b-a,c-a)+(a-b-c+d)*u.yx);}"
-    "float distanceAt(float d){float z=d*2.-1.;return uOrtho?"
-    "(uDepthParams.y-z)/uDepthParams.x:uDepthParams.y/(z+uDepthParams.x);}"
+    "float distanceAt(float d){float z=d*2.-1.;return uDepthParams.y/(z+uDepthParams.x);}"
     "vec2 screenUV(vec4 clip){return (clip.xy/clip.w*.5+.5)*uViewport.zw+uViewport.xy;}"
     "vec2 safeUV(vec2 uv){vec2 px=1./uResolution;"
     "return clamp(uv,uViewport.xy+px,uViewport.xy+uViewport.zw-px);}",
@@ -260,7 +259,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     // Short screen-space rays reflect nearby banks, trees and cars; sky fills
     // off-screen rays. Depth comes from the opaque scene, never the water itself.
     "vec3 reflection=sky;"
-    "if(!uOrtho){for(int i=1;i<=16;i++){float stepD=float(i)*1.2;"
+    "{for(int i=1;i<=16;i++){float stepD=float(i)*1.2;"
     "vec3 ray=vPos+n*.18+reflected*stepD;vec4 clip=uVP*vec4(ray,1.);"
     "if(clip.w<=0.)break;vec2 sampleUV=screenUV(clip);"
     "if(any(lessThan(sampleUV,uViewport.xy))||any(greaterThan(sampleUV,uViewport.xy+uViewport.zw)))break;"
@@ -280,7 +279,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "col+=mix(vec3(1.,.94,.76),vec3(.62,.70,.88),uNight)*glint*lit*sunlight;"
     "float foam=shore*smoothstep(.68,.9,noise(q*3.))*moving;"
     "col=mix(col,vec3(.75,.83,.79)*mix(1.,.25,uNight),foam*.16);"
-    "float fog=smoothstep(85.,190.,length(uEye-vPos));if(uOrtho)fog=0.;"
+    "float fog=smoothstep(85.,190.,length(uEye-vPos));"
     "col=mix(col,uSky,fog*.88);"
     "frag=vec4(col,smoothstep(0.,.065,depth));}"};
 static const char *spray_vs = GLSL
@@ -310,7 +309,7 @@ static const char *post_vs =
          "p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.-1.,0.,1.);}";
 static const char *post_fs = GLSL
     "in vec2 uv;out vec4 frag;uniform sampler2D uScene;uniform vec2 uResolution;uniform float "
-    "uVignette,uSpeedBlur;\n"
+    "uVignette,uSpeedBlur,uFade;\n"
     "void main(){vec2 px=1./uResolution;vec3 c=texture(uScene,uv).rgb;vec3 "
     "n=texture(uScene,uv+vec2(0,px.y)).rgb,s=texture(uScene,uv-vec2(0,px.y)).rgb,e=texture(uScene,"
     "uv+vec2(px.x,0)).rgb,w=texture(uScene,uv-vec2(px.x,0)).rgb;vec3 l=vec3(.299,.587,.114);float "
@@ -323,7 +322,8 @@ static const char *post_fs = GLSL
     "for(int i=1;i<=8;i++){vec2 tap=uv-ray*(blur*float(i)/8.);"
     "trail+=texture(uScene,clamp(tap,px*.5,1.-px*.5)).rgb;}"
     "c=mix(c,trail/9.,.85);}float "
-    "vign=clamp(pow(16.*q.x*q.y,.22),.65,1.);c*=mix(1.,vign,uVignette);frag=vec4(c,1.);}";
+    "vign=clamp(pow(16.*q.x*q.y,.22),.65,1.);c*=mix(1.,vign,uVignette)*(1.-uFade);"
+    "frag=vec4(c,1.);}";
 
 static GLuint render_program_sources(const char *vs, const char *const *fs, int fs_count) {
     GLuint shaders[2] = {glCreateShader(GL_VERTEX_SHADER), glCreateShader(GL_FRAGMENT_SHADER)};
@@ -629,6 +629,7 @@ static void create_primitives(Renderer *r) {
 bool renderer_init(Renderer *r) {
     memset(r, 0, sizeof *r);
     r->last_track = -1;
+    r->hero_frame = .30f;
     r->shader = render_program(world_vs, world_fs);
     r->depth_shader = render_program(depth_vs, depth_fs);
     r->post_shader = render_program(post_vs, post_fs);
@@ -841,6 +842,24 @@ static Vec3 transform_point(Mat4 m, Vec3 p) {
               m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]);
 }
 
+// The menu pack races in a tight bunch, the player's car chasing at its tail
+// so the chase camera never meets a car from behind.
+#define HERO_SPEED 19.f
+#define HERO_SHOT 6.5f
+#define HERO_GAP 7.5f
+static int hero_slot(int car) {
+    return (car + CAR_COUNT - 1) % CAR_COUNT;
+}
+static float hero_distance(const Game *g, int car) {
+    int slot = hero_slot(car);
+    float surge = sinf(g->clock * .45f + slot * 2.1f) * 2.2f;
+    return g->clock * HERO_SPEED + 170 - slot * HERO_GAP + surge;
+}
+static float hero_lane(const Game *g, int car) {
+    int slot = hero_slot(car);
+    return (slot % 2 ? 1.7f : -1.7f) + sinf(g->clock * .31f + slot * 1.3f) * .35f;
+}
+
 // Interpolated once per frame so both passes and the night lamps agree.
 static void update_cars(Renderer *r, const Game *g, bool menu) {
     const Track *t = &g->tracks[g->selected];
@@ -850,10 +869,12 @@ static void update_cars(Renderer *r, const Game *g, bool menu) {
         r->car_visible[i] = true;
         if (menu) {
             Vec3 d;
-            pos = track_at(t, g->clock * 13.f - i * 12 + 170, (i % 2 ? 1 : -1) * 1.7f, &d);
+            pos = track_at(t, hero_distance(g, i), hero_lane(g, i), &d);
             yaw = atan2f(d.x, d.z);
             car_surface_pose(t, &pos, yaw, &pitch, &roll);
-            r->car_colors[i] = CAR_COLORS[(i + g->profile.color) % 6];
+            // Rivals cycle through the other liveries so the player's car stays unique.
+            int color = g->profile.color;
+            r->car_colors[i] = CAR_COLORS[i ? (color + 1 + (i - 1) % 5) % 6 : color];
         } else {
             const Car *c = &g->cars[i];
             // Use simulation time so blinking freezes with the game, including shadows.
@@ -947,7 +968,9 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     Track const *t = &g->tracks[g->selected];
     if (garage) {
         Mat4 platform = mmul(translate(v3(0, -.18f, 0)), scale3(3.5f, .16f, 3.5f));
-        draw_mesh(r, r->cube, platform, rgb(.89, .87, .80), depth);
+        draw_mesh(r, r->cube, platform, rgb(.17f, .18f, .20f), depth);
+        Mat4 rim = mmul(translate(v3(0, -.36f, 0)), scale3(3.62f, .05f, 3.62f));
+        draw_mesh(r, r->cube, rim, rgb(.89f, .29f, .12f), depth);
         Mat4 model = mmul(rotate_y(g->clock * .20f + .5f), scale3(1.65f, 1.65f, 1.65f));
         draw_mesh(r, r->car, model, CAR_COLORS[g->profile.color], depth);
         return;
@@ -977,7 +1000,7 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
         draw_props(r, g, depth);
     if (!menu)
         draw_helicopter(r, g, depth);
-    if (!depth && !menu)
+    if (!depth)
         draw_mesh(r, r->plane, identity(), r->sky, depth);
     for (int i = 0; i < CAR_COUNT; i++)
         if (r->car_visible[i])
@@ -1058,7 +1081,7 @@ static void cloud_uniforms(GLuint program, const Renderer *r, const Game *g, boo
     glUniform1f(glGetUniformLocation(program, "uCloudAmount"), garage ? 0 : amount);
 }
 
-static void draw_water(Renderer *r, const Game *g, bool overview, Color sky, float overcast,
+static void draw_water(Renderer *r, const Game *g, Color sky, float overcast,
                        int vx, int vy, int vw, int vh) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, r->scene_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, r->opaque_fbo);
@@ -1071,18 +1094,17 @@ static void draw_water(Renderer *r, const Game *g, bool overview, Color sky, flo
     uniform_matrix(p, "uLight", r->light_vp);
     uniform_vec(p, "uEye", r->eye);
     uniform_vec(p, "uSky", v3(sky.r, sky.g, sky.b));
-    cloud_uniforms(p, r, g, overview, false);
+    cloud_uniforms(p, r, g, r->hero, false);
     glUniform1f(glGetUniformLocation(p, "uTime"), r->crowd_time);
     glUniform1f(glGetUniformLocation(p, "uOvercast"), overcast);
     glUniform1f(glGetUniformLocation(p, "uNight"), r->night);
-    glUniform1i(glGetUniformLocation(p, "uOrtho"), overview);
     glUniform1i(glGetUniformLocation(p, "uTrack"), g->selected);
     glUniform2f(glGetUniformLocation(p, "uResolution"), r->width, r->height);
     glUniform2f(glGetUniformLocation(p, "uDepthParams"), r->projection.m[10], r->projection.m[14]);
     glUniform4f(glGetUniformLocation(p, "uViewport"), (float)vx/r->width, (float)vy/r->height,
                 (float)vw/r->width, (float)vh/r->height);
     float wakes[CAR_COUNT * 4] = {0};
-    for (int i = 0; i < CAR_COUNT && !overview; i++) {
+    for (int i = 0; i < CAR_COUNT && !r->hero; i++) {
         const Car *c = &g->cars[i];
         float level;
         wakes[i*4] = c->pos.x; wakes[i*4+1] = c->pos.z;
@@ -1172,15 +1194,65 @@ static void draw_spray(Renderer *r, const Game *g) {
     r->bound_vao = 0;
 }
 
+// The main menu films the pack like a race broadcast, cutting between four
+// angles on a fixed beat. Returns how far each cut dips to black.
+static float hero_camera(Renderer *r, const Game *g, float aspect, float *blur) {
+    const Track *t = &g->tracks[g->selected];
+    int shot = (int)(g->clock / HERO_SHOT) % 4;
+    float local = fmodf(g->clock, HERO_SHOT);
+    float player = hero_distance(g, 0), lead = hero_distance(g, 1);
+    float middle = lead - HERO_GAP * (CAR_COUNT - 1) * .5f;
+    float fov = 50;
+    *blur = 0;
+    if (shot == 0) {
+        // Chasing the player's bumper, looking up the road at the leaders.
+        float lane = hero_lane(g, 0);
+        r->eye = vadd(track_at(t, player - 10.5f, lane, NULL), v3(0, 3.4f, 0));
+        r->target = vadd(track_at(t, player + 18, lane, NULL), v3(0, .3f, 0));
+        *blur = .035f;
+    } else if (shot == 1) {
+        // A helicopter circling the bunch; each pass starts from a new side.
+        Vec3 c = track_at(t, middle, 0, NULL);
+        float a = (int)(g->clock / (HERO_SHOT * 4)) * 2.4f + local * .16f;
+        r->eye = vadd(c, v3(sinf(a) * 27, 13, cosf(a) * 27));
+        r->target = vadd(c, v3(0, 1, 0));
+        fov = 46;
+    } else if (shot == 2) {
+        // Low on the tarmac ahead of the leader, with the field charging in.
+        r->eye = vadd(track_at(t, lead + 7.5f, .6f, NULL), v3(0, 1.15f, 0));
+        r->target = vadd(track_at(t, lead - 16, 0, NULL), v3(0, 1.1f, 0));
+        fov = 42;
+        *blur = .03f;
+    } else {
+        // A trackside camera on the outside of the next bend; the pack sweeps past.
+        float s = (g->clock - local) * HERO_SPEED + 170 + 64;
+        Vec3 ahead = track_at(t, s + 22, 0, NULL), sides[2];
+        for (int i = 0; i < 2; i++)
+            sides[i] = track_at(t, s, i ? 13.f : -13.f, NULL);
+        Vec3 p = vlen(vsub(sides[0], ahead)) > vlen(vsub(sides[1], ahead)) ? sides[0] : sides[1];
+        float ground = track_height(t, vadd(p, v3(0, 8, 0)), NULL);
+        p.y = fmaxf(p.y + 3.2f, ground + 1.8f);
+        r->eye = p;
+        r->target = vadd(track_at(t, middle + 4, 0, NULL), v3(0, .8f, 0));
+        fov = 30;
+    }
+    r->projection = perspective(fov * PI / 180, aspect, .3f, 400);
+    // Shift the lens so the cars sit beside the menu panel, above the track cards.
+    r->projection.m[8] -= r->hero_frame;
+    r->projection.m[9] -= .12f;
+    return 1 - clampf(fminf(local, HERO_SHOT - local) / .2f, 0, 1);
+}
+
 void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     if (g->screen != SCREEN_PAUSE)
         r->crowd_time += clampf(dt, 0, .1f);
     bool menu =
         g->screen == SCREEN_MENU || g->screen == SCREEN_HELP || g->screen == SCREEN_SETTINGS ||
         g->screen == SCREEN_RECORDS || g->screen == SCREEN_RESET_DATA;
-    bool garage = g->screen == SCREEN_GARAGE;
-    bool overview = menu || garage;
-    if (!overview)
+    bool garage = g->screen == SCREEN_GARAGE, calm = menu || garage;
+    // Menu pages run over a full-screen broadcast of the selected track.
+    r->hero = menu;
+    if (!calm)
         update_helicopter(r, g, dt);
     else
         r->helicopter_ready = false;
@@ -1194,30 +1266,27 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     r->sky = t->sky;
     if (r->night > 0)
         r->sky = rgb(.012f + t->sky.r * .07f, .02f + t->sky.g * .08f, .045f + t->sky.b * .1f);
-    Color clear = overview ? rgb(.956f, .949f, .922f) : r->sky;
-    float overcast = overview || g->weather.kind == WEATHER_WIND ? 0 : g->weather.intensity;
+    // The garage is a dark showroom matching the menus.
+    Color clear = garage ? rgb(.035f, .048f, .062f) : r->sky;
+    float overcast = calm || g->weather.kind == WEATHER_WIND ? 0 : g->weather.intensity;
     Color haze = r->night > 0 ? rgb(.10f, .12f, .15f) : rgb(.53f, .61f, .69f);
     clear.r = lerpf(clear.r, haze.r, overcast * .75f);
     clear.g = lerpf(clear.g, haze.g, overcast * .75f);
     clear.b = lerpf(clear.b, haze.b, overcast * .75f);
     int vx = 0, vy = 0, vw = r->width, vh = r->height;
-    if (overview) {
+    if (garage) {
         vx = (int)(r->width * .37f);
         vy = (int)(r->height * .265f);
         vw = r->width - vx;
         vh = (int)(r->height * .645f);
     }
-    float aspect = (float)vw / vh;
-    if (garage) {
+    float aspect = (float)vw / vh, fade = 0, blur = 0;
+    if (menu) {
+        fade = hero_camera(r, g, aspect, &blur);
+    } else if (garage) {
         r->eye = v3(7.9f, 6.1f, 10);
         r->target = v3(0, .7f, 0);
         r->projection = perspective(38 * PI / 180, aspect, .1f, 100);
-    } else if (menu) {
-        float a = .56f + sinf(g->clock * .035f) * .065f;
-        r->eye = v3(sinf(a) * 245, 228, cosf(a) * 245);
-        r->target = v3(0, 0, 0);
-        float span = 150;
-        r->projection = ortho(-span * aspect, span * aspect, -span, span, 1, 800);
     } else {
         const Car *c = &g->cars[0];
         Vec3 p = vlerp(c->prev, c->pos, alpha);
@@ -1238,8 +1307,8 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     }
     r->view = lookat(r->eye, r->target, v3(0, 1, 0));
     r->vp = mmul(r->projection, r->view);
-    Vec3 light_target = overview ? v3(0, 0, 0) : r->target;
-    float shadow_span = garage ? 9 : menu ? 190 : 65;
+    Vec3 light_target = garage ? v3(0, 0, 0) : r->target;
+    float shadow_span = garage ? 9 : menu ? 80 : 65;
     r->light_vp = mmul(ortho(-shadow_span, shadow_span, -shadow_span, shadow_span, 1, 650),
                        lookat(vadd(light_target, v3(-180, 300, 135)), light_target, v3(0, 1, 0)));
     if (!garage)
@@ -1266,11 +1335,11 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     uniform_matrix(r->shader, "uVP", r->vp);
     uniform_matrix(r->shader, "uLight", r->light_vp);
     uniform_vec(r->shader, "uEye", r->eye);
-    cloud_uniforms(r->shader, r, g, overview, garage);
+    cloud_uniforms(r->shader, r, g, calm, garage);
     uniform_vec(r->shader, "uFog", v3(clear.r, clear.g, clear.b));
     // Night haze closes in a little so distant scenery settles into the dark.
     glUniform1f(glGetUniformLocation(r->shader, "uFogFar"),
-                overview ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night));
+                garage ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night));
     glUniform1f(glGetUniformLocation(r->shader, "uOvercast"), overcast);
     glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
     glUniform1f(glGetUniformLocation(r->shader, "uNight"), r->night);
@@ -1279,15 +1348,13 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     glBindTexture(GL_TEXTURE_2D, r->shadow_texture);
     glUniform1i(glGetUniformLocation(r->shader, "uShadow"), 0);
     render_objects(r, g, false, menu, garage);
-    // Menu water reflects the night sky rather than the paper backdrop.
-    Color reflected = overview && r->night > 0 ? r->sky : clear;
-    if (!garage) draw_water(r, g, overview, reflected, overcast, vx, vy, vw, vh);
-    if (!overview) {
+    if (!garage) draw_water(r, g, clear, overcast, vx, vy, vw, vh);
+    if (!calm)
         draw_spray(r, g);
-        if (r->night > 0)
-            draw_lamp_glows(r);
+    if (!garage && r->night > 0)
+        draw_lamp_glows(r);
+    if (!calm)
         draw_weather(r, g);
-    }
     glBindFramebuffer(GL_FRAMEBUFFER, r->default_fbo);
     glViewport(0, 0, r->width, r->height);
     glDisable(GL_DEPTH_TEST);
@@ -1297,12 +1364,13 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     glUniform1i(glGetUniformLocation(r->post_shader, "uScene"), 0);
     glUniform2f(glGetUniformLocation(r->post_shader, "uResolution"), (float)r->width,
                 (float)r->height);
-    glUniform1f(glGetUniformLocation(r->post_shader, "uVignette"), overview ? 0 : .3f + .2f * r->night);
+    glUniform1f(glGetUniformLocation(r->post_shader, "uVignette"), .3f + .2f * r->night);
+    glUniform1f(glGetUniformLocation(r->post_shader, "uFade"), fade);
     const Car *player = &g->cars[0];
     float pace = clampf((player->speed - 16.f) / 24.f, 0, 1);
     pace = pace * pace * (3 - 2 * pace);
-    float blur = g->screen == SCREEN_RACE && !player->dnf && !player->finished
-                     ? pace * (.065f + .025f * clampf(player->boost_cooldown / 2, 0, 1)) : 0;
+    if (g->screen == SCREEN_RACE && !player->dnf && !player->finished)
+        blur = pace * (.065f + .025f * clampf(player->boost_cooldown / 2, 0, 1));
     glUniform1f(glGetUniformLocation(r->post_shader, "uSpeedBlur"), blur);
     glBindVertexArray(r->empty_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);

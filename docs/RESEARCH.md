@@ -63,8 +63,9 @@ Source: [Remedy's games catalog](https://www.remedygames.com/games).
 ## Original direction for ToyCars
 
 - **Tone:** welcoming, energetic, tactile. A little racing club, not a military HUD.
-- **Palette:** warm paper, charcoal and tangerine in the interface; moss, sand,
-  lagoon and icy blue in the world.
+- **Palette:** a near-black livery with tangerine and white in the interface,
+  over a live broadcast of the race; moss, sand, lagoon and icy blue in the world.
+  Shapes lean forward and titles are italic display type.
 - **Typography:** Barlow for information, Barlow Condensed for titles and race numbers.
 - **Session:** two laps, eight drivers, roughly one minute to ninety seconds
   depending on route, difficulty and player pace.

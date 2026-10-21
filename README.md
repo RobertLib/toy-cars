@@ -147,8 +147,12 @@ an internet connection to run.
   as imported records with unknown initials and dates.
 - Arcade track cards show your personal best race time and highest medal;
   tracks you have not finished show `BEST --:--`.
-- A live 3D track selector, garage with six liveries, controls guide, settings,
-  countdown, pause, restart, results and next-track flow. English throughout.
+- The main menu is a live race broadcast: the full field races around the
+  selected track behind the menu, cutting between chase, helicopter, head-on and
+  trackside cameras, with your car tagged in the pack. Picking a track card
+  switches the broadcast to that circuit.
+- Garage with six liveries, controls guide, settings, countdown, pause, restart,
+  results and next-track flow. English throughout.
 - After crossing the finish, cars ease into a slow cooldown lap on the right,
   keeping space between them while the results are displayed.
 - **RESET DATA** in settings asks for confirmation, then clears championship
@@ -223,7 +227,7 @@ an internet connection to run.
   low beams light the road, rivals and scenery ahead, and tail lamps cast a short
   red glow. Lamp halos, softly glowing fuel cans, boost chevrons and the helicopter's
   blinking beacon stay readable in the dark; rain, snow, spray and water dim to match.
-  The menu diorama previews the selected race's time of day, while the garage stays
+  The menu broadcast previews the selected race's time of day, while the garage stays
   a daylight studio. Night changes only the visuals, not handling or AI.
 - Seven original synthesized compositions: a relaxed paddock theme and two
   distinct tracks per environment. Extended harmonies, evolving 64-bar arrangements,
