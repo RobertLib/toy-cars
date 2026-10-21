@@ -115,7 +115,8 @@ work before a long-term public iOS release.
 - Hold BRAKE to stop, then keep holding to reverse at low speed. Steering works
   in reverse too. Release BRAKE to accelerate forward in automatic mode, or
   press GAS in manual mode.
-- RECOVER returns the car to its current progress without restoring fuel.
+- RECOVER, below the position panel and away from the wheel, returns the car to
+  its current progress without restoring fuel.
 - Backgrounding pauses the race and audio; foregrounding requires a deliberate
   resume. Countdown pause retains the remaining countdown. Quick background/foreground
   transitions still pause, and input queued in that transition frame cannot resume

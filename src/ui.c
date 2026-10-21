@@ -497,13 +497,15 @@ static void control_rects(UI *u, Rect *left, Rect *right, Rect *brake, Rect *gas
     *brake = (Rect){end - 304, y, 144, 132};
     *gas = (Rect){end - 144, y, 144, 132};
 }
+// Below the OVERALL panel, mirroring the minimap's gap on the right, so
+// steering thumbs never press it.
 static Rect recover_rect(UI *u) {
-    return (Rect){u->safe_left + 24, u->height - u->safe_bottom - 240, 176, 72};
+    return (Rect){u->safe_left + 24, u->safe_top + 124, 156, 72};
 }
 // Thumbs land loosely, so the wheel accepts presses across the lower-left
-// corner up to RECOVER's row, including the margin outside the safe area.
+// corner, including the margin outside the safe area.
 static Rect wheel_target(UI *u, Rect left, Rect right) {
-    float top = recover_rect(u).y;
+    float top = left.y - 88;
     return (Rect){0, top, right.x + right.w + 96, u->height - top};
 }
 Controls ui_controls(UI *u, const Game *g) {
@@ -522,7 +524,7 @@ Controls ui_controls(UI *u, const Game *g) {
     c.throttle = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP] || g->profile.auto_accel) ? 1 : 0;
     Rect l, r, b, a;
     control_rects(u, &l, &r, &b, &a);
-    Rect wheel = wheel_target(u, l, r), recover = recover_rect(u);
+    Rect wheel = wheel_target(u, l, r);
     float wheel_cx = (l.x + r.x + r.w) * .5f, wheel_cy = l.y + l.h + 29;
     if (!u->mobile || !g->profile.touch ||
         (u->wheel_pointer == 1 && !u->mouse_down) ||
@@ -539,8 +541,7 @@ Controls ui_controls(UI *u, const Game *g) {
                   y = i < 0 ? u->mouse_y : u->fingers[i].y;
             float press_x = i < 0 ? u->mouse_press_x : u->fingers[i].press_x,
                   press_y = i < 0 ? u->mouse_press_y : u->fingers[i].press_y;
-            if (u->mobile && inside(wheel, press_x, press_y) &&
-                !inside(recover, press_x, press_y)) {
+            if (u->mobile && inside(wheel, press_x, press_y)) {
                 // Capture one pointer for the whole gesture, including outside
                 // the wheel. Pedal fingers cannot take ownership or steer it.
                 if (!u->wheel_pointer) {
@@ -2184,10 +2185,13 @@ static int test_layout_input(UI *u, Game *g) {
             ui_controls(u, g);
             UI_CHECK(u->wheel_pointer != 0, "wheel can be grabbed at the bottom screen edge");
             ui_clear_input(u);
-            Rect recover = recover_rect(u);
+            Rect recover = recover_rect(u), wheel = wheel_target(u, l, r);
+            UI_CHECK(recover.x >= u->safe_left && recover.y >= u->safe_top + 104 &&
+                         recover.y + recover.h < wheel.y,
+                     "RECOVER sits below the position panel, clear of the wheel");
             const float grabs[][2] = {{2, l.y + 40},
                                       {r.x + r.w + 80, l.y + 40},
-                                      {r.x + r.w - 10, recover.y + 6}};
+                                      {r.x + r.w - 10, wheel.y + 6}};
             for (size_t k = 0; k < SDL_arraysize(grabs); k++) {
                 test_finger_event(u, SDL_EVENT_FINGER_DOWN, 1, 51, grabs[k][0], grabs[k][1]);
                 ui_controls(u, g);
