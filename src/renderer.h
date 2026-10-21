@@ -27,6 +27,7 @@ typedef struct {
     Mesh cone, tire, fence, lamps;
     Mesh boosts[TRACK_COUNT];
     Mesh helicopter, helicopter_rotor, helicopter_tail_rotor;
+    Mesh rail_models[RAIL_MODEL_COUNT];
     Mat4 view, projection, vp, light_vp;
     Vec3 eye, target, cam_pos;
     float camera_yaw;

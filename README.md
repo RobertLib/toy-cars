@@ -211,6 +211,23 @@ an internet connection to run.
   compound with a fifth camera, TV van, satellite dish, reporter, boom operator,
   vision technician, monitors, flight cases and cables. Eight crew members wear
   media vests and headsets; equipment is placed clear of roads, water and scenery.
+- **Railways and level crossings:** Harvest Hills has a steam train (locomotive,
+  tender and two coaches) and Alpine Rush a red narrow-gauge mountain train with
+  panorama coaches. Each runs between two tunnel portals in the hillsides and
+  crosses the circuit once, at grade. Sunshine Coast has no room for a railway,
+  so a seaside road train with three open carriages runs on a promenade between
+  two stops, turning round a palm planter at each end, and crosses the circuit
+  in both directions. Signals flash and a bell rings 5.5 seconds before a train
+  arrives; red-and-white barriers fall over the next three seconds and rise
+  once it has passed, closing the road for about eight to nine seconds. Trains
+  keep a timetable that changes every race, about every 40 to 60 seconds; on the
+  railway circuits the first one comes after the opening lap's field has
+  passed. A lowered barrier stops a car like a railing, and a car left on the
+  rails is shoved aside by the train. Rivals stop at the line and queue unless
+  they can clear the crossing before the barriers close, so a closed crossing
+  can bring the field back together. The menu broadcast has its own train,
+  timed to clear the crossing just ahead of the pack. At night the signals,
+  barrier tips and headlamps glow; the steam locomotive puffs smoke.
 - A small camera helicopter patrols beside the race on all three circuits,
   occasionally drawing closer during a relaxed 48-second flight cycle. Both
   rotors turn and cast shadows; pausing freezes the helicopter too.
@@ -288,8 +305,11 @@ editable scenes in `art/`:
   wing, lamps and bumpers.
 - `fuel_can.blend` — the collectible jerrycan.
 - `helicopter.blend` — camera helicopter with separately animated main and tail rotors.
+- `trains.blend` — the steam locomotive, tender and coach, the mountain railway's
+  locomotive and panorama coach, and the seaside road train's tractor and carriage.
 - `country.blend`, `beach.blend`, `winter.blend` — complete themed scenes with
-  terrain, road, curbs, ramps, buildings, trees and props.
+  terrain, road, curbs, ramps, a level crossing with its railway and tunnels (or
+  the road train's promenade), buildings, trees and props.
 
 Each circuit combines two-lane roads with a four-lane passing section of twice
 the width. Country and coast have long passing sectors; the alpine switchbacks
@@ -299,12 +319,16 @@ Paired, gently curved tire marks with subtle color and faded ends cluster and ov
 in sharper bends. They are present on all three circuits
 from the start and follow the road elevation and banking.
 
-Reproduce all six scenes and their runtime exports:
+Reproduce all seven scenes and their runtime exports:
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender -b --python tools/build_assets.py
 cmake --build build
 ```
+
+Options go after `--`: `--tracks-only` skips the car, can, helicopter and
+rolling stock, `--only country|beach|winter` builds a single circuit, and
+`--vehicles-only` exports just the rolling stock.
 
 The Blender script is an authoring tool. Gameplay and rendering run in C.
 The custom mesh and track formats are documented in [Architecture](docs/ARCHITECTURE.md).
@@ -333,6 +357,7 @@ python3 tests/track_layouts.py
 ./build/ToyCars --test
 ./build/ToyCars --autoplay --track winter
 ./build/ToyCars --autoplay --track beach --night   # night in any mode
+./build/ToyCars --autoplay --track country --train-at 17.5   # a train meets the field
 ./build/ToyCars --screen garage
 ./build/ToyCars --screen records
 ./build/ToyCars --screen race --autoplay --benchmark --frames 600 \

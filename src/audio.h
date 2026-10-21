@@ -25,9 +25,9 @@ typedef struct {
     Music music;
     Sfx sfx;
     CarAudio cars[CAR_COUNT];
-    uint32_t wind, ambience, weather, helicopter;
+    uint32_t wind, ambience, weather, helicopter, crossing, train;
     Vec3 eye, eye_velocity;
-    float limiter, race, quiet[SOUND_FENCE_HIT + 1], time;
+    float limiter, race, quiet[SOUND_KIND_COUNT], time;
     uint32_t noise;
     bool paused, eye_known;
     // Menu state from the previous frame; a change sounds a click.

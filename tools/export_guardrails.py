@@ -8,7 +8,9 @@ from mathutils import Vector
 def export_guardrails(path):
     rails = []
     for obj in sorted(bpy.context.scene.objects, key=lambda obj: obj.name):
-        if not (obj.name == 'Bridge railing' or obj.name.startswith('Bridge railing.')):
+        # Bridge railings, and the invisible guards across tunnel mouths.
+        if not (obj.name == 'Bridge railing' or obj.name.startswith('Bridge railing.') or
+                obj.get('guardrail')):
             continue
         ends = []
         for z in (min(v.co.z for v in obj.data.vertices),

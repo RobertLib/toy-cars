@@ -59,6 +59,77 @@ static bool load_guardrails(Track *t) {
     return valid;
 }
 
+// TCR1: the crossing's route, its timetable stops and the barrier hardware.
+static bool load_railway(Track *t) {
+    char name[100];
+    SDL_snprintf(name, sizeof name, "tracks/%s.tcr", t->id);
+    size_t size;
+    unsigned char *data = asset_read(name, &size);
+    if (!data) return false;
+    Railway *r = &t->rail;
+    uint32_t v[7] = {0};
+    bool valid = size >= 56 && !memcmp(data, "TCR1", 4);
+    for (int i = 0; valid && i < 7; i++) v[i] = read_u32(data + 4 + i * 4);
+    valid = valid && v[0] <= RAIL_ALPINE && v[1] <= 1 && v[2] >= 8 && v[2] <= MAX_RAIL_POINTS &&
+            v[3] >= 1 && v[3] <= MAX_RAIL_PASSES && v[4] <= MAX_RAIL_STOPS &&
+            v[5] <= MAX_RAIL_ARMS && v[6] <= MAX_RAIL_LIGHTS &&
+            size == 56 + (size_t)v[2] * 12 + (v[3] + v[4]) * 4 + (v[5] + v[6]) * 24;
+    float f[6] = {0};
+    for (int i = 0; valid && i < 6; i++) {
+        f[i] = read_float(data + 32 + i * 4);
+        valid = isfinite(f[i]);
+    }
+    size_t off = 56;
+    for (uint32_t i = 0; valid && i < v[2]; i++, off += 12) {
+        r->points[i] = v3(read_float(data + off), read_float(data + off + 4), read_float(data + off + 8));
+        valid = isfinite(r->points[i].x) && isfinite(r->points[i].y) && isfinite(r->points[i].z) &&
+                fabsf(r->points[i].x) < 150 && fabsf(r->points[i].z) < 150;
+        r->s[i] = i ? r->s[i - 1] + vlen(vsub(r->points[i], r->points[i - 1])) : 0;
+    }
+    if (valid) {
+        r->count = (int)v[2];
+        r->length = r->s[r->count - 1] +
+                    (v[1] ? vlen(vsub(r->points[0], r->points[r->count - 1])) : 0);
+    }
+    float *lists[2] = {r->passes, r->stops};
+    for (int list = 0; valid && list < 2; list++)
+        for (uint32_t i = 0; valid && i < v[3 + list]; i++, off += 4) {
+            lists[list][i] = read_float(data + off);
+            valid = isfinite(lists[list][i]) && lists[list][i] >= 0 && lists[list][i] <= r->length;
+        }
+    for (uint32_t i = 0; valid && i < v[5] + v[6]; i++, off += 24) {
+        float a[6];
+        for (int j = 0; j < 6; j++) {
+            a[j] = read_float(data + off + j * 4);
+            valid = valid && isfinite(a[j]);
+        }
+        if (i < v[5])
+            r->arms[i] = (RailArm){v3(a[0], a[1], a[2]), a[3], a[4], a[5]};
+        else
+            r->lights[i - v[5]] = (RailLight){v3(a[0], a[1], a[2]), a[3], a[4], a[5]};
+    }
+    valid = valid && f[3] > 0 && f[4] >= 0 && f[5] <= r->length && f[4] < f[5];
+    if (valid) {
+        r->kind = (RailKind)v[0];
+        r->loop = v[1];
+        r->pass_count = (int)v[3];
+        r->stop_count = (int)v[4];
+        r->arm_count = (int)v[5];
+        r->light_count = (int)v[6];
+        r->road_s = f[0];
+        r->stop_s = f[1];
+        r->clear_s = f[2];
+        r->zone = f[3];
+        r->visible_start = f[4];
+        r->visible_end = f[5];
+    } else {
+        memset(r, 0, sizeof *r);
+        SDL_Log("Invalid railway: %s", name);
+    }
+    SDL_free(data);
+    return valid;
+}
+
 static bool load_surface(Track *t, bool water) {
     SurfaceTriangle *triangles = water ? t->water : t->surface;
     uint32_t *cells = water ? t->water_cells : t->surface_cells;
@@ -219,7 +290,8 @@ bool game_load(Game *g) {
             t->ramps[i] = r;
         }
         SDL_free(d);
-        if (!load_surface(t, false) || !load_surface(t, true) || !load_guardrails(t))
+        if (!load_surface(t, false) || !load_surface(t, true) || !load_guardrails(t) ||
+            !load_railway(t))
             return false;
         track_place_boosts(t);
     }

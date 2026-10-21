@@ -47,8 +47,12 @@ typedef struct {
 #define MAX_WATER_TRIANGLES 8192
 #define MAX_WATER_REFS 65536
 #define FIXED_DT (1.0f / 120.0f)
+// The menu's race broadcast: its pack leader drives BROADCAST_SPEED m/s from
+// BROADCAST_START metres at clock zero.
+#define BROADCAST_SPEED 19.f
+#define BROADCAST_START 170.f
 // Includes the road's cross-width tessellation; indices still fit uint16_t.
-#define MAX_SURFACE_TRIANGLES 49152
+#define MAX_SURFACE_TRIANGLES 65536
 #define MAX_SURFACE_REFS 131072
 #define SURFACE_GRID 32
 #define SURFACE_ORIGIN -128.f
@@ -77,9 +81,49 @@ typedef struct {
 typedef struct {
     Vec3 a, b; // Deck-level endpoints of a visible bridge railing.
 } Guardrail;
+#define MAX_RAIL_POINTS 512
+#define MAX_RAIL_PASSES 2
+#define MAX_RAIL_STOPS 2
+#define MAX_RAIL_ARMS 2
+#define MAX_RAIL_LIGHTS 2
+#define MAX_RAIL_VEHICLES 4
+// Harvest Hills and Alpine Rush run trains between two tunnels; Sunshine Coast
+// has a seaside road train on a closed promenade with a stop at each end.
+typedef enum { RAIL_STEAM, RAIL_ROAD_TRAIN, RAIL_ALPINE } RailKind;
+typedef struct {
+    Vec3 pivot;    // Hinge of the barrier arm
+    float dx, dz;  // Horizontal direction of the lowered arm
+    float length;
+} RailArm;
+typedef struct {
+    Vec3 pos;      // Centre between the two lamps of a flashing signal
+    float dx, dz;  // Direction the lamps face
+    float spread;  // Half the distance between the lamps
+} RailLight;
+typedef struct {
+    RailKind kind;
+    bool loop;     // A closed route; otherwise it runs from tunnel to tunnel
+    int count;     // Path points; 0 when the circuit has no crossing
+    Vec3 points[MAX_RAIL_POINTS];
+    float s[MAX_RAIL_POINTS];
+    float length, visible_start, visible_end;
+    float passes[MAX_RAIL_PASSES]; // Path distance where the route crosses the road
+    float stops[MAX_RAIL_STOPS];
+    int pass_count, stop_count;
+    float zone; // Half-length of the path either side of a pass that blocks the road
+    // Race distances of the stop line, the crossing centre and its far side.
+    float stop_s, road_s, clear_s;
+    RailArm arms[MAX_RAIL_ARMS];
+    RailLight lights[MAX_RAIL_LIGHTS];
+    int arm_count, light_count;
+} Railway;
 typedef struct {
     Guardrail guardrails[MAX_POINTS];
     int guardrail_count;
+    Railway rail;
+    // Lowered crossing barriers, refreshed every step; cars meet them like rails.
+    Guardrail barriers[MAX_RAIL_ARMS];
+    int barrier_count;
     TrackPoint points[MAX_POINTS];
     Can cans[MAX_CANS];
     Ramp ramps[MAX_RAMPS];
@@ -98,6 +142,32 @@ typedef struct {
     const char *id, *name, *subtitle, *description;
     Color accent, sky;
 } Track;
+// The railway's own clock and timetable. Trains run during the race and its
+// results; a run starts deep inside one tunnel and ends inside the other.
+typedef struct {
+    float time;
+    float run, next;        // Start of the current and the following run
+    int direction, next_direction;
+    float head, prev_head;  // Distance of the leading nose along its direction of travel
+    float arm, prev_arm;    // Barrier arms: 0 raised, 1 lowered
+    float phase;            // Offset of the road train's timetable
+    float dwell[MAX_RAIL_STOPS]; // Its wait at each stop
+    float speed;            // Of the train along its route, m/s
+    int track;              // Circuit the broadcast timetable was set for
+    bool warning, horn;
+    uint32_t rng;
+} RailState;
+typedef struct {
+    Vec3 pos, forward;      // Centre on the rails and direction of travel
+    float pitch, length, half_width, front, back;
+    int model;              // Vehicle model, see RAIL_MODEL_*
+    bool visible;
+} RailVehicle;
+enum {
+    RAIL_MODEL_STEAM_LOCOMOTIVE, RAIL_MODEL_STEAM_TENDER, RAIL_MODEL_COACH,
+    RAIL_MODEL_ALPINE_LOCOMOTIVE, RAIL_MODEL_ALPINE_COACH,
+    RAIL_MODEL_ROAD_TRAIN_TRACTOR, RAIL_MODEL_ROAD_TRAIN_CARRIAGE, RAIL_MODEL_COUNT
+};
 typedef struct {
     // Driver-relative steering: -1 left, +1 right.
     // Throttle above 1 is catch-up power for rivals far behind the player.
@@ -152,8 +222,11 @@ typedef enum {
     SOUND_RAIL_HIT,
     SOUND_CONE_HIT,
     SOUND_TIRE_HIT,
-    SOUND_FENCE_HIT
+    SOUND_FENCE_HIT,
+    SOUND_TRAIN_HORN, // A train or the road train announces itself
+    SOUND_TRAIN_HIT   // A car struck by a passing train
 } SoundKind;
+#define SOUND_KIND_COUNT (SOUND_TRAIN_HIT + 1)
 #define MAX_SOUND_EVENTS 24
 typedef struct {
     SoundKind kind;
@@ -161,7 +234,7 @@ typedef struct {
     float strength; // Impact or landing speed in m/s; 1 for plain cues
     Vec3 pos;
 } SoundEvent;
-typedef enum { PARTICLE_DUST, PARTICLE_SPRAY, PARTICLE_RIPPLE } ParticleKind;
+typedef enum { PARTICLE_DUST, PARTICLE_SPRAY, PARTICLE_RIPPLE, PARTICLE_SMOKE } ParticleKind;
 typedef struct {
     Vec3 pos, vel;
     float life, max_life, size;
@@ -224,6 +297,7 @@ typedef struct {
     int prop_count;
     FencePanel fences[MAX_FENCE_PANELS];
     int fence_count;
+    RailState rail;
     Vec3 roadwork;
     float roadwork_yaw;
     Profile profile;
@@ -243,6 +317,7 @@ typedef struct {
     uint32_t rng;
     bool test_mode;
     bool force_night; // Diagnostic override for every mode.
+    float force_train; // Diagnostic: race time the first train reaches the crossing.
     SoundEvent sounds[MAX_SOUND_EVENTS];
     int sound_count;
     float last_lap;
@@ -263,6 +338,14 @@ void track_place_boosts(Track *t);
 void game_start(Game *g);
 void props_reset(Game *g);
 void props_tick(Game *g, float dt);
+/* Railway: timetable, barriers, train collisions and the vehicles' poses. */
+void rail_reset(Game *g);
+void rail_tick(Game *g, float dt);
+/* The menu broadcast's train: it clears the crossing just ahead of the pack. */
+void rail_broadcast(Game *g);
+int rail_vehicles(const Game *g, float alpha, RailVehicle *out);
+bool rail_window(const Game *g, float after, float *close, float *open);
+float rail_arm(const Game *g, float alpha);
 void game_continue(Game *g);
 void game_leave_results(Game *g);
 bool game_track_unlocked(const Profile *p, int track);
@@ -276,6 +359,8 @@ int game_championship_rank(const Game *g);
 void game_tick(Game *g, Controls controls, float dt, bool autopilot);
 /* Queues a sound cue; the oldest cue gives way when the queue is full. */
 void game_sound(Game *g, SoundKind kind, int car, float strength, Vec3 pos);
+/* A puff of locomotive smoke drifting up from a chimney. */
+void game_smoke(Game *g, Vec3 pos, Vec3 velocity);
 bool game_start_hint_visible(const Game *g);
 void game_ai(const Game *g, int index, Controls *out);
 void game_reset_car(Game *g, int index);

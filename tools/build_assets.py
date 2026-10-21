@@ -7,6 +7,7 @@ No Blender installation or Python interpreter is needed to play the game.
 import bpy, math, random, struct, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hydrology import Watershed
+from railway import Railway, build_vehicles
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
@@ -734,12 +735,14 @@ def build_track(theme,name):
     ribbon['bridge_lift']=bridge_lift
     for poly in ribbon.data.polygons:poly.use_smooth=True
     ribbon.data.calc_loop_triangles()
+    # A level crossing: the rail bed and tunnel hills grade the terrain below.
+    rail=Railway(globals(),theme,path,ribbon,length)
     road_points=KDTree(N)
     for i,p in enumerate(path):
         if bridge_lift[i]<.05:road_points.insert(Vector((p[0],0,p[2])),i)
     road_points.balance()
     # Grade shoulders from the actual ford vertices, including their crossfall.
-    def graded_ground(x,z):
+    def graded_ground(x,z,rail_grading=True):
         y=watershed.ground(x,z)
         _,idx,_=road_points.find(Vector((x,0,z)))
         projections=[]
@@ -772,7 +775,8 @@ def build_track(theme,name):
             # on a continuous bed even where a bend crosses a lower slope.
             target=bed if math.hypot(*flow)>.25 else min(y,bed)
             y+=(target-y)*bank_blend*road_blend
-        return y
+        return rail.grade(x,z,y,road_distance-closest[5],wet) if rail_grading else y
+    rail.prepare(lambda x,z:graded_ground(x,z,False))
     vs=[(0,0,0)];rings=40;slices=192
     for r in range(1,rings+1):
         for j in range(slices):
@@ -784,6 +788,7 @@ def build_track(theme,name):
             a=1+(r-1)*slices+j;b=1+(r-1)*slices+(j+1)%slices;c=1+r*slices+(j+1)%slices;d=1+r*slices+j
             fs.extend([(a,b,c),(a,c,d)])
     vs,fs=refine_water_ground(vs,fs,water_sample)
+    vs,fs=rail.refine(vs,fs)
     vs=[(x,graded_ground(x,z),z) for x,_,z in vs]
     # A coarse terrain face can span both sides of a hairpin. Cut only those
     # faces that intersect the actual road, keeping a shallow covered road bed.
@@ -813,6 +818,7 @@ def build_track(theme,name):
                 foundation[i]=len(vs);x,y,z=verts[i];vs.append((x,y-.14,z))
             face.append(foundation[i])
         fs.append(tuple(face))
+    vs,fs,tunnel_faces=rail.darkness(vs,fs)
     island=mesh('Sculpted island',vs,fs,grass)
     island['drivable']=True
     ground_bvh=BVHTree.FromPolygons([Vector(xyz(v)) for v in vs],fs,all_triangles=True)
@@ -825,6 +831,15 @@ def build_track(theme,name):
     for poly in island.data.polygons:poly.material_index=random.randrange(1,8);poly.use_smooth=True
     for material in island.data.materials:material['paint']=-1-theme
     color_waterbed(island,water_sample,theme,grass.diffuse_color[:3])
+    # The hillside closing each tunnel reads as its dark interior.
+    if tunnel_faces:
+        dark_index=len(island.data.materials)
+        island.data.materials.append(mat('Tunnel darkness',(.025,.025,.03)))
+        split=set(tunnel_faces)
+        colors=island.data.color_attributes['Riverbed']
+        for i in split:colors.data[i].color=(.025,.025,.03,1)
+        for poly in island.data.polygons:
+            if set(poly.vertices)<=split:poly.material_index=dark_index
     edgevs=[];edgefs=[]
     for j in range(slices):
         a=j*2*pi/slices;x=cos(a)*128;z=sin(a)*126
@@ -902,15 +917,18 @@ def build_track(theme,name):
     # Curbs, dashed lane markings, trackside guardrail and reflectors.
     for i in range(0,N,2):
         p=path[i];q=path[(i+2)%N]
+        # Crossings have no curbs, dashes or reflectors between the barriers.
+        crossing=rail.near_road(p[6],3) or rail.near_road(q[6],3)
         for side in [-1,1]:
             a=verts[i*2+(side+1)//2];b=verts[((i+2)%N)*2+(side+1)//2]
+            if crossing:continue
             if max(water_sample(a[0],a[2])[0],water_sample(b[0],b[2])[0])>-1.2:continue
             vv=[a,b,(b[0]+q[4]*.72*side,b[1]+.1,b[2]-q[3]*.72*side),(a[0]+p[4]*.72*side,a[1]+.1,a[2]-p[3]*.72*side)]
             curb_mesh=mesh('Alternating safety curb',vv,[(0,1,2,3)],curb if (i//4)%2 else cream)
             curb_mesh['drivable']=True
-        if i%8==0 and water_sample(p[0],p[2])[0]<-2:
+        if i%8==0 and water_sample(p[0],p[2])[0]<-2 and not crossing:
             road_marking('Center dash',surface,length,p[6]-.825,p[6]+.825,-.075,.075,cream)
-        if i%16==0 and water_sample(p[0],p[2])[0]<-2:
+        if i%16==0 and water_sample(p[0],p[2])[0]<-2 and not rail.near_road(p[6],8):
             for side in [-1,1]:
                 xx,yy,zz=roadside_anchor(i,side,1.4)
                 box('Reflector post',(xx,yy+.60,zz),(.22,1.2,.22),cream,.03)
@@ -918,7 +936,7 @@ def build_track(theme,name):
     # Two extra dividers make four equal lanes on the broad carriageway.
     # Carry the dividers into the tapers until the extra lanes merge away.
     for i,p in enumerate(path):
-        if i%8 or p[5]<width*.5+.6:continue
+        if i%8 or p[5]<width*.5+.6 or rail.near_road(p[6],3):continue
         for side in [-1,1]:
             lane=side*width*.5
             road_marking('Extra lane divider',surface,length,p[6]-.825,p[6]+.825,
@@ -956,6 +974,7 @@ def build_track(theme,name):
         s=-5-row*4.2+1.7
         for side in [-1,1]:
             road_marking('Starting grid',surface,length,s-.075,s+.075,side*2-1.2,side*2+1.2,cream)
+    rail_markers=rail.build(surface,ground_height)
     scenery_before=set(bpy.context.scene.objects)
     # Place vegetation only outside the racing surface.
     def nearest(x,z):return min(math.hypot(x-p[0],z-p[2])-p[5] for p in path[::4])
@@ -963,7 +982,8 @@ def build_track(theme,name):
         sites=[(x,z)]+sorted(((a,b) for a in range(-96,97,4) for b in range(-96,97,4)),
                             key=lambda p:math.hypot(p[0]-x,p[1]-z))
         for a,b in sites:
-            if (a/110)**2+(b/108)**2<1 and nearest(a,b)>radius+3 and water_sample(a,b)[0]<-radius:
+            if (a/110)**2+(b/108)**2<1 and nearest(a,b)>radius+3 and water_sample(a,b)[0]<-radius \
+               and rail.clear(a,b,radius):
                 return a,b
         raise RuntimeError(('No room for scenery',name,radius))
     placed=0
@@ -971,7 +991,7 @@ def build_track(theme,name):
         x=random.uniform(-111,111);z=random.uniform(-108,108)
         if (x/119)**2+(z/118)**2>1 or nearest(x,z)<4.8:continue
         if (x+12)**2+(z+35)**2<190:continue
-        if water_sample(x,z)[0]>-4:continue
+        if water_sample(x,z)[0]>-4 or not rail.clear(x,z,2.5):continue
         y=ground_height(x,z)-.05
         if placed<105:
             tree(x,y,z,random.uniform(.65,1.3),theme)
@@ -984,7 +1004,7 @@ def build_track(theme,name):
         barn(bx,ground_height(bx,bz),bz,0,theme)
         for i in range(9):
             x=-28+i*4;z=-53;y=terrain(x,z,theme)
-            if nearest(x,z)<2.5:continue
+            if nearest(x,z)<2.5 or not rail.clear(x,z,1):continue
             box('Fence post',(x,y+1,z),(.25,2,.25),wood,.025)
             if i<8 and nearest(x+4,z)>2.5:
                 for h in [.65,1.45]:beam('Fence rail',(x,y+h,z),(x+4,terrain(x+4,z,theme)+h,z),.09,cream,5)
@@ -992,10 +1012,10 @@ def build_track(theme,name):
             for j in range(5):
                 for i in range(7):
                     x=-29+i*2.1;z=24+j*3.2
-                    if nearest(x,z)<2:continue
+                    if nearest(x,z)<2 or not rail.clear(x,z,1):continue
                     box('Crop row',(x,terrain(x,z,theme)+.5,z),(.6,1.0,1.8),mat('Harvest gold',(.80,.64,.22)),.16)
             for x,z in [(15,-32),(21,-32),(18,-27)]:
-                if nearest(x,z)>3:cone('Hay bale',(x,ground_height(x,z)+1,z),1.5,1.5,2,mat('Hay straw',(.80,.62,.29)),12)
+                if nearest(x,z)>3 and rail.clear(x,z,1.5):cone('Hay bale',(x,ground_height(x,z)+1,z),1.5,1.5,2,mat('Hay straw',(.80,.62,.29)),12)
         else:
             for x,z in [(-16,25),(-13,26),(-18,27)]:
                 x,z=scenery_site(x,z,2)
@@ -1013,6 +1033,8 @@ def build_track(theme,name):
         box('Lifeguard roof',(hx,ground_height(hx,hz)+5,hz),(7,.45,6),cream,.12)
     # Direction boards before selected bends.
     for idx in [45,150,240,345,410,555]:
+        # A board may not stand among the crossing's signals.
+        while rail.near_road(path[idx][6],10):idx-=4
         p=path[idx];xx,yy,zz=roadside_anchor(idx,1,2);yaw=math.atan2(p[3],p[4])
         box('Direction sign',(xx,yy+2,zz),(2.8,1.15,.18),orange,.08,yaw)
         box('Sign post',(xx,yy+.9,zz),(.16,1.8,.16),dark,.02)
@@ -1023,7 +1045,7 @@ def build_track(theme,name):
     for _ in range(450):
         x=bank_rng.uniform(x0-2,x1+2);z=bank_rng.uniform(z0-2,z1+2)
         wet,level,_=water_sample(x,z)
-        if not -1.8<wet<.55 or nearest(x,z)<2.8 or (x/124)**2+(z/122)**2>1:continue
+        if not -1.8<wet<.55 or nearest(x,z)<2.8 or (x/124)**2+(z/122)**2>1 or not rail.clear(x,z,1):continue
         patch=sin(x*.19+z*.27)*sin(z*.13-x*.23)
         if theme==0 and patch<-.1:continue
         if theme==1 and bank_rng.random()<.78:continue
@@ -1047,6 +1069,7 @@ def build_track(theme,name):
             mat('Spring source '+name,[(.43,.46,.35),(.57,.53,.40),(.89,.95,.94)][theme]),2)
     obstacles=set(bpy.context.scene.objects)-scenery_before
     obstacles.update(o for o in scenery_before if o.name.startswith(('Finish gantry','Reflector')))
+    obstacles.update(rail_markers)
     build_spectators(path,theme,ground_height,obstacles,water_sample)
     from leisure import build as build_leisure
     leisure_before=set(bpy.context.scene.objects)
@@ -1065,6 +1088,7 @@ def build_track(theme,name):
     export(os.path.join(ROOT,'assets/tracks',name+'.tcm'))
     export(os.path.join(ROOT,'assets/tracks',name+'-crowd.tca'),crowd=True)
     export_surface(os.path.join(ROOT,'assets/tracks',name+'.tcs'))
+    rail.export(os.path.join(ROOT,'assets/tracks',name+'.tcr'))
     from export_guardrails import export_guardrails
     export_guardrails(os.path.join(ROOT,'assets/tracks',name+'.tcg'))
     cans=[]
@@ -1078,6 +1102,10 @@ def build_track(theme,name):
     print('TRACK',name,'length',round(length,1),'elevation',round(max(p[1] for p in path)-min(p[1] for p in path),1),flush=True)
 
 if __name__=='__main__':
-    if '--tracks-only' not in sys.argv:build_car();build_can();build_helicopter()
-    for theme,name in enumerate(['country','beach','winter']):build_track(theme,name)
+    if '--vehicles-only' in sys.argv:
+        clear();build_vehicles(globals(),ROOT);sys.exit(0)
+    if '--tracks-only' not in sys.argv:build_car();build_can();build_helicopter();build_vehicles(globals(),ROOT)
+    only=sys.argv[sys.argv.index('--only')+1] if '--only' in sys.argv else None
+    for theme,name in enumerate(['country','beach','winter']):
+        if only in (None,name):build_track(theme,name)
     print('All Blender source scenes and runtime assets generated.',flush=True)

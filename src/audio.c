@@ -267,8 +267,20 @@ static void cue(Audio *a, const Game *g, const Listener *l, const SoundEvent *e)
         if (player)
             sfx_play(&a->sfx, SFX_TAKEOFF, lufs(-35 + 6 * ramp(e->strength, 9, 24)), pitch, 0);
         break;
+    case SOUND_TRAIN_HORN: {
+        // A steam whistle, the mountain railway's high signal whistle, or the
+        // road train's toy-train chord.
+        RailKind kind = g->tracks[g->selected].rail.kind;
+        int sound = kind == RAIL_STEAM ? SFX_STEAM_WHISTLE
+                    : kind == RAIL_ALPINE ? SFX_TRAIN_HORN : SFX_LAND_TRAIN_HORN;
+        float level = kind == RAIL_STEAM ? -29 : kind == RAIL_ALPINE ? -33 : -31;
+        Place p = place(a, l, e->pos, v3(0, 0, 0), 22, 220);
+        sfx_play(&a->sfx, sound, lufs(level) * p.gain, kind == RAIL_ALPINE ? .94f : 1, p.pan);
+        break;
+    }
     case SOUND_LANDING:
     case SOUND_CAR_HIT:
+    case SOUND_TRAIN_HIT:
     case SOUND_RAIL_HIT: {
         // Settling over a crest is not a landing worth a thud.
         if (e->car < 0 || e->car >= CAR_COUNT || a->cars[e->car].quiet > 0 ||
@@ -279,6 +291,8 @@ static void cue(Audio *a, const Game *g, const Listener *l, const SoundEvent *e)
         int sound = e->kind == SOUND_LANDING ? SFX_LANDING : SFX_CAR_HIT;
         if (e->kind == SOUND_RAIL_HIT)
             pitch *= .8f;
+        else if (e->kind == SOUND_TRAIN_HIT)
+            pitch *= .7f;
         else if (e->kind == SOUND_LANDING)
             pitch *= 1.06f - .12f * hard;
         play_at(a, l, sound, lufs(-38 + 12 * hard), pitch, e->pos, player ? 12 : 6);
@@ -359,6 +373,50 @@ static void interface(Audio *a, const Game *g) {
     memcpy(a->initials, g->initials, 4);
 }
 
+/* The crossing bell rings while the signals flash. The train is heard from
+   its vehicle nearest the camera, muffled while it is still in a tunnel. */
+static void railway_sounds(Audio *a, const Game *g, const Listener *l, float bed) {
+    const Railway *rail = &g->tracks[g->selected].rail;
+    if (!rail->count)
+        bed = 0;
+    Vec3 crossing = v3(0, 0, 0);
+    for (int i = 0; i < rail->light_count; i++)
+        crossing = vadd(crossing, vmul(rail->lights[i].pos, 1.f / rail->light_count));
+    Place bell = place(a, l, crossing, v3(0, 0, 0), 10, 120);
+    sfx_hold(&a->sfx, &a->crossing, SFX_CROSSING_BELL,
+             g->rail.warning ? bed * lufs(-34) * bell.gain : 0, 1, bell.pan, bell.cutoff);
+    RailVehicle vehicles[MAX_RAIL_VEHICLES];
+    int count = bed > 0 ? rail_vehicles(g, 1, vehicles) : 0, nearest = -1;
+    float best = 1e9f;
+    for (int i = 0; i < count; i++) {
+        float d = vlen(vsub(vehicles[i].pos, l->eye)) + (vehicles[i].visible ? 0 : 25);
+        if (d < best) {
+            best = d;
+            nearest = i;
+        }
+    }
+    int sound = rail->kind == RAIL_STEAM ? SFX_STEAM_TRAIN
+                : rail->kind == RAIL_ALPINE ? SFX_TRAIN : SFX_LAND_TRAIN;
+    float gain = 0, pitch = 1, pan = 0, cutoff = 1;
+    if (nearest >= 0) {
+        const RailVehicle *v = &vehicles[nearest];
+        float speed = fabsf(g->rail.speed);
+        Place p = place(a, l, v->pos, vmul(v->forward, speed), 16, 160);
+        gain = bed * p.gain * (v->visible ? 1 : .35f);
+        cutoff = v->visible ? p.cutoff : fminf(p.cutoff, sfx_cutoff(900));
+        pan = p.pan;
+        if (rail->kind == RAIL_ROAD_TRAIN) {
+            // The road train's diesel idles at the stops and works when driving.
+            gain *= lufs(-31) * (.75f + .25f * clampf(speed / 7, 0, 1));
+            pitch = (1 + .35f * clampf(speed / 7, 0, 1)) * p.pitch;
+        } else {
+            gain *= lufs(rail->kind == RAIL_STEAM ? -28 : -30);
+            pitch = (rail->kind == RAIL_STEAM ? 1.15f : .8f) * p.pitch;
+        }
+    }
+    sfx_hold(&a->sfx, &a->train, sound, gain, pitch, pan, cutoff);
+}
+
 void audio_direct(Audio *a, Game *g, const Listener *l, float dt) {
     dt = clampf(dt, 0, .1f);
     a->time += dt;
@@ -378,7 +436,7 @@ void audio_direct(Audio *a, Game *g, const Listener *l, float dt) {
     a->eye_velocity = vlerp(a->eye_velocity, velocity, 1 - expf(-dt / .1f));
     a->eye = l->eye;
     a->eye_known = true;
-    for (int i = 0; i < SOUND_FENCE_HIT + 1; i++)
+    for (int i = 0; i < SOUND_KIND_COUNT; i++)
         a->quiet[i] = fmaxf(0, a->quiet[i] - dt);
 
     bool on = g->profile.sound;
@@ -475,6 +533,7 @@ void audio_direct(Audio *a, Game *g, const Listener *l, float dt) {
     sfx_hold(&a->sfx, &a->helicopter, SFX_HELICOPTER,
              l->helicopter_visible ? bed * lufs(-36) * copter.gain : 0, copter.pitch, copter.pan,
              copter.cutoff);
+    railway_sounds(a, g, l, racing ? bed : 0);
 }
 
 void audio_render(Audio *a, float *data, int frames) {

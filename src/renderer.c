@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Night halos reserved for the railway's signal lamps, arm tips and headlamps.
+#define RAIL_HALOS 16
 typedef struct {
     float p[3], n[3], c[3], paint;
 } Vertex;
@@ -662,6 +664,12 @@ bool renderer_init(Renderer *r) {
         !mesh_load(&r->helicopter_rotor, "models/helicopter-rotor.tcm") ||
         !mesh_load(&r->helicopter_tail_rotor, "models/helicopter-tail-rotor.tcm"))
         return false;
+    const char *rail_models[RAIL_MODEL_COUNT] = {
+        "models/steam-locomotive.tcm", "models/steam-tender.tcm", "models/coach.tcm",
+        "models/alpine-locomotive.tcm", "models/alpine-coach.tcm",
+        "models/road-train-tractor.tcm", "models/road-train-carriage.tcm"};
+    for (int i = 0; i < RAIL_MODEL_COUNT; i++)
+        if (!mesh_load(&r->rail_models[i], rail_models[i])) return false;
     const char *water[] = {"tracks/country-water.tcm", "tracks/beach-water.tcm", "tracks/winter-water.tcm"};
     for (int i = 0; i < TRACK_COUNT; i++)
         if (!mesh_load(&r->water[i], water[i])) return false;
@@ -669,9 +677,9 @@ bool renderer_init(Renderer *r) {
     glBindVertexArray(r->spray_vao);
     glGenBuffers(1, &r->spray_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, r->spray_vbo);
-    // Spray particles, followed by four night lamp halos per car.
-    glBufferData(GL_ARRAY_BUFFER, (MAX_PARTICLES + CAR_COUNT * 4) * 8 * sizeof(float), NULL,
-                 GL_STREAM_DRAW);
+    // Spray particles, followed by four night lamp halos per car and the railway's lamps.
+    glBufferData(GL_ARRAY_BUFFER, (MAX_PARTICLES + CAR_COUNT * 4 + RAIL_HALOS) * 8 * sizeof(float),
+                 NULL, GL_STREAM_DRAW);
     for (int i = 0; i < 2; i++) {
         glEnableVertexAttribArray(i);
         glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
@@ -844,7 +852,7 @@ static Vec3 transform_point(Mat4 m, Vec3 p) {
 
 // The menu pack races in a tight bunch, the player's car chasing at its tail
 // so the chase camera never meets a car from behind.
-#define HERO_SPEED 19.f
+#define HERO_SPEED BROADCAST_SPEED
 #define HERO_SHOT 6.5f
 #define HERO_GAP 7.5f
 static int hero_slot(int car) {
@@ -853,7 +861,7 @@ static int hero_slot(int car) {
 static float hero_distance(const Game *g, int car) {
     int slot = hero_slot(car);
     float surge = sinf(g->clock * .45f + slot * 2.1f) * 2.2f;
-    return g->clock * HERO_SPEED + 170 - slot * HERO_GAP + surge;
+    return g->clock * HERO_SPEED + BROADCAST_START - slot * HERO_GAP + surge;
 }
 static float hero_lane(const Game *g, int car) {
     int slot = hero_slot(car);
@@ -935,6 +943,111 @@ static void update_cars(Renderer *r, const Game *g, bool menu) {
     }
 }
 
+/* Railway: the train's vehicles, barrier arms and flashing signals. Lamps are
+   unlit boxes; at night draw_lamp_glows adds their halos. */
+// Headlamps of each leading vehicle in its own coordinates.
+static const Vec3 RAIL_HEADLAMPS[RAIL_MODEL_COUNT][3] = {
+    [RAIL_MODEL_STEAM_LOCOMOTIVE] = {{0, 3.0f, 3.52f}, {-.7f, 1.55f, 3.7f}, {.7f, 1.55f, 3.7f}},
+    [RAIL_MODEL_ALPINE_LOCOMOTIVE] = {{-.72f, 1.68f, 4.9f}, {.72f, 1.68f, 4.9f}, {0, 3.5f, 4.82f}},
+    [RAIL_MODEL_ROAD_TRAIN_TRACTOR] = {{0, 1.95f, 2.22f}, {0, 1.95f, 2.22f}, {0, 1.95f, 2.22f}},
+};
+static Mat4 rail_vehicle_model(const RailVehicle *v) {
+    return mmul(translate(v->pos), mmul(rotate_y(atan2f(v->forward.x, v->forward.z)),
+                                        rotate_x(v->pitch)));
+}
+static Mat4 rail_arm_model(const RailArm *a, float raise) {
+    return mmul(translate(a->pivot), mmul(rotate_y(atan2f(a->dx, a->dz)), rotate_x(-raise)));
+}
+// Alternate lamps of each signal take turns, about once a second.
+static bool rail_lamp_lit(const Game *g, int lamp) {
+    return g->rail.warning && (fmodf(g->rail.time, 1.f) < .5f) == (lamp == 0);
+}
+static void draw_railway(Renderer *r, const Game *g, bool depth) {
+    const Railway *rail = &g->tracks[g->selected].rail;
+    if (!rail->count)
+        return;
+    Color white = rgb(1, 1, 1);
+    RailVehicle vehicles[MAX_RAIL_VEHICLES];
+    int count = rail_vehicles(g, r->alpha, vehicles);
+    for (int i = 0; i < count; i++)
+        if (vehicles[i].visible)
+            draw_mesh(r, r->rail_models[vehicles[i].model], rail_vehicle_model(&vehicles[i]), white,
+                      depth);
+    // Striped arms swing down from upright about the hinge on each housing.
+    float raise = (1 - rail_arm(g, r->alpha)) * PI * .5f;
+    for (int i = 0; i < rail->arm_count; i++) {
+        const RailArm *a = &rail->arms[i];
+        Mat4 base = rail_arm_model(a, raise);
+        draw_mesh(r, r->cube, mmul(base, scale3(.16f, .16f, .16f)), rgb(.20f, .21f, .22f), depth);
+        int stripes = (int)ceilf(a->length / .55f);
+        float step = a->length / stripes;
+        for (int k = 0; k < stripes; k++) {
+            Mat4 m = mmul(base, mmul(translate(v3(0, 0, step * (k + .5f))),
+                                     scale3(.055f, .07f, step * .5f)));
+            draw_mesh(r, r->cube, m, k % 2 ? rgb(.94f, .93f, .90f) : rgb(.86f, .10f, .07f), depth);
+        }
+        if (!depth && g->rail.arm > .02f) {
+            glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
+            Mat4 tip = mmul(base, mmul(translate(v3(0, .1f, a->length - .1f)), scale3(.06f, .06f, .06f)));
+            draw_mesh(r, r->cube, tip, rgb(1, .14f, .06f), false);
+            glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
+        }
+    }
+    if (depth || !g->rail.warning)
+        return;
+    glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
+    for (int i = 0; i < rail->light_count; i++) {
+        const RailLight *l = &rail->lights[i];
+        Vec3 right = v3(l->dz, 0, -l->dx);
+        for (int lamp = 0; lamp < 2; lamp++) {
+            if (!rail_lamp_lit(g, lamp))
+                continue;
+            Vec3 p = vadd(l->pos, vmul(right, lamp ? l->spread : -l->spread));
+            Mat4 m = mmul(translate(p), mmul(rotate_y(atan2f(l->dx, l->dz)), scale3(.13f, .13f, .02f)));
+            draw_mesh(r, r->cube, m, rgb(1, .12f, .05f), false);
+        }
+    }
+    glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
+}
+// Halos for the lit signal lamps, the arm tips and the train's headlamps.
+static int rail_glows(const Renderer *r, const Game *g, float *data) {
+    const Railway *rail = &g->tracks[g->selected].rail;
+    int count = 0;
+    if (!rail->count)
+        return 0;
+    for (int i = 0; i < rail->light_count; i++) {
+        const RailLight *l = &rail->lights[i];
+        Vec3 right = v3(l->dz, 0, -l->dx);
+        for (int lamp = 0; lamp < 2; lamp++) {
+            if (!rail_lamp_lit(g, lamp))
+                continue;
+            Vec3 p = vadd(vadd(l->pos, vmul(right, lamp ? l->spread : -l->spread)),
+                          v3(l->dx * .08f, 0, l->dz * .08f));
+            float v[] = {p.x, p.y, p.z, .7f, 1, 4.f, 0, 0};
+            memcpy(data + count++ * 8, v, sizeof v);
+        }
+    }
+    float raise = (1 - rail_arm(g, r->alpha)) * PI * .5f;
+    for (int i = 0; g->rail.arm > .02f && i < rail->arm_count; i++) {
+        Vec3 p = transform_point(rail_arm_model(&rail->arms[i], raise),
+                                 v3(0, .1f, rail->arms[i].length - .1f));
+        float v[] = {p.x, p.y, p.z, .35f, 1, 4.f, 0, 0};
+        memcpy(data + count++ * 8, v, sizeof v);
+    }
+    RailVehicle vehicles[MAX_RAIL_VEHICLES];
+    int n = rail_vehicles(g, r->alpha, vehicles);
+    if (n && vehicles[0].visible) {
+        Mat4 m = rail_vehicle_model(&vehicles[0]);
+        int lamps = vehicles[0].model == RAIL_MODEL_ROAD_TRAIN_TRACTOR ? 1 : 3;
+        for (int k = 0; k < lamps && count < RAIL_HALOS; k++) {
+            Vec3 p = transform_point(m, RAIL_HEADLAMPS[vehicles[0].model][k]);
+            float v[] = {p.x, p.y, p.z, .75f, 1, 3.f, 0, 0};
+            memcpy(data + count++ * 8, v, sizeof v);
+        }
+    }
+    return count;
+}
+
 // One beam per car between its headlamps; the shader derives the tail lamps.
 static void lamp_uniforms(const Renderer *r) {
     float lamps[CAR_COUNT * 4] = {0}, directions[CAR_COUNT * 4] = {0};
@@ -953,9 +1066,9 @@ static void lamp_uniforms(const Renderer *r) {
 }
 
 // Additive halos over the headlamps and tail lamps, after the translucent spray.
-static void draw_lamp_glows(Renderer *r) {
-    float data[CAR_COUNT * 4 * 8];
-    int count = 0;
+static void draw_lamp_glows(Renderer *r, const Game *g) {
+    float data[(CAR_COUNT * 4 + RAIL_HALOS) * 8];
+    int count = rail_glows(r, g, data);
     for (int i = 0; i < CAR_COUNT; i++) {
         if (!r->car_visible[i])
             continue;
@@ -1031,6 +1144,7 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     glUniform1i(glGetUniformLocation(program, "uWildlife"), 0);
     if (!menu)
         draw_props(r, g, depth);
+    draw_railway(r, g, depth);
     if (!menu)
         draw_helicopter(r, g, depth);
     if (!depth)
@@ -1059,13 +1173,16 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     }
     if (!depth)
         glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
-    if (!depth && !menu) {
+    if (!depth) {
         glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), .30f * (1 - r->night));
         for (int i = 0; i < MAX_PARTICLES; i++) {
             const Particle *p = &g->particles[i];
-            if (p->life <= 0 || p->kind != PARTICLE_DUST)
+            if (p->life <= 0 || (p->kind != PARTICLE_DUST && p->kind != PARTICLE_SMOKE))
                 continue;
-            float s = p->size * (.3f + .7f * p->life / p->max_life);
+            float age = 1 - p->life / p->max_life;
+            // Smoke billows out, then thins away; dust only shrinks.
+            float s = p->kind == PARTICLE_SMOKE ? p->size * (1 + 2.2f * age) * fminf(1, (1 - age) * 4)
+                                                : p->size * (.3f + .7f * p->life / p->max_life);
             Mat4 model = mmul(translate(p->pos), mmul(rotate_y(p->life * 2), scale3(s, s, s)));
             draw_mesh(r, r->cube, model, p->color, false);
         }
@@ -1258,7 +1375,7 @@ static float hero_camera(Renderer *r, const Game *g, float aspect, float *blur) 
         *blur = .03f;
     } else {
         // A trackside camera on the outside of the next bend; the pack sweeps past.
-        float s = (g->clock - local) * HERO_SPEED + 170 + 64;
+        float s = (g->clock - local) * HERO_SPEED + BROADCAST_START + 64;
         Vec3 ahead = track_at(t, s + 22, 0, NULL), sides[2];
         for (int i = 0; i < 2; i++)
             sides[i] = track_at(t, s, i ? 13.f : -13.f, NULL);
@@ -1385,7 +1502,7 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     if (!calm)
         draw_spray(r, g);
     if (!garage && r->night > 0)
-        draw_lamp_glows(r);
+        draw_lamp_glows(r, g);
     if (!calm)
         draw_weather(r, g);
     glBindFramebuffer(GL_FRAMEBUFFER, r->default_fbo);

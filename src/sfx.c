@@ -50,6 +50,13 @@ static const SfxInfo sounds[SFX_COUNT] = {
     [SFX_CHEER] = {"sounds/cheer.ogg", -14.76f, false, false},
     [SFX_ROAR] = {"sounds/roar.ogg", -16.41f, false, false},
     [SFX_RECOVER] = {"sounds/recover.ogg", -15.97f, false, false},
+    [SFX_CROSSING_BELL] = {"sounds/crossing-bell.ogg", -14.40f, true, false},
+    [SFX_STEAM_WHISTLE] = {"sounds/steam-whistle.ogg", -12.18f, false, false},
+    [SFX_TRAIN_HORN] = {"sounds/train-horn.ogg", -8.07f, false, false},
+    [SFX_STEAM_TRAIN] = {"sounds/steam-train.ogg", -16.15f, true, false},
+    [SFX_TRAIN] = {"sounds/train.ogg", -19.92f, true, false},
+    [SFX_LAND_TRAIN] = {"sounds/land-train.ogg", -15.68f, true, false},
+    [SFX_LAND_TRAIN_HORN] = {"sounds/land-train-horn.ogg", -11.05f, false, false},
     [SFX_UI_MOVE] = {"sounds/ui-move.ogg", -22.73f, false, false},
     [SFX_UI_SELECT] = {"sounds/ui-select.ogg", -23.29f, false, false},
 };

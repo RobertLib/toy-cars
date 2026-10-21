@@ -99,6 +99,10 @@ void track_place_boosts(Track *t) {
                 float gap = fabsf(s - t->points[(int)t->ramps[j].index].s);
                 if (fminf(gap, t->length - gap) < 65) safe = false;
             }
+            // Nobody should arrive at a closed crossing on a boost.
+            if (t->rail.count &&
+                wrap(s - t->rail.stop_s + 90, t->length) < 90 + t->rail.clear_s - t->rail.stop_s + 20)
+                safe = false;
             float score = 0;
             Vec3 base;
             track_at(t, s, 0, &base);
@@ -328,9 +332,12 @@ static bool car_uneven_support(const Car *c, const Track *t) {
 static float car_guardrails(Car *c, const Track *t) {
     const float radius = .94f; // Tire half-width plus the rail tube.
     float impact = 0;
+    // Lowered crossing barriers stop a car the same way as a bridge railing.
+    int count = t->guardrail_count + t->barrier_count;
     for (int pass = 0; pass < 2; pass++)
-        for (int i = 0; i < t->guardrail_count; i++) {
-            Guardrail rail = t->guardrails[i];
+        for (int i = 0; i < count; i++) {
+            Guardrail rail = i < t->guardrail_count ? t->guardrails[i]
+                                                    : t->barriers[i - t->guardrail_count];
             const float margin = 1.7f;
             if (fminf(c->prev.x, c->pos.x) > fmaxf(rail.a.x, rail.b.x) + margin ||
                 fmaxf(c->prev.x, c->pos.x) < fminf(rail.a.x, rail.b.x) - margin ||
@@ -643,6 +650,7 @@ void game_start(Game *g) {
         c->name = names[i];
     }
     props_reset(g);
+    rail_reset(g);
     g->sound_count = 0;
     game_sound(g, SOUND_COUNTDOWN, -1, 1, g->cars[0].pos);
 }
@@ -652,6 +660,13 @@ void game_reset_car(Game *g, int index) {
     if (c->finished && !c->tumbling)
         return;
     Track *t = &g->tracks[g->selected];
+    // Never recover onto a crossing while its signals flash: wait at the line instead.
+    const Railway *rail = &t->rail;
+    if (rail->count && !c->finished && (g->rail.warning || g->rail.arm > 0)) {
+        float past = wrap(c->progress - rail->stop_s + 10, t->length) - 10;
+        if (past > -1 && past < rail->clear_s - rail->stop_s + 1)
+            c->progress -= past + 3;
+    }
     Vec3 d;
     c->pos = track_at(t, c->finished ? c->last_s : c->progress, 0, &d);
     c->yaw = atan2f(d.x, d.z);
@@ -843,6 +858,48 @@ void game_ai(const Game *g, int index, Controls *out) {
         desired = fminf(desired, sqrtf(pickup_speed * pickup_speed +
                                       2 * 16.f * fmaxf(0, near - 12)));
     }
+    // Level crossing: go only when the car clears it before the arms close, or
+    // arrives after they rise. Otherwise stop at the line. Near the crossing
+    // every car follows slower traffic ahead in its lane, so a queue drains
+    // in order once the arms are up.
+    bool hold = false;
+    const Railway *rail = &t->rail;
+    float to_line = rail->count ? wrap(rail->stop_s - c->last_s + 10, t->length) - 10 : -1e9f;
+    if (to_line > -1.5f && to_line < 150) {
+        float close, open, now = g->rail.time;
+        bool stopping = false;
+        if (rail_window(g, now, &close, &open)) {
+            float beyond = to_line + rail->clear_s - rail->stop_s + 2;
+            bool clears = now + beyond / fmaxf(c->speed, 6) < close - .4f;
+            bool reopened = now + fmaxf(0, to_line) / fmaxf(c->speed, 22) > open;
+            // Too fast to stop in front of the barrier: commit while it is still rising.
+            bool committed = c->speed * c->speed / (2 * 22.f) > to_line + .5f &&
+                             now + beyond / fmaxf(c->speed, 1) < close + 1.2f;
+            stopping = !clears && !reopened && !committed;
+        }
+        float stop = stopping ? to_line : 1e9f, my_lane = 0;
+        int n = c->nearest;
+        track_nearest(t, c->pos, &n, NULL, &my_lane);
+        for (int j = 0; j < CAR_COUNT; j++) {
+            const Car *other = &g->cars[j];
+            float gap = wrap(other->last_s - c->last_s + 10, t->length) - 10;
+            if (j == index || other->dnf || gap < .5f || gap > fmaxf(40, to_line + 6) ||
+                other->speed > c->speed || vlen(vsub(other->pos, c->pos)) > gap + 6)
+                continue;
+            int m = other->nearest;
+            float other_lane;
+            track_nearest(t, other->pos, &m, NULL, &other_lane);
+            if (fabsf(other_lane - my_lane) >= 2.4f)
+                continue;
+            if (stopping)
+                stop = fminf(stop, gap - 5.4f);
+            desired = fminf(desired, other->speed + fmaxf(0, gap - 6) * .9f);
+        }
+        if (stopping) {
+            desired = fminf(desired, sqrtf(2 * 14.f * fmaxf(0, stop - .3f)));
+            hold = stop < 2 && c->speed < 3;
+        }
+    }
     if (c->finished) {
         // Clear the finish at a relaxed pace on the right, keeping a gap to
         // traffic ahead. The regular handling model supplies the deceleration.
@@ -864,6 +921,11 @@ void game_ai(const Game *g, int index, Controls *out) {
     out->brake = clampf((c->speed - desired - .6f) * .25f, 0, 1);
     if (c->finished)
         out->brake = fminf(out->brake, .22f);
+    // Waiting at the crossing holds the brake instead of creeping forward.
+    if (hold) {
+        out->throttle = 0;
+        out->brake = 1;
+    }
 }
 
 static void particle(Game *g, Vec3 p, Vec3 vel, float life, float size, Color color) {
@@ -908,6 +970,12 @@ void game_sound(Game *g, SoundKind kind, int car, float strength, Vec3 pos) {
         g->sound_count--;
     }
     g->sounds[g->sound_count++] = (SoundEvent){kind, car, strength, pos};
+}
+
+void game_smoke(Game *g, Vec3 pos, Vec3 velocity) {
+    particle(g, pos, vadd(velocity, v3((random01(g) - .5f) * .6f, 2.4f + random01(g), (random01(g) - .5f) * .6f)),
+             1.6f + random01(g) * .6f, .15f + random01(g) * .07f, rgb(.74f, .74f, .73f));
+    g->particles[(g->particle_cursor - 1) % MAX_PARTICLES].kind = PARTICLE_SMOKE;
 }
 
 static void toast(Game *g, const char *s, float seconds) {
@@ -1663,7 +1731,7 @@ static void resolve_car_collisions(Game *g) {
 // is announced once per pass. Lines speak only about the road ahead.
 enum {
     TOPIC_START = 1, TOPIC_TUMBLE, TOPIC_FINISH, TOPIC_CAN, TOPIC_RAMP, TOPIC_CORNER,
-    TOPIC_OFFROAD, TOPIC_BOOST, TOPIC_BRIDGE, TOPIC_RIVAL, TOPIC_WEATHER, TOPIC_CLEAR
+    TOPIC_OFFROAD, TOPIC_BOOST, TOPIC_BRIDGE, TOPIC_RIVAL, TOPIC_WEATHER, TOPIC_CLEAR, TOPIC_TRAIN
 };
 #define TOPIC(kind, item) ((kind) * 64 + (item))
 
@@ -1763,6 +1831,26 @@ static bool chatter_pick(Game *g, int index) {
         static const char *dibs[] = {"DIBS ON THAT GAS!", "MMM... GASOLINE", "THAT CAN IS MINE!",
                                      "SNACK TIME!", NULL};
         return quip_say(c, index, TOPIC(TOPIC_CAN, can), me ? thirsty : dibs, can_side);
+    }
+    // A train on its way to the crossing ahead; the first quiet pass gets a hint.
+    const Railway *rail = &t->rail;
+    float to_line = rail->count ? wrap(rail->stop_s - c->last_s, t->length) : 1e9f;
+    bool closing = g->rail.warning || g->rail.arm > 0;
+    if (to_line > 10 && to_line < 70 && closing && quip_fresh(c, TOPIC(TOPIC_TRAIN, 0), pass)) {
+        static const char *train[] = {"TRAIN! BRAKES, BRAKES!", "CHOO CHOO! WAIT YOUR TURN",
+                                      "BARRIERS DOWN - WHOA THERE!", NULL};
+        static const char *road_train[] = {"TOOT TOOT! TOURISTS CROSSING", "LITTLE TRAIN, BIG WAIT",
+                                           "ALL ABOARD THE BEACH EXPRESS!", NULL};
+        static const char *waiting[] = {"TRAIN TIME... YAWN", "WAVE AT THE DRIVER!", "TICKETS, PLEASE!",
+                                        NULL};
+        return quip_say(c, index, TOPIC(TOPIC_TRAIN, 0),
+                        !me ? waiting : rail->kind == RAIL_ROAD_TRAIN ? road_train : train, "");
+    }
+    if (me && to_line > 15 && to_line < 55 && !closing &&
+        quip_fresh(c, TOPIC(TOPIC_TRAIN, 1), 1e9f)) {
+        static const char *lines[] = {"LEVEL CROSSING - LOOK BOTH WAYS", "NO TRAIN? FLOOR IT!",
+                                      "RAILS AHEAD. MIND THE BUMP", NULL};
+        return quip_say(c, index, TOPIC(TOPIC_TRAIN, 1), lines, "");
     }
     for (int j = 0; j < t->ramp_count; j++) {
         float ramp_s = t->points[(int)t->ramps[j].index].s;
@@ -1904,6 +1992,9 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
     if (g->screen == SCREEN_RACE || g->screen == SCREEN_COUNTDOWN || g->screen == SCREEN_RESULTS)
         weather_tick(g, dt);
     g->clock += dt;
+    if (g->screen == SCREEN_MENU || g->screen == SCREEN_HELP || g->screen == SCREEN_SETTINGS ||
+        g->screen == SCREEN_RECORDS || g->screen == SCREEN_RESET_DATA)
+        rail_broadcast(g);
     g->toast_time = fmaxf(0, g->toast_time - dt);
     g->shake = fmaxf(0, g->shake - dt);
     for (int j = 0; j < MAX_PARTICLES; j++) {
@@ -1911,7 +2002,9 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
         if (p->life > 0) {
             p->life -= dt;
             p->pos = vadd(p->pos, vmul(p->vel, dt));
-            if (p->kind != PARTICLE_RIPPLE)
+            if (p->kind == PARTICLE_SMOKE)
+                p->vel = vmul(p->vel, expf(-1.2f * dt)); // Warm smoke drifts and slows.
+            else if (p->kind != PARTICLE_RIPPLE)
                 p->vel.y -= (p->kind == PARTICLE_SPRAY ? 9.8f : 2) * dt;
             if (p->kind == PARTICLE_SPRAY && p->vel.y < 0) {
                 float level;
@@ -1935,6 +2028,7 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
             g->cars[i].throttle = i == 0 && !autopilot && !g->profile.auto_accel
                                       ? clampf(controls.throttle, 0, 1)
                                       : 0;
+        rail_tick(g, dt);
         int last = (int)ceilf(g->countdown);
         g->countdown -= dt;
         if ((int)ceilf(g->countdown) != last)
@@ -1963,6 +2057,7 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
             if (g->time > 220 && !g->cars[i].finished)
                 g->cars[i].dnf = true;
         }
+        rail_tick(g, dt);
         props_tick(g, dt);
         resolve_car_collisions(g);
         g->finish_rank = player_rank(g);
@@ -1987,6 +2082,7 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
     // once every car has its interpolated crossing time.
     if (g->cars[0].finished || g->cars[0].dnf)
         game_results(g);
+    rail_tick(g, dt);
     props_tick(g, dt);
     resolve_car_collisions(g);
     g->rank = player_rank(g);
@@ -3696,6 +3792,174 @@ static void test_chatter(Game *g) {
           "the player chats regularly while rivals take turns");
 }
 
+// Depth of the deepest car circle inside a vehicle of the train.
+static float test_train_overlap(const Game *g) {
+    RailVehicle vehicles[MAX_RAIL_VEHICLES];
+    int count = rail_vehicles(g, 1, vehicles);
+    float worst = 0;
+    for (int i = 0; i < count; i++) {
+        const RailVehicle *v = &vehicles[i];
+        Vec3 f = v->forward, right = v3(f.z, 0, -f.x);
+        Vec3 center = vadd(v->pos, vmul(f, (v->front + v->back) * .5f));
+        for (int j = 0; j < CAR_COUNT; j++) {
+            const Car *c = &g->cars[j];
+            if (!v->visible || c->dnf || c->reset_protection > 0 || fabsf(c->pos.y - v->pos.y) > 3.5f)
+                continue;
+            for (int end = -1; end <= 1; end += 2) {
+                Vec3 q = vsub(vadd(c->pos, v3(sinf(c->yaw) * .72f * end, 0, cosf(c->yaw) * .72f * end)),
+                              center);
+                float x = fabsf(vdot(q, right)) - v->half_width, z = fabsf(vdot(q, f)) - v->length * .5f;
+                float outside = hypotf(fmaxf(x, 0), fmaxf(z, 0));
+                float depth = outside > 0 ? .85f - outside : .85f - fmaxf(x, z);
+                worst = fmaxf(worst, depth);
+            }
+        }
+    }
+    return worst;
+}
+
+// Trains keep a timetable with short closures, rivals queue at the lowered
+// barriers instead of meeting the train, the barriers stop a car driven at
+// them, and a car left on the rails is swept aside rather than run through.
+static void test_railway(Game *g) {
+    const Track *t = &g->tracks[g->selected];
+    const Railway *r = &t->rail;
+    CHECK(r->count > 0 && (int)r->kind == g->selected, "every circuit has its own crossing");
+    CHECK(r->stop_s < r->road_s && r->road_s < r->clear_s && r->clear_s - r->stop_s < 30,
+          "the stop line lies just before the crossing");
+    CHECK(r->arm_count == 2 && r->light_count == 2, "two barriers and two flashing signals");
+    g->force_train = 0;
+    game_start(g);
+    float closed = 0, longest = 0, run = 0, first = -1, opened = -1e9f, gap = 1e9f, warned = 0;
+    float jump = 0;
+    bool was = false, warning_first = true;
+    for (int step = 0; step < 120 * 300; step++) {
+        float arm = g->rail.arm;
+        rail_tick(g, FIXED_DT);
+        jump = fmaxf(jump, fabsf(g->rail.arm - arm));
+        warned = g->rail.warning ? warned + FIXED_DT : 0;
+        bool down = g->rail.arm > .5f;
+        if (down && !was) {
+            if (first < 0)
+                first = g->rail.time;
+            gap = fminf(gap, g->rail.time - opened);
+            warning_first = warning_first && warned > 1;
+            run = 0;
+        }
+        if (!down && was)
+            opened = g->rail.time;
+        if (down) {
+            closed += FIXED_DT;
+            run += FIXED_DT;
+            longest = fmaxf(longest, run);
+        }
+        was = down;
+    }
+    printf("%s railway: first closure %.1fs, longest %.1fs, closed %.0f%%, shortest gap %.1fs\n",
+           t->id, first, longest, closed / 3, gap);
+    CHECK(first > 0 && (r->loop || first > 20), "the opening lap's field passes before a train");
+    CHECK(longest < 10.5f && longest > 4, "the road reopens within about ten seconds");
+    CHECK(closed / 300 < .25f, "the crossing stays open most of the time");
+    CHECK(gap > 20, "closures are well spaced");
+    CHECK(warning_first, "signals flash before the arms come down");
+    // The arms take three seconds to fall and two and a half to rise.
+    CHECK(jump < 1.1f / (2.5f * 120), "the arms move smoothly");
+
+    // The field arrives just as a train is due: everybody waits, nobody is hit.
+    g->force_train = 6;
+    game_start(g);
+    g->screen = SCREEN_RACE;
+    g->rail.time = 0;
+    for (int i = 0; i < CAR_COUNT; i++) {
+        test_place_car(g, i, r->stop_s - 62 - i * 6, 22, false);
+        Car *c = &g->cars[i];
+        Vec3 d;
+        c->pos = track_at(t, c->progress, i % 2 ? 2.f : -2.f, &d);
+        c->prev = c->route_pos = c->pos;
+        car_surface_pose(t, &c->pos, c->yaw, &c->pitch, &c->roll);
+        c->lap = 1;
+        c->checkpoints = (int)(c->progress / (t->length * .25f));
+    }
+    int hits = 0, most = 0, inside = 0, tumbles = 0;
+    for (int step = 0; step < 120 * 30; step++) {
+        game_tick(g, (Controls){0}, FIXED_DT, true);
+        int waiting = 0;
+        for (int i = 0; i < g->sound_count; i++)
+            hits += g->sounds[i].kind == SOUND_TRAIN_HIT;
+        g->sound_count = 0;
+        for (int i = 0; i < CAR_COUNT; i++) {
+            const Car *c = &g->cars[i];
+            float to_line = wrap(r->stop_s - c->last_s + 50, t->length) - 50;
+            waiting += c->speed < .5f && to_line > -1 && to_line < 45;
+            inside += g->rail.arm > .95f && to_line < -2.5f && to_line > r->stop_s - r->clear_s;
+            tumbles += c->tumbling && to_line > -25 && to_line < 50;
+        }
+        most = waiting > most ? waiting : most;
+    }
+    int through = 0;
+    for (int i = 0; i < CAR_COUNT; i++)
+        through += g->cars[i].progress > r->clear_s + 40;
+    printf("%s crossing queue: %d waiting at once, %d through, %d train hits, %d tumbling steps, jump %.4f\n",
+           t->id, most, through, hits, tumbles, jump);
+    CHECK(most >= 4 && hits == 0 && !inside, "rivals queue at the lowered barriers");
+    CHECK(!tumbles, "the queue drains without collisions");
+    CHECK(through == CAR_COUNT, "every car crosses once the arms are up");
+
+    // A car driven at the lowered barrier stops in front of it.
+    g->force_train = 4;
+    game_start(g);
+    g->screen = SCREEN_RACE;
+    g->rail.time = 0;
+    for (int i = 1; i < CAR_COUNT; i++)
+        g->cars[i].dnf = true;
+    for (int step = 0; step < 120 * 3; step++)
+        rail_tick(g, FIXED_DT);
+    test_place_player(g, r->stop_s - 25, 18, false);
+    Car *player = &g->cars[0];
+    player->pos = track_at(t, player->progress, 1.6f, NULL);
+    player->prev = player->route_pos = player->pos;
+    car_surface_pose(t, &player->pos, player->yaw, &player->pitch, &player->roll);
+    bool rail_hit = false;
+    for (int step = 0; step < 120 * 2; step++) {
+        game_tick(g, (Controls){.throttle = 1}, FIXED_DT, false);
+        for (int i = 0; i < g->sound_count; i++)
+            rail_hit |= g->sounds[i].kind == SOUND_RAIL_HIT;
+        g->sound_count = 0;
+    }
+    CHECK(rail_hit && player->last_s < r->stop_s + 3.5f, "a lowered barrier stops the player");
+    CHECK(test_spoke(player, TOPIC(TOPIC_TRAIN, 0)), "the player calls out the closing crossing");
+
+    // A car stopped on the rails is shoved clear of the passing train.
+    g->force_train = 3;
+    game_start(g);
+    g->screen = SCREEN_RACE;
+    g->rail.time = 0;
+    for (int i = 1; i < CAR_COUNT; i++)
+        g->cars[i].dnf = true;
+    test_place_player(g, r->road_s, 0, false);
+    float deepest = 0;
+    hits = 0;
+    for (int step = 0; step < 120 * 12; step++) {
+        game_tick(g, (Controls){0}, FIXED_DT, false);
+        for (int i = 0; i < g->sound_count; i++)
+            hits += g->sounds[i].kind == SOUND_TRAIN_HIT;
+        g->sound_count = 0;
+        deepest = fmaxf(deepest, test_train_overlap(g));
+    }
+    CHECK(hits > 0 && deepest < .45f, "the train sweeps a stranded car aside");
+    // Recovering while the signals flash puts the car back at the stop line.
+    g->force_train = 3;
+    game_start(g);
+    g->screen = SCREEN_RACE;
+    g->rail.time = 0;
+    rail_tick(g, FIXED_DT);
+    test_place_player(g, r->road_s, 0, false);
+    game_reset_car(g, 0);
+    float behind = wrap(r->stop_s - g->cars[0].last_s + 10, t->length) - 10;
+    CHECK(behind > 1 && behind < 6, "recovery never lands on a closing crossing");
+    g->force_train = 0;
+}
+
 int game_tests(void) {
     Game *g = calloc(1, sizeof *g);
     if (!g || !game_load(g)) {
@@ -3790,6 +4054,7 @@ int game_tests(void) {
         test_terrain_rollover(g);
         test_surface_seams(g);
         test_edge_rollovers(g);
+        test_railway(g);
     }
     g->selected = 0;
     game_start(g);

@@ -119,6 +119,15 @@ static void seat_post(TrackProp *p, const Track *t) {
 }
 static void fences_reset(Game *g);
 static void fences_tick(Game *g, float h);
+// Keep loose objects off the level crossing and its approach.
+static bool near_crossing(const Track *t, float s, float margin) {
+    const Railway *r = &t->rail;
+    if (!r->count) return false;
+    float from = r->stop_s - margin, to = r->clear_s + margin;
+    for (int k = -1; k <= 1; k++)
+        if (s + k * t->length >= from && s + k * t->length <= to) return true;
+    return false;
+}
 
 void props_reset(Game *g) {
     const Track *t = &g->tracks[g->selected];
@@ -151,6 +160,7 @@ void props_reset(Game *g) {
                 float d=fabsf(distance-t->points[(int)t->ramps[j].index].s);
                 if (fminf(d,t->length-d)<25) safe=false;
             }
+            if (near_crossing(t,distance,25)) safe=false;
             for (int j=6;j<g->prop_count;j+=15) {
                 int nearest=-1;
                 float other=track_nearest(t,g->props[j].pos,&nearest,NULL,NULL);
@@ -328,6 +338,7 @@ static void fences_reset(Game *g) {
                 float d=fabsf(s-t->points[(int)t->ramps[j].index].s);
                 if (fminf(d,t->length-d)<32) safe=false;
             }
+            if (near_crossing(t,s,32)) safe=false;
             for (int j=0;j<g->fence_count;j+=4) {
                 int nearest=-1;
                 float other=track_nearest(t,g->props[g->fences[j].posts[0]].pos,&nearest,NULL,NULL);

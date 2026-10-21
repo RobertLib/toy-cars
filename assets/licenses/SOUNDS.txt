@@ -72,6 +72,20 @@ tire.ogg              Kenney, Impact Sounds: impactPunch_heavy_000, with
 fence.ogg             Pól, S022_Plastic_Impact_Mono.wav, with
                       qubodup, Whoosh
                       https://freesound.org/s/60013/
+crossing-bell.ogg     mpaol2023, Railway/Level Crossing Sond Effect
+                      https://freesound.org/s/370824/
+steam-whistle.ogg     Bidone, Steam Whistle.mp3
+                      https://freesound.org/s/71778/
+train-horn.ogg        euroblues, Trainwhistle SBB Re 420 euroblues.wav
+                      https://freesound.org/s/20065/
+steam-train.ogg       relwin, d_s478_riding.wav
+                      https://freesound.org/s/686059/
+train.ogg             nikitralala, bangalore_zug_schnell.flac
+                      https://freesound.org/s/239933/
+land-train.ogg        kyles, tractor idle engine motor close2.flac
+                      https://freesound.org/s/637884/
+land-train-horn.ogg   timgormly, Toy Train Whistle3.aif
+                      https://freesound.org/s/162803/
 ui-move.ogg           Kenney, UI Audio: click1
 ui-select.ogg         Kenney, UI Audio: switch7
                       https://kenney.nl/assets/ui-audio

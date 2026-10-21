@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -35,12 +36,18 @@ KENNEY = {
 def fetch(url, cache):
     path = os.path.join(cache, re.sub(r"[^A-Za-z0-9._-]+", "_", url.split("//", 1)[1])[-120:])
     if not os.path.exists(path):
+        # Freesound answers HTTP 429 to more than about one request in 2.5 s.
+        time.sleep(max(0, fetch.last + 3 - time.time()))
+        fetch.last = time.time()
         req = urllib.request.Request(url, headers=UA)
         data = urllib.request.urlopen(req, timeout=120).read()
         with open(path + ".part", "wb") as f:
             f.write(data)
         os.replace(path + ".part", path)
     return path
+
+
+fetch.last = 0
 
 
 def freesound(preview, cache, circular):
@@ -107,6 +114,35 @@ def loop(x, crossfade=.25):
     t = np.linspace(0, np.pi / 2, n)[:, None]
     body[:n] = body[:n] * np.sin(t) + tail * np.cos(t)
     return body
+
+
+def seamless(x, length, crossfade=.25, search=.05, envelope=False):
+    """Loops about length seconds from the start of x. The end moves by up to
+    search seconds to where the tail best matches the head, so the crossfade
+    joins like material in phase (or, with envelope, in rhythm) instead of
+    smearing two strikes or chuffs together."""
+    n, target, reach = int(crossfade * RATE), int(length * RATE), int(search * RATE)
+    m = x.mean(axis=1)
+    if envelope:
+        m = lowpass(np.abs(highpass(m, 300)), 40)
+    head = m[:n] - m[:n].mean()
+    region = m[target - reach:target + reach + n]
+    score = signal.correlate(region, head, mode="valid")
+    energy = np.sqrt(np.convolve(region ** 2, np.ones(n), mode="valid") -
+                     np.convolve(region, np.ones(n), mode="valid") ** 2 / n)
+    end = target - reach + int(np.argmax(score / np.maximum(energy, 1e-12)))
+    return loop(x[:end + n], crossfade)
+
+
+def flatten(x, window=.5):
+    """Removes a steady rise or fall in level, so a loop cut from a passing or
+    climbing source does not swell at its seam."""
+    n = int(window * RATE)
+    m = x.mean(axis=1)
+    blocks = len(m) // n
+    level = 10 * np.log10(np.mean(m[:blocks * n].reshape(blocks, n) ** 2, axis=1) + 1e-20)
+    slope, _ = np.polyfit((np.arange(blocks) + .5) * n, level, 1)
+    return x * 10 ** (-slope * (np.arange(len(m)) - len(m) / 2) / 20)[:, None]
 
 
 def gate_tail(x, db=-60):
@@ -303,6 +339,20 @@ SOUNDS = {
     # speakwithanimals: steady rain; Fission9: gusting polar wind.
     "rain": (S("525/525046_10637780-hq.ogg"), chain(at(cut, 100, 162), at(highpass, 50), at(loop, 3), normalize), 3),
     "gusts": (S("521/521820_9395330-hq.ogg"), chain(at(cut, 1, 61), at(highpass, 40), at(loop, 3), normalize), 3),
+    # Railway. mpaol2023: an electronic level-crossing bell striking every 0.413 s; twelve strikes.
+    "crossing-bell": (S("370/370824_6430986-hq.ogg"), chain(mono, at(highpass, 100), at(cut, 9.07, 15.0), at(seamless, 12 * .4131, .06, .03), normalize), 5),
+    # Bidone: an old steam locomotive's whistle.
+    "steam-whistle": (S("71/71778_706955-hq.ogg"), chain(mono, at(highpass, 120), at(cut, .1, 3.17), at(fade, .1, .3), normalize), 5),
+    # euroblues: the typical Swiss locomotive whistle (SBB Re 420), stepping up a little.
+    "train-horn": (S("20/20065_97596-hq.ogg"), chain(mono, at(highpass, 150), at(cut, 0, 2.4), at(fade, .004, .5), normalize), 5),
+    # relwin: riding behind steam locomotive 478 up a grade; 31 chuffs, about four a second.
+    "steam-train": (S("686/686059_1024769-hq.ogg"), chain(mono, at(highpass, 40), at(cut, 2.0, 11.0), flatten, at(seamless, 31 * .2568, .3, .13, True), normalize), 5),
+    # nikitralala: a fast train passing; eight carriages of bogies clacking over the joints.
+    "train": (S("239/239933_2352202-hq.ogg"), chain(mono, at(highpass, 40), at(cut, 34.0, 44.0), flatten, at(seamless, 8 * 1.091, .3, .1, True), normalize), 5),
+    # kyles: a tractor's diesel idling close up, for the seaside road train.
+    "land-train": (S("637/637884_612689-hq.ogg"), chain(mono, at(highpass, 40), at(cut, 16.0, 23.0), at(seamless, 21 * .2887, .2, .05), normalize), 5),
+    # timgormly: a toy train whistle, a short toot and a long one.
+    "land-train-horn": (S("162/162803_2578041-hq.ogg"), chain(mono, at(highpass, 150), at(fade, .003, .15), gate_tail, normalize), 5),
     # Kenney UI Audio: a short click and a switch.
     "ui-move": (K("ui", "click1.ogg"), chain(mono, *ONE_SHOT), 5),
     "ui-select": (K("ui", "switch7.ogg"), chain(mono, *ONE_SHOT), 5),

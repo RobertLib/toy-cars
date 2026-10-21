@@ -6,6 +6,7 @@
 | --- | --- |
 | `main.c` | SDL lifecycle, window, input events, fixed-step loop, gamepads, diagnostic CLI |
 | `src/game.c` | Vehicle dynamics, AI, fuel, laps, ranking, collisions, particles and race state |
+| `src/railway.c` | Level crossings: timetables, barriers, the trains' poses and their collisions with cars |
 | `src/assets.c` | Checked binary loading, APK asset lookup, local profile persistence |
 | `src/renderer.c` | OpenGL/GLES scene, shadow pass, follow camera, fog, postprocess, screenshot |
 | `src/ui.c` | Batched vector/text UI, responsive layouts, multitouch tracking, screens |
@@ -14,6 +15,7 @@
 | `src/sfx.c` | Recorded sound effects: decoding, loudness table, voices, pitch, panning, streamed beds |
 | `third_party/stb_vorbis` | Vendored public-domain Ogg Vorbis decoder used by the soundtrack and effects |
 | `tools/build_assets.py` | Blender-only modeling, scene saving and geometry/path export |
+| `tools/railway.py` | Crossing sites, rail bed and tunnel hill grading, crossing hardware, rolling stock |
 | `tools/build_sounds.py` | Rebuilds `assets/sounds` from recorded sources (numpy, scipy, oggenc) |
 
 The runtime has no Python dependency and no network calls. On Android the
@@ -136,6 +138,46 @@ road. They keep gaps to traffic and remain part of collision handling, including
 on the results screen. Their race progress, timing, fuel and pickup/jump counts
 stay frozen; the race clock stops once all rivals are classified.
 
+## Railways and level crossings
+
+Each circuit crosses one railway route at grade. Harvest Hills and Alpine Rush
+have a short line between two tunnel portals; a run starts deep inside one
+tunnel and ends inside the other, and runs alternate direction. Sunshine Coast
+has a closed promenade for a road train, which waits at a stop at each end and
+crosses the road once on each leg. The route, the path distances of its passes
+and stops, the stop line, the barrier hinges and the signals are authored with
+the scene and exported as TCR1.
+
+Everything follows from a timetable on the railway's own clock, which starts
+with the countdown so that it reads race time. A train run lasts its route plus
+its own length at a constant speed (15 m/s steam, 12 m/s mountain railway), and
+the next one starts 28–48 / 30–50 s later; the first arrives 26–44 s into the
+race, after the opening lap's field. The road train accelerates and brakes at
+2.2 m/s² to 7 m/s and waits 34 s at each stop; its timetable starts at a random
+phase. A window is the time any vehicle overlaps the road plus a margin along
+the route. Around each window the signals flash 5.5 s ahead, the arms start to
+fall 4 s ahead and take 3 s, stay down 0.6 s after the last vehicle and take
+2.5 s to rise, so arm and signal states are pure functions of time. While the
+arms are more than 70% down their segments join the bridge railings in the car
+collision sweep. Train vehicles are oriented boxes placed by two bogie points on
+the route; a car circle inside one is pushed out and given the train's velocity
+plus 30% restitution, and the nose deflects a car sideways instead of pushing it
+along. `car_impact` decides whether the blow rolls the car.
+
+Rivals check the next window when the stop line is within 150 m. They go if
+their current speed (at least 6 m/s) clears the crossing 0.4 s before the arms
+are half-way down, if they would arrive after the arms are half-way up again,
+or if they could not stop in front of the barrier anyway. Otherwise they brake
+at 14 m/s² to the line or 5.4 m behind the car ahead in their lane and hold the
+brake, so waiting never counts as being stuck. Near the crossing every car
+follows slower traffic in its lane, so a queue drains in order.
+
+The menu broadcast's pack never slows down, so its train is timed around it:
+the arms are up again just before the leader's camera reaches the barrier, every
+other lap (every lap for the road train, whose two stops are lengthened to fit).
+`--train-at SECONDS` sends the first train to the crossing at a chosen race time
+for demonstrations and screenshots.
+
 ## Rendering and content
 
 Blender evaluates bevel and weighted-normal modifiers and exports triangles.
@@ -245,6 +287,23 @@ per vertex: the ten TCM1 floats, world origin XYZ, yaw, pose (cheer/wave/clap/
 camera/flag = 0–4), body part (body/left arm/right arm/flag cloth = 0–3), scale
 and width. Each `<track>-crowd.tca` is separate from the static track mesh to
 avoid duplicate figures. Loading validates finite values and animation ranges.
+
+**TCR1 railway:** four-byte magic; `uint32` kind (0 steam, 1 road train,
+2 mountain railway), closed-route flag, point, pass, stop, arm and light counts;
+six floats: race distance of the crossing centre, stop line and far side, the
+pass zone half-length and the visible part of the route; route points (XYZ, about
+0.8 m apart, 0.6 m for the promenade); path distances of the passes and stops;
+six floats per barrier arm (hinge XYZ, lowered direction XZ, length) and per
+signal (lamp centre XYZ, facing XZ, half spacing). Lengths along the route are
+measured at load time.
+
+Tunnel hills are part of the island heightfield: the rail corridor is graded to
+the formation with retaining walls by each portal, a dome rises over the hidden
+track, and the step from the formation up to the dome, 1.2 m behind the portal
+face, is split off and rendered black as the tunnel's interior. Hills ease down
+towards roads and streams. The island mesh is subdivided along the corridor
+(1.2 m, 0.6 m by the portals). Rails and panels on the pavement are clipped to
+the road's triangles like the other paint.
 
 **TCS1 driving surface:** four-byte magic; `uint32 triangle_count`; nine floats
 per triangle (three XYZ vertices). Terrain, road, shoulders, curbs and ramp

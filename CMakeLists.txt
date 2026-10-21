@@ -25,7 +25,7 @@ else()
   find_package(SDL3 REQUIRED CONFIG HINTS /opt/homebrew/opt/sdl3/lib/cmake/SDL3)
 endif()
 
-set(GAME_SOURCES main.c src/game.c src/props.c src/renderer.c src/ui.c src/audio.c src/music.c src/sfx.c src/assets.c
+set(GAME_SOURCES main.c src/game.c src/props.c src/railway.c src/renderer.c src/ui.c src/audio.c src/music.c src/sfx.c src/assets.c
   third_party/stb_vorbis/stb_vorbis.c)
 # The vendored Ogg Vorbis decoder is built as-is, without the project's warnings.
 set_source_files_properties(third_party/stb_vorbis/stb_vorbis.c PROPERTIES
@@ -97,7 +97,7 @@ if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_test(NAME track_layouts COMMAND ${Python3_EXECUTABLE}
       "${CMAKE_SOURCE_DIR}/tests/track_layouts.py")
   endif()
-  add_executable(ToyCarsProgressionTests tests/progression.c src/game.c src/props.c)
+  add_executable(ToyCarsProgressionTests tests/progression.c src/game.c src/props.c src/railway.c)
   foreach(PROPERTY INCLUDE_DIRECTORIES COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_LIBRARIES LINK_OPTIONS)
     get_target_property(VALUE ToyCars ${PROPERTY})
     if(VALUE)
@@ -120,7 +120,7 @@ if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_link_options(ToyCarsMusicTests PRIVATE -fsanitize=address,undefined)
   endif()
   add_executable(ToyCarsSoundTests tests/sound.c src/audio.c src/music.c src/sfx.c src/game.c
-    src/props.c third_party/stb_vorbis/stb_vorbis.c)
+    src/props.c src/railway.c third_party/stb_vorbis/stb_vorbis.c)
   target_include_directories(ToyCarsSoundTests PRIVATE src third_party/stb_vorbis)
   target_link_libraries(ToyCarsSoundTests PRIVATE SDL3::SDL3)
   target_compile_options(ToyCarsSoundTests PRIVATE -Wall -Wextra -Wpedantic)
@@ -134,7 +134,7 @@ if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
   add_dependencies(ToyCarsSoundTests toycars_assets)
   add_test(NAME sound COMMAND ToyCarsSoundTests "${CMAKE_BINARY_DIR}/sound-test-profile")
   set_tests_properties(sound PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
-  add_executable(ToyCarsPropsTests tests/props.c src/props.c src/game.c src/assets.c)
+  add_executable(ToyCarsPropsTests tests/props.c src/props.c src/railway.c src/game.c src/assets.c)
   target_include_directories(ToyCarsPropsTests PRIVATE src)
   target_link_libraries(ToyCarsPropsTests PRIVATE SDL3::SDL3)
   target_compile_options(ToyCarsPropsTests PRIVATE -Wall -Wextra -Wpedantic)

@@ -1,7 +1,7 @@
 # ToyCars sound effects
 
 Every sound effect is a recording released under CC0, edited for the game and
-shipped as Ogg Vorbis in `assets/sounds` (37 files, 5.8 MB). The same vendored
+shipped as Ogg Vorbis in `assets/sounds` (44 files, 6.0 MB). The same vendored
 [stb_vorbis](../third_party/stb_vorbis/stb_vorbis.c) decoder as the soundtrack
 reads them, so SDL3 stays the only runtime library. Credits for every source are
 in [SOUNDS.txt](../assets/licenses/SOUNDS.txt); the music is described in
@@ -38,6 +38,10 @@ one character.
 | Ambience | Kinoton's spring countryside, jackmichaelking's waves and gulls, xkeril's Swiss mountain morning, sengjinn's night crickets | Each track; Harvest Hills at night |
 | Weather | speakwithanimals' rain, Fission9's gusting polar wind | Rain; wind and snow |
 | Menu | Kenney UI Audio, a click and a switch | Every menu change |
+| Crossing bell | mpaol2023, an electronic level-crossing bell, twelve strikes 0.413 s apart | Level crossings while their lights flash |
+| Steam train | relwin, riding behind steam locomotive 478 up a grade (chuffs and wheels, about four chuffs a second); Bidone's old steam whistle | Harvest Hills train |
+| Mountain train | nikitralala, a fast train's bogies clacking over rail joints (one carriage every 1.09 s); euroblues, the typical Swiss locomotive whistle (SBB Re 420) | Alpine Rush train |
+| Road train | kyles, a tractor's diesel idling close up; timgormly's toy train whistle, a short toot and a long one | Sunshine Coast road train |
 
 ### Selection notes (21 October 2026)
 
@@ -52,6 +56,18 @@ one character.
   chimes ring through most of it (measured narrow peaks near 3.5 and 6.1 kHz).
 - **Driving on snow and sand** has no usable CC0 recording, so those two
   surfaces are made from footsteps and the gravel roll.
+- **Railway (21 October 2026):** two otherwise convincing steam recordings were
+  rejected because their descriptions say what they are: one is a textured
+  shower floor being scrubbed, the other is AI generated. The steam loop comes
+  from a real ride behind a working locomotive, whose tempo stays within about
+  3% (0.257 s per chuff) for half a minute. Slower, more distinct chuffs from
+  locomotives leaving a station speed up through every usable stretch, so a
+  loop would stumble at its seam. The crossing bell was chosen for its steady
+  electronic strike (period 0.4131 s, autocorrelation 0.98): the Slovak
+  mechanical bell strikes unevenly, the Danish one carries passing traffic, and
+  the Belgian one rings continuously at 5.6 strokes a second. No steady CC0
+  recording of a passing train includes its motor; the clacking carriages of a
+  passing train are the steadiest material.
 - Freesound sources are its public high-quality previews (Ogg Vorbis around
   190 kb/s); its original files need an account.
 
@@ -97,6 +113,13 @@ Each car runs the same model in `src/audio.c`:
   between cars, against rails, cones, tire stacks and nets. Impact level follows
   the impact speed. Each car may sound one hit per 0.12 s; each kind of prop
   one per 0.07 s. A net only rustles on a fresh push.
+- **Railway:** the crossing bell rings at the crossing while its signals flash.
+  The train is heard from its vehicle nearest the camera, with the Doppler shift
+  of its speed, at a third of the level and darker than 900 Hz while that vehicle
+  is still in a tunnel. The steam loop plays at 1.15 times its speed and the
+  mountain train's clatter at 0.8; the road train's diesel idles at the stops
+  and rises to 1.35 times its pitch when driving. A whistle sounds once per
+  crossing, 5.5 s before the train arrives, and carries 220 m.
 - **Menus** click for every change of screen, track, mode, car color, time of
   day, setting, difficulty, initials or records page. Watching the game state
   instead of the buttons covers mouse, touch, keyboard and gamepad alike.
@@ -118,6 +141,9 @@ Every sound is normalized by its measured loudness (the table in
 | Countdown, GO, fuel | −26, −25, −26 LUFS |
 | Impacts | −40 to −28 LUFS by impact speed |
 | Crowd | −33 LUFS at the finish, −29 for a medal |
+| Crossing bell at 10 m | −36 LUFS |
+| Train at 16 m | −30 LUFS steam, −32 mountain railway, −33 road train (about −35 idling) |
+| Whistles at 22 m | −31 LUFS steam, −35 mountain railway, −33 road train |
 | Menu clicks | −30 and −28 LUFS |
 
 Measured from the sound test's race previews, a race plays near −21 LUFS and the
@@ -129,8 +155,8 @@ it never engages and peaks stay at 0.54–0.66.
 
 `src/sfx.c` is a small mixer, independent of the game like `src/music.c`:
 
-- Short sounds and loops are decoded to 16-bit samples at start-up (87 s,
-  7.7 MB). The ambience and weather beds (4.5 MB of files) stream from memory
+- Short sounds and loops are decoded to 16-bit samples at start-up (123 s,
+  10.8 MB). The ambience and weather beds (4.5 MB of files) stream from memory
   through their own decoders only while they play.
 - 48 voices. A held sound (`sfx_hold`) follows new gain, pitch, pan and filter
   targets over each rendered block and frees its voice once faded out; a full
@@ -156,7 +182,13 @@ python3 tools/build_sounds.py skid snow  # selected sounds
 It needs numpy, scipy, soundfile and oggenc (vorbis-tools); the game needs none
 of them. Loops are folded over an equal-power crossfade; sources that are
 already seamless (the engine layers, the helicopter) are resampled and filtered
-as one period of a repeating signal so their seams survive. To replace a sound,
+as one period of a repeating signal so their seams survive. Rhythmic loops (the
+crossing bell, the trains, the road train's engine) span a whole number of
+strikes, chuffs or carriages, and their end moves to where the tail best
+matches the head (in waveform, or for noisy rhythms in envelope), so the beat
+runs on through the seam; loops cut from a passing or climbing train first
+have their steady rise or fall in level removed. Downloads wait three seconds
+apart, as Freesound refuses faster requests. To replace a sound,
 change its entry in `SOUNDS` and update its credit in `SOUNDS.txt`.
 
 ## Tests and previews

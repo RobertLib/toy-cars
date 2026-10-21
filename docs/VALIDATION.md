@@ -638,6 +638,48 @@ verified. This pass does not add mobile-device validation.
   include listening on headphones, speakers or phones, or Android and iOS
   rebuilds. The APK grows by about 5.8 MB of effects.
 
+## Railways and level crossings (21 October 2026)
+
+- A full `tools/build_assets.py` run in Blender 5.2.1 regenerated every scene.
+  The car, can and helicopter exports came out byte-identical, and the wildlife
+  counts are unchanged. Driving surfaces now have 48 227 / 40 220 / 42 919
+  triangles, so `MAX_SURFACE_TRIANGLES` went up from 49 152 to 65 536. The rolling
+  stock and railway files add about 2.5 MB.
+- All six Blender validation scripts passed on the final scenes: track markings,
+  ground contact, spectators, broadcast, water layout and wildlife. So did
+  `tests/track_layouts.py`. A first build failed the water layout check because
+  the tunnel hill above the Alpine Rush south portal covered part of the stream.
+  The hills now ease down near water.
+- A Release build without warnings passed all seven CTest entries. The new
+  `test_railway` runs on every circuit:
+  - Over five minutes the first closure starts at 29.2 / 25.5 / 39.0 s, the
+    longest lasts 8.2 / 9.1 / 9.0 s and the road is closed 16 / 18 / 18% of the
+    time.
+  - With the field sent at a due train, 7 cars waited at once and none was hit
+    or rolled. All 8 crossed once the arms rose.
+  - A lowered barrier stops a player driven at it, and the player calls out
+    the closing crossing.
+  - A car left on the rails is shoved clear: it never sits more than 0.45 m
+    inside a vehicle.
+  - Recovering while the signals flash puts the car back at the stop line.
+- The simulation tests, `test_railway` included, also passed in the ASan/UBSan
+  Debug build without a report.
+- Headless probes traced the timetable and the queues. In the first version,
+  cars waiting behind a stopped car drove into it as the arms rose, and the road
+  train braking for its stop kept the road closed for 10 s. Both are fixed: near
+  the crossing every car follows slower traffic, and the stops moved further
+  from the road. Over 600 s of the menu broadcast no pack car or camera was
+  inside the crossing while the arms were moving or down.
+- A headless audio run confirmed that the bell and the train loops play during
+  each forced crossing, with peaks of 0.59 / 0.78 / 0.70.
+- Screenshots with `--train-at` show the steam train with smoke, the mountain
+  train at night with glowing signals and headlamps, the road train, the
+  lowered arms and the queues. Blender renders show the tunnel portals and hills.
+- The opt-in graphics tests had one failure, "mobile recovery target recovers
+  the car". It already failed before this change and is a touch-target check.
+- This pass does not include listening, playtesting the timetable with people,
+  or Android and iOS builds.
+
 ## Still required before public release
 
 - Playtesting with people on physical phones, particularly steering feel,
