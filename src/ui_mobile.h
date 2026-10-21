@@ -241,13 +241,16 @@ static void mobile_settings(UI *u, Game *g) {
         }
     }
     bool *values[] = {&g->profile.auto_accel, &g->profile.touch, &g->profile.sound,
-                      &g->profile.music};
-    const char *names[] = {"AUTO ACCELERATE", "TOUCH CONTROLS", "SOUND EFFECTS", "MUSIC"};
-    for (int i = 0; i < 4; i++) {
-        Rect row = {rx, b.y + i * 84, rw, 72};
+                      &g->profile.music, &g->profile.night};
+    const char *names[] = {"AUTO ACCELERATE", "TOUCH CONTROLS", "SOUND EFFECTS", "MUSIC",
+                           "NIGHT RACING"};
+    // Rows stay clear of the ALL SET button on the shortest landscape canvas.
+    float by = b.y + b.h - 72, pitch = fminf(84, (by - 12 - b.y) / 5);
+    for (int i = 0; i < 5; i++) {
+        Rect row = {rx, b.y + i * pitch, rw, pitch - 12};
         rounded(u, row, 14, WHITE);
-        label(u, 1, 30, rx + 18, row.y + 18, INK, names[i]);
-        Rect toggle = {rx + rw - 118, row.y + 14, 100, 44};
+        label(u, 1, 30, rx + 18, row.y + (row.h - 36) * .5f, INK, names[i]);
+        Rect toggle = {rx + rw - 118, row.y + (row.h - 44) * .5f, 100, 44};
         rounded(u, toggle, 22, *values[i] ? ORANGE : MUTED);
         circle(u, toggle.x + (*values[i] ? 78 : 22), toggle.y + 22, 16, WHITE);
         label(u, 1, 20, toggle.x + (*values[i] ? 15 : 43), toggle.y + 9, WHITE,
@@ -258,7 +261,6 @@ static void mobile_settings(UI *u, Game *g) {
             ui_clear_input(u);
         }
     }
-    float by = b.y + b.h - 72;
     if (mobile_button(u, (Rect){b.x, by, 240, 72}, "RESET DATA", false)) {
         u->reset_failed = false;
         g->screen = SCREEN_RESET_DATA;

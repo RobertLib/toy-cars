@@ -133,6 +133,17 @@ uploads are needed. The animation clock stops on pause. Figures remain visual
 scenery without collisions. A local random generator keeps crowd generation
 independent of the other scenery.
 
+Night racing is a uniform switch on the existing passes, with no extra render
+targets. The moon reuses the sun's direction and shadow map with a cool, dim
+color and darker hemisphere ambient; sky, fog and overcast haze use night tints.
+Car transforms are interpolated once per frame and shared by the shadow pass,
+color pass and lamps. Each car contributes one forward low-beam cone (tipped
+towards the road, with softened facing so grazing asphalt still lights) and a
+short red tail-lamp spill, evaluated per fragment for all eight cars. Emissive
+lens boxes add one draw per car, and lamp halos are one additive instanced draw
+after the spray, using a reserved region of the spray buffer. Water, weather and
+spray dim their fixed colors; the garage always renders by day.
+
 On a graphics-device reset, the main loop pauses a running race and rebuilds
 world and UI resources in SDL's replacement GL context. Names from the lost
 context are discarded without deleting objects in the replacement context.
@@ -299,6 +310,10 @@ The final overall top three earn gold, silver or bronze; other places lose.
 `championship_medal` retains the best overall medal across completed series.
 Starting another series clears its classifications but preserves unlocks and records.
 Championship always starts the next unscored stage; Arcade permits single-track replays.
+
+Profile version 7 adds an `OPTIONS` line with the night racing preference
+before the records; a missing or out-of-range value is treated as a malformed
+profile. Versions 1–6 load with daytime racing.
 
 Profile version 6 also persists elimination separately from permanent unlocks.
 Version 5 retains its current series without retroactively applying elimination.

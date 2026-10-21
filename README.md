@@ -208,6 +208,13 @@ an internet connection to run.
   loose snow. Showers soften sunlight and bring haze; flags react to the wind.
   Races start clear, with longer clear spells between weather events. Each retry
   gets a new forecast. Weather pauses with the race and leaves car handling unchanged.
+- **Night racing:** turn on **NIGHT RACING** in settings to race under a cool
+  moonlight with a dark sky and haze. All eight cars drive with working headlights:
+  low beams light the road, rivals and scenery ahead, and tail lamps cast a short
+  red glow. Lamp halos, softly glowing fuel cans, boost chevrons and the helicopter's
+  blinking beacon stay readable in the dark; rain, snow, spray and water dim to match.
+  The menu diorama previews the chosen time of day, while the garage stays a daylight
+  studio. Night changes only the visuals, not handling or AI. The choice is saved.
 - Seven original synthesized compositions: a relaxed paddock theme and two
   distinct tracks per environment. Extended harmonies, evolving 64-bar arrangements,
   melodic answers and breathing spaces; adaptive layers follow speed, close racing
@@ -299,6 +306,7 @@ ctest --test-dir build --output-on-failure
 python3 tests/track_layouts.py
 ./build/ToyCars --test
 ./build/ToyCars --autoplay --track winter
+./build/ToyCars --autoplay --track beach --night
 ./build/ToyCars --screen garage
 ./build/ToyCars --screen records
 ./build/ToyCars --screen race --autoplay --benchmark --frames 600 \

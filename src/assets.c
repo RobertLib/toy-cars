@@ -319,6 +319,7 @@ static void profile_defaults(Profile *p) {
                    .touch = true,
                    .sound = true,
                    .music = true,
+                   .night = false,
                    .initials = "AAA"};
 }
 void profile_load(Profile *p) {
@@ -336,7 +337,7 @@ void profile_load(Profile *p) {
     int n = sscanf(d, "TOYCARS %d\n%d %d %d %d %d %d\n%f %f %f\n%d %d %d\n%d %n", &version,
                    &c, &level, &a, &t, &s, &m, &b0, &b1, &b2, &med0, &med1, &med2, &completed, &offset);
     bool valid = (version == 1 && n >= 13) ||
-                 ((version >= 2 && version <= 6) && n == 14 && completed >= 0 && completed <= TRACK_COUNT);
+                 ((version >= 2 && version <= 7) && n == 14 && completed >= 0 && completed <= TRACK_COUNT);
     if (valid && c >= 0 && c < 6 && level >= 0 && level < 3 && isfinite(b0) && isfinite(b1) &&
         isfinite(b2) && b0 >= 0 && b1 >= 0 && b2 >= 0) {
         p->color = c;
@@ -399,6 +400,17 @@ void profile_load(Profile *p) {
             }
             offset = (int)(cursor - d);
         }
+        if (version >= 7) {
+            int night = 0, used = 0;
+            if (sscanf(d + offset, " OPTIONS %d %n", &night, &used) != 1 || !used || night < 0 ||
+                night > 1) {
+                profile_defaults(p);
+                SDL_free(d);
+                return;
+            }
+            p->night = night == 1;
+            offset += used;
+        }
         // Legacy saves retain unlocks and records; start a new scored Championship.
         if (version < 3 || !offset || !load_records(p, d + offset, version))
             migrate_records(p);
@@ -411,7 +423,7 @@ bool profile_save(const Profile *p) {
         return false;
     SDL_snprintf(temp, sizeof temp, "%s.tmp", path);
     int len =
-        SDL_snprintf(data, sizeof data, "TOYCARS 6\n%d %d %d %d %d %d\n%.3f %.3f %.3f\n%d %d %d\n%d\n",
+        SDL_snprintf(data, sizeof data, "TOYCARS 7\n%d %d %d %d %d %d\n%.3f %.3f %.3f\n%d %d %d\n%d\n",
                      p->color, p->difficulty, p->auto_accel, p->touch, p->sound, p->music,
                      p->best[0], p->best[1], p->best[2], p->medals[0], p->medals[1], p->medals[2],
                      p->championship_completed);
@@ -422,6 +434,7 @@ bool profile_save(const Profile *p) {
         for (int i = 0; i < CAR_COUNT; i++)
             len += SDL_snprintf(data + len, sizeof data - len, "%d%c",
                 p->championship_places[stage][i], i == CAR_COUNT - 1 ? '\n' : ' ');
+    len += SDL_snprintf(data + len, sizeof data - len, "OPTIONS %d\n", p->night);
     len += SDL_snprintf(data + len, sizeof data - len, "RECORDS %u %s %d\n",
                         p->record_serial, p->initials, p->initials_set);
     for (int track = 0; track < TRACK_COUNT; track++) {

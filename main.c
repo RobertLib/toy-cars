@@ -83,7 +83,7 @@ static bool restore_graphics(Renderer *r, UI *u) {
 
 int main(int argc, char **argv) {
     bool test = false, autoplay = false, noaudio = false, benchmark = false, touch_override = false;
-    bool no_vsync = false, show_fps = false;
+    bool no_vsync = false, show_fps = false, night = false;
     int track = -1, frames = 0, width = 1440, height = 900;
     const char *screenshot = NULL, *screen = NULL;
     for (int i = 1; i < argc; i++) {
@@ -101,6 +101,8 @@ int main(int argc, char **argv) {
             show_fps = true;
         else if (!strcmp(argv[i], "--touch"))
             touch_override = true;
+        else if (!strcmp(argv[i], "--night"))
+            night = true;
         else if (!strcmp(argv[i], "--track") && i + 1 < argc) {
             i++;
             track = !strcmp(argv[i], "beach") ? 1 : !strcmp(argv[i], "winter") ? 2 : 0;
@@ -127,7 +129,8 @@ int main(int argc, char **argv) {
                    "fixed frame delta\n  --no-vsync                 Disable vsync at normal game speed\n"
                    "  --fps                      Show FPS and rendering statistics\n"
                    "  --no-audio                 Do not open an audio device\n  "
-                   "--touch                    Preview mobile layout and touch controls\n");
+                   "--touch                    Preview mobile layout and touch controls\n"
+                   "  --night                    Race at night (not saved unless settings change)\n");
             return 0;
         } else {
             fprintf(stderr, "Unknown or incomplete option: %s\n", argv[i]);
@@ -209,6 +212,8 @@ int main(int argc, char **argv) {
         g->profile.touch = true;
         u->mobile = true;
     }
+    if (night)
+        g->profile.night = true;
     g->test_mode = autoplay || frames > 0 || screen != NULL;
     if (screen) {
         if (!strcmp(screen, "race")) {

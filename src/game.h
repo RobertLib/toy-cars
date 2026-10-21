@@ -160,6 +160,7 @@ typedef struct {
 typedef struct {
     int color, difficulty;
     bool auto_accel, touch, sound, music;
+    bool night; // Race under moonlight with headlights.
     float best[TRACK_COUNT];
     int medals[TRACK_COUNT];
     int championship_completed; // Permanent track unlock progress.

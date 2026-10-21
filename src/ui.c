@@ -797,13 +797,16 @@ static void settings(UI *u, Game *g) {
             ui_clear_input(u);
         }
     }
-    bool *values[] = {&g->profile.auto_accel, &g->profile.sound, &g->profile.music};
-    const char *names[] = {"AUTO ACCELERATE", "SOUND EFFECTS", "MUSIC"};
+    bool *values[] = {&g->profile.auto_accel, &g->profile.sound, &g->profile.music,
+                      &g->profile.night};
+    const char *names[] = {"AUTO ACCELERATE", "SOUND EFFECTS", "MUSIC", "NIGHT RACING"};
     const char *desc[] = {"Accelerate automatically while you steer.",
                           "Engine, tires, pickups and a perfect landing.",
-                          "An original, laid-back electronic soundtrack."};
-    for (int i = 0; i < 3; i++) {
-        float pitch = compact ? (by - y - 84) / 3 : 72, yy = y + (compact ? 74 : 85) + i * pitch;
+                          "An original, laid-back electronic soundtrack.",
+                          "Race under the moon with your headlights on."};
+    for (int i = 0; i < 4; i++) {
+        float pitch = compact ? (by - y - 84) / 4 : fminf(72, (by - y - 95) / 4),
+              yy = y + (compact ? 74 : 85) + i * pitch;
         line(u, x, yy + pitch - 3, x + w, yy + pitch - 3, 1, rgb(.84, .85, .80));
         label(u, 1, compact ? 23 : 25, x + 7, yy + 1, INK, names[i]);
         label(u, 0, compact ? 14 : 15, x + 280, yy + 8, MUTED, desc[i]);

@@ -103,7 +103,19 @@ static const char *world_vs =
     "float cloudShade(vec3 p){return cloudCover(p.xz+vec2(-.6,.45)*(110.-p.y))*uCloudAmount;}"
 static const char *world_fs = GLSL CLOUD_GLSL
     "in float vGround;in vec3 vPos,vNormal,vColor;in vec4 vShadow;out vec4 frag;uniform sampler2D uShadow;uniform "
-    "vec3 uEye,uFog;uniform float uFogFar,uUnlit,uOvercast;uniform bool uBoost;uniform float uBoostTime;\n"
+    "vec3 uEye,uFog;uniform float uFogFar,uUnlit,uOvercast,uNight;uniform bool uBoost;uniform float uBoostTime;\n"
+    "uniform vec4 uLamps[8],uLampDirs[8];\n"
+    // Night car lamps: a low beam tipped towards the road and a short red spill
+    // behind. Softened facing lets the grazing beam still reach the asphalt.
+    "vec3 carLamps(vec3 n){vec3 sum=vec3(0.);for(int i=0;i<8;i++){vec4 lamp=uLamps[i];"
+    "if(lamp.w<=0.)continue;vec3 f=uLampDirs[i].xyz,d=lamp.xyz-vPos;float r=length(d);"
+    "vec3 l=d/max(r,.001);float cone=smoothstep(.83,.95,dot(-l,normalize(f-vec3(0.,.12,0.))));"
+    "float facing=clamp(dot(n,l)*2.2+.3,0.,1.);"
+    "sum+=vec3(1.,.88,.68)*cone*facing*(1.-smoothstep(22.,36.,r))*1.8/(1.+r*r*.003);"
+    "vec3 t=lamp.xyz-f*3.2-vPos;float tr=length(t);"
+    "float back=clamp(dot(n,t/max(tr,.001))*.6+.4,0.,1.);"
+    "sum+=vec3(.95,.08,.03)*back*(1.-smoothstep(1.5,4.5,tr))*1.2/(1.+tr*tr*.8);}"
+    "return sum;}\n"
     "float terrainHash(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);"
     "return fract((q.x+q.y)*q.z);}"
     "float terrainNoise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);"
@@ -116,14 +128,16 @@ static const char *world_fs = GLSL CLOUD_GLSL
     "d=texture(uShadow,p.xy+vec2(x,y)/2048.).r;s+=p.z-bias<=d?1.:0.;}return s/9.;}\n"
     "void main(){vec3 n=normalize(vNormal);if(!gl_FrontFacing)n=-n;vec3 "
     "light=normalize(vec3(-.6,1.,.45));float diff=max(0.,dot(n,light));float sh=shadow(n);float "
-    "hemi=n.y*.5+.5;vec3 ambient=mix(vec3(.33,.38,.43),vec3(.71,.75,.74),hemi);vec3 "
-    "base=vColor;if(uBoost){vec2 p=vColor.rg;"
+    "hemi=n.y*.5+.5;vec3 ambient=mix(vec3(.33,.38,.43),vec3(.71,.75,.74),hemi);"
+    "ambient=mix(ambient,mix(vec3(.045,.06,.10),vec3(.12,.16,.26),hemi),uNight);"
+    "vec3 base=vColor,glow=vec3(0.);if(uBoost){vec2 p=vColor.rg;"
     "float phase=(p.y+abs(p.x)*.7-uBoostTime*1.35)/2.;"
     "float stripe=abs(fract(phase)-.5);float aa=max(fwidth(phase),.008);"
     "float arrow=1.-smoothstep(.10-aa,.10+aa,stripe);"
     "float inset=1.-smoothstep(2.20,2.55,abs(p.x));"
     "float ends=smoothstep(0.,.3,p.y)*(1.-smoothstep(5.7,6.,p.y));"
     "base=mix(vec3(.19,.23,.22),vec3(.36,.56,.48),arrow*inset*ends);"
+    "glow=vec3(.20,.62,.50)*arrow*inset*ends;"
     "}if(vGround>.5){float patch=terrainNoise(vPos.xz*.13);"
     "float detail=(terrainNoise(vPos.xz*3.5)-.5)*(1.-smoothstep(.12,.65,length(fwidth(vPos.xz))));"
     "if(vGround<1.5){base*=.86+.22*patch+.10*detail;"
@@ -132,9 +146,12 @@ static const char *world_fs = GLSL CLOUD_GLSL
     "base*=.93+.09*patch+.04*detail+.018*ripple;} }float "
     "cloud=cloudShade(vPos);float sun=(1.-.8*uOvercast)*(1.-.82*cloud);"
     "vec3 skyAmbient=ambient*mix(vec3(1.),vec3(.91,.95,1.02),cloud);"
-    "vec3 col=base*(skyAmbient*(1.-.18*uOvercast)+vec3(.39,.34,.27)*diff*sh*sun);vec3 "
+    // The moon shares the sun's direction and shadow map, with a cool, dim light.
+    "vec3 sunColor=mix(vec3(.39,.34,.27),vec3(.12,.15,.23),uNight);"
+    "vec3 col=base*(skyAmbient*(1.-.18*uOvercast)+sunColor*diff*sh*sun);"
+    "if(uNight>0.)col+=(base*carLamps(n)+glow)*uNight;vec3 "
     "halfV=normalize(light+normalize(uEye-vPos));float "
-    "spec=pow(max(0.,dot(n,halfV)),48.)*.12*sh*sun;col+=spec;col=mix(col,base,uUnlit);float "
+    "spec=pow(max(0.,dot(n,halfV)),48.)*.12*sh*sun*(1.-.75*uNight);col+=spec;col=mix(col,base,uUnlit);float "
     "fog=smoothstep(uFogFar*.45,uFogFar,length(uEye-vPos));col=mix(col,uFog,fog*.88);frag=vec4(col,"
     "1.);}";
 static const char *depth_vs = GLSL "layout(location=0)in vec3 aPos;uniform mat4 uModel,uVP;"
@@ -145,7 +162,7 @@ static const char *depth_fs = GLSL "void main(){}";
 // Positions wrap in world space; moving the chase camera never drags the weather.
 static const char *weather_vs = GLSL
     "uniform mat4 uVP;uniform vec3 uCenter,uRight,uUp,uDrift,uWind;"
-    "uniform float uTime,uIntensity;uniform int uKind,uTrack;"
+    "uniform float uTime,uIntensity,uNight;uniform int uKind,uTrack;"
     "out vec2 vUV;out vec4 vTint;"
     "float hash(float n){return fract(sin(n*127.1+311.7)*43758.5453);}"
     "void main(){float id=float(gl_InstanceID),a=hash(id+1.),b=hash(id+93.),c=hash(id+217.);"
@@ -166,7 +183,7 @@ static const char *weather_vs = GLSL
     "vec3 tint=rain?vec3(.68,.81,.94):vec3(.95,.98,1.);"
     "if(wind && uTrack==0)tint=mix(vec3(.64,.31,.08),vec3(.9,.66,.24),b);"
     "if(wind && uTrack==1)tint=vec3(.89,.80,.59);"
-    "vTint=vec4(tint,uIntensity*edge*(rain?.48:wind?.6:.82));gl_Position=uVP*vec4(p,1.);}";
+    "vTint=vec4(tint*mix(1.,.38,uNight),uIntensity*edge*(rain?.48:wind?.6:.82));gl_Position=uVP*vec4(p,1.);}";
 static const char *weather_fs = GLSL
     "in vec2 vUV;in vec4 vTint;out vec4 frag;uniform int uKind;"
     "void main(){float mask=uKind==1?1.-abs(vUV.x):1.-smoothstep(.35,1.,length(vUV));"
@@ -185,7 +202,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "in vec3 vPos,vWater;out vec4 frag;"
     "uniform sampler2D uOpaque,uDepth,uShadow;uniform mat4 uVP,uLight;"
     "uniform vec3 uEye,uSky;uniform vec2 uResolution,uDepthParams;"
-    "uniform vec4 uViewport,uWakes[8];uniform float uTime,uOvercast;"
+    "uniform vec4 uViewport,uWakes[8];uniform float uTime,uOvercast,uNight;"
     "uniform bool uOrtho;uniform int uTrack;"
     "float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
     "float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);"
@@ -203,7 +220,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "vec2 safeUV(vec2 uv){vec2 px=1./uResolution;"
     "return clamp(uv,uViewport.xy+px,uViewport.xy+uViewport.zw-px);}",
     "void main(){vec2 flow=vWater.yz,q=vPos.xz-flow*uTime;"
-    "float sunlight=(1.-.85*uOvercast)*(1.-.82*cloudShade(vPos));"
+    "float sunlight=(1.-.85*uOvercast)*(1.-.82*cloudShade(vPos))*(1.-.6*uNight);"
     "float t=uTime,moving=smoothstep(.25,.9,length(flow));"
     "float footprint=length(fwidth(vPos.xz));"
     "vec2 grad=slope(q*.65+vec2(t*.035,-t*.025))*.018;"
@@ -231,7 +248,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "vec3 tint=uTrack==1?vec3(.055,.24,.22):uTrack==2?vec3(.055,.13,.16):vec3(.065,.16,.135);"
     "vec3 extinction=uTrack==1?vec3(.95,.38,.3):vec3(1.45,.85,.65);"
     "vec3 absorption=exp(-extinction*thickness);"
-    "vec3 transmitted=bed*absorption+tint*(1.-absorption);"
+    "vec3 transmitted=bed*absorption+tint*mix(1.,.22,uNight)*(1.-absorption);"
     "vec2 cq=q+vec2(noise(q*.7+t*.13),noise(q*.6-t*.11))*1.8;"
     "float caustic=pow(max(0.,1.-abs(sin(cq.x*3.1+sin(cq.y*2.7))+sin(cq.y*3.7+t*.4))*.5),18.);"
     "caustic*=1.-smoothstep(.15,.6,length(fwidth(q)));"
@@ -239,7 +256,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "vec3 reflected=reflect(-V,n);float horizon=pow(1.-max(0.,reflected.y),3.);"
     "vec3 sky=mix(uSky*.78,uSky*1.06,horizon);"
     "float cloud=cloudCover(vPos.xz+reflected.xz/max(.18,reflected.y)*(110.-vPos.y));"
-    "sky=mix(sky,vec3(.92,.94,.90),cloud*.32*uCloudAmount);"
+    "sky=mix(sky,vec3(.92,.94,.90)*mix(1.,.16,uNight),cloud*.32*uCloudAmount);"
     // Short screen-space rays reflect nearby banks, trees and cars; sky fills
     // off-screen rays. Depth comes from the opaque scene, never the water itself.
     "vec3 reflection=sky;"
@@ -260,9 +277,9 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL
     "float lit=1.;if(all(greaterThan(sc,vec3(0)))&&all(lessThan(sc,vec3(1))))"
     "lit=sc.z-.001<texture(uShadow,sc.xy).r?1.:.2;"
     "float glint=pow(max(0.,dot(n,halfV)),300.)*.18+pow(max(0.,dot(n,halfV)),40.)*.04;"
-    "col+=vec3(1.,.94,.76)*glint*lit*sunlight;"
+    "col+=mix(vec3(1.,.94,.76),vec3(.62,.70,.88),uNight)*glint*lit*sunlight;"
     "float foam=shore*smoothstep(.68,.9,noise(q*3.))*moving;"
-    "col=mix(col,vec3(.75,.83,.79),foam*.16);"
+    "col=mix(col,vec3(.75,.83,.79)*mix(1.,.25,uNight),foam*.16);"
     "float fog=smoothstep(85.,190.,length(uEye-vPos));if(uOrtho)fog=0.;"
     "col=mix(col,uSky,fog*.88);"
     "frag=vec4(col,smoothstep(0.,.065,depth));}"};
@@ -273,17 +290,21 @@ static const char *spray_vs = GLSL
     "vec2(-1,-1),vec2(1,1),vec2(-1,1));vUV=corners[gl_VertexID];"
     "vFade=aMotion.x;vKind=aMotion.y;vec3 p=aPosition.xyz;"
     "float size=aPosition.w;"
-    "if(vKind>1.5)p+=vec3(vUV.x,0.,vUV.y)*size;"
+    "if(vKind>2.5)p+=(uRight*vUV.x+uUp*vUV.y)*size;"
+    "else if(vKind>1.5)p+=vec3(vUV.x,0.,vUV.y)*size;"
     "else p+=uRight*vUV.x*size+uUp*vUV.y*size*(1.3+aMotion.z*.12);"
     "gl_Position=uVP*vec4(p,1.);}";
 static const char *spray_fs = GLSL
-    "in vec2 vUV;in float vFade,vKind;out vec4 frag;"
+    "in vec2 vUV;in float vFade,vKind;out vec4 frag;uniform float uNight;"
     "void main(){float d=length(vUV),a;vec3 color;"
+    // Lamp halos (3 head, 4 tail) are blended additively over the night scene.
+    "if(vKind>2.5){a=pow(max(0.,1.-d),2.2)*vFade;if(a<.008)discard;"
+    "frag=vec4(vKind>3.5?vec3(1.,.16,.07):vec3(1.,.90,.70),a);return;}"
     "if(vKind>1.5){a=(1.-smoothstep(.04,.12,abs(d-.78)))*.22;"
     "color=vec3(.76,.88,.85);}else{a=1.-smoothstep(.2,1.,d);"
     "float rim=pow(max(0.,1.-length(vUV-vec2(-.27,.28))*1.5),4.);"
     "color=mix(vec3(.39,.65,.68),vec3(1.),rim+.3);a*=.8;}"
-    "a*=vFade;if(a<.008)discard;frag=vec4(color,a);}";
+    "a*=vFade;if(a<.008)discard;frag=vec4(color*mix(1.,.35,uNight),a);}";
 static const char *post_vs =
     GLSL "out vec2 uv;void main(){vec2 "
          "p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.-1.,0.,1.);}";
@@ -580,6 +601,26 @@ static void create_primitives(Renderer *r) {
             n++;
         }
     r->cube = mesh_upload(cube, 36);
+    // Night lenses sit just proud of the modeled headlamps and tail lamps.
+    Vertex lamps[4 * 36];
+    for (int i = 0; i < 4; i++) {
+        bool tail = i >= 2;
+        Vec3 center = v3(i % 2 ? .57f : -.57f, tail ? .73f : .80f, tail ? -1.522f : 1.525f);
+        Vec3 half = tail ? v3(.16f, .055f, .01f) : v3(.15f, .08f, .01f);
+        Color color = tail ? rgb(1, .10f, .05f) : rgb(1, .96f, .84f);
+        for (int k = 0; k < 36; k++) {
+            Vertex v = cube[k];
+            v.p[0] = center.x + v.p[0] * half.x;
+            v.p[1] = center.y + v.p[1] * half.y;
+            v.p[2] = center.z + v.p[2] * half.z;
+            v.c[0] = color.r;
+            v.c[1] = color.g;
+            v.c[2] = color.b;
+            v.paint = 0;
+            lamps[i * 36 + k] = v;
+        }
+    }
+    r->lamps = mesh_upload(lamps, 4 * 36);
     r->cone = prop_mesh(false);
     r->tire = prop_mesh(true);
     r->fence = mesh_upload(NULL,0);
@@ -627,7 +668,9 @@ bool renderer_init(Renderer *r) {
     glBindVertexArray(r->spray_vao);
     glGenBuffers(1, &r->spray_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, r->spray_vbo);
-    glBufferData(GL_ARRAY_BUFFER, MAX_PARTICLES * 8 * sizeof(float), NULL, GL_STREAM_DRAW);
+    // Spray particles, followed by four night lamp halos per car.
+    glBufferData(GL_ARRAY_BUFFER, (MAX_PARTICLES + CAR_COUNT * 4) * 8 * sizeof(float), NULL,
+                 GL_STREAM_DRAW);
     for (int i = 0; i < 2; i++) {
         glEnableVertexAttribArray(i);
         glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
@@ -783,6 +826,120 @@ static void draw_helicopter(Renderer *r, const Game *g, bool depth) {
     draw_mesh(r, r->helicopter_rotor, rotor, white, depth);
     Mat4 tail = mmul(model, mmul(translate(v3(.25f, .74f, -4.02f)), rotate_x(time * 53.f)));
     draw_mesh(r, r->helicopter_tail_rotor, tail, white, depth);
+    // Anti-collision beacon on the tail fin; it blinks on simulation time.
+    if (!depth && r->night > 0 && fmodf(time, 1.3f) < .16f) {
+        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
+        Mat4 beacon = mmul(model, mmul(translate(v3(0, 1.78f, -4.15f)), scale3(.1f, .1f, .1f)));
+        draw_mesh(r, r->cube, beacon, rgb(1, .12f, .06f), false);
+        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
+    }
+}
+
+static Vec3 transform_point(Mat4 m, Vec3 p) {
+    return v3(m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12],
+              m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13],
+              m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]);
+}
+
+// Interpolated once per frame so both passes and the night lamps agree.
+static void update_cars(Renderer *r, const Game *g, bool menu) {
+    const Track *t = &g->tracks[g->selected];
+    for (int i = 0; i < CAR_COUNT; i++) {
+        Vec3 pos;
+        float yaw, pitch = 0, roll = 0;
+        r->car_visible[i] = true;
+        if (menu) {
+            Vec3 d;
+            pos = track_at(t, g->clock * 13.f - i * 12 + 170, (i % 2 ? 1 : -1) * 1.7f, &d);
+            yaw = atan2f(d.x, d.z);
+            car_surface_pose(t, &pos, yaw, &pitch, &roll);
+            r->car_colors[i] = CAR_COLORS[(i + g->profile.color) % 6];
+        } else {
+            const Car *c = &g->cars[i];
+            // Use simulation time so blinking freezes with the game, including shadows.
+            if (c->reset_protection > 0 && ((int)(c->reset_protection * 8) % 2) != 0) {
+                r->car_visible[i] = false;
+                continue;
+            }
+            pos = vlerp(c->prev, c->pos, r->alpha);
+            yaw = c->prev_yaw + angle_delta(c->yaw, c->prev_yaw) * r->alpha;
+            pitch = c->pitch;
+            roll = c->roll;
+            r->car_colors[i] = c->color;
+        }
+        // The modeled tire bottoms are .04 below the car origin.
+        Mat4 model = mmul(translate(vadd(pos, v3(0, .04f, 0))),
+                          mmul(rotate_y(yaw), mmul(rotate_x(pitch), rotate_z(roll))));
+        if (!menu && g->cars[i].tumbling) {
+            const Car *c = &g->cars[i];
+            Mat4 rotation = c->body_rotation;
+            for (int k = 0; k < 12; k++)
+                rotation.m[k] = lerpf(c->prev_body_rotation.m[k], rotation.m[k], r->alpha);
+            model = mmul(translate(vadd(pos, v3(0, .04f, 0))), rotation);
+        }
+        r->car_models[i] = model;
+    }
+}
+
+// One beam per car between its headlamps; the shader derives the tail lamps.
+static void lamp_uniforms(const Renderer *r) {
+    float lamps[CAR_COUNT * 4] = {0}, directions[CAR_COUNT * 4] = {0};
+    for (int i = 0; i < CAR_COUNT && r->night > 0; i++) {
+        if (!r->car_visible[i])
+            continue;
+        Mat4 m = r->car_models[i];
+        Vec3 p = transform_point(m, v3(0, .8f, 1.6f));
+        Vec3 f = vnorm(v3(m.m[8], m.m[9], m.m[10]));
+        float lamp[] = {p.x, p.y, p.z, 1}, direction[] = {f.x, f.y, f.z, 0};
+        memcpy(lamps + i * 4, lamp, sizeof lamp);
+        memcpy(directions + i * 4, direction, sizeof direction);
+    }
+    glUniform4fv(glGetUniformLocation(r->shader, "uLamps[0]"), CAR_COUNT, lamps);
+    glUniform4fv(glGetUniformLocation(r->shader, "uLampDirs[0]"), CAR_COUNT, directions);
+}
+
+// Additive halos over the headlamps and tail lamps, after the translucent spray.
+static void draw_lamp_glows(Renderer *r) {
+    float data[CAR_COUNT * 4 * 8];
+    int count = 0;
+    for (int i = 0; i < CAR_COUNT; i++) {
+        if (!r->car_visible[i])
+            continue;
+        for (int k = 0; k < 4; k++) {
+            bool tail = k >= 2;
+            Vec3 p = transform_point(r->car_models[i], v3(k % 2 ? .57f : -.57f, tail ? .73f : .80f,
+                                                          tail ? -1.62f : 1.72f));
+            float v[] = {p.x, p.y, p.z, tail ? .42f : .62f, 1, tail ? 4.f : 3.f, 0, 0};
+            memcpy(data + count++ * 8, v, sizeof v);
+        }
+    }
+    if (!count)
+        return;
+    GLuint p = r->spray_shader;
+    glUseProgram(p);
+    uniform_matrix(p, "uVP", r->vp);
+    uniform_vec(p, "uRight", v3(r->view.m[0], r->view.m[4], r->view.m[8]));
+    uniform_vec(p, "uUp", v3(r->view.m[1], r->view.m[5], r->view.m[9]));
+    glBindVertexArray(r->spray_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, r->spray_vbo);
+    // Halos use their own region after the spray instances; point the attributes at it.
+    size_t base = MAX_PARTICLES * 8 * sizeof(float);
+    glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)base, count * 8 * sizeof(float), data);
+    for (int i = 0; i < 2; i++)
+        glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                              (void *)(uintptr_t)(base + i * 4 * sizeof(float)));
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDepthMask(GL_FALSE);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, count);
+    r->draw_calls++;
+    r->triangles += count * 2;
+    for (int i = 0; i < 2; i++)
+        glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                              (void *)(uintptr_t)(i * 4 * sizeof(float)));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    r->bound_vao = 0;
 }
 
 static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bool garage) {
@@ -821,39 +978,17 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     if (!menu)
         draw_helicopter(r, g, depth);
     if (!depth && !menu)
-        draw_mesh(r, r->plane, identity(), t->sky, depth);
-    for (int i = 0; i < CAR_COUNT; i++) {
-        Vec3 pos;
-        float yaw, pitch = 0, roll = 0;
-        Color color;
-        if (menu) {
-            Vec3 d;
-            pos = track_at(t, g->clock * 13.f - i * 12 + 170, (i % 2 ? 1 : -1) * 1.7f, &d);
-            yaw = atan2f(d.x, d.z);
-            car_surface_pose(t, &pos, yaw, &pitch, &roll);
-            color = CAR_COLORS[(i + g->profile.color) % 6];
-        } else {
-            const Car *c = &g->cars[i];
-            // Use simulation time so blinking freezes with the game, including shadows.
-            if (c->reset_protection > 0 && ((int)(c->reset_protection * 8) % 2) != 0)
-                continue;
-            pos = vlerp(c->prev, c->pos, r->alpha);
-            yaw = c->prev_yaw + angle_delta(c->yaw, c->prev_yaw) * r->alpha;
-            pitch = c->pitch;
-            roll = c->roll;
-            color = c->color;
-        }
-        // The modeled tire bottoms are .04 below the car origin.
-        Mat4 model = mmul(translate(vadd(pos, v3(0, .04f, 0))),
-                          mmul(rotate_y(yaw), mmul(rotate_x(pitch), rotate_z(roll))));
-        if (!menu && g->cars[i].tumbling) {
-            const Car *c = &g->cars[i];
-            Mat4 rotation = c->body_rotation;
-            for (int k = 0; k < 12; k++)
-                rotation.m[k] = lerpf(c->prev_body_rotation.m[k], rotation.m[k], r->alpha);
-            model = mmul(translate(vadd(pos, v3(0, .04f, 0))), rotation);
-        }
-        draw_mesh(r, r->car, model, color, depth);
+        draw_mesh(r, r->plane, identity(), r->sky, depth);
+    for (int i = 0; i < CAR_COUNT; i++)
+        if (r->car_visible[i])
+            draw_mesh(r, r->car, r->car_models[i], r->car_colors[i], depth);
+    if (!depth && r->night > 0) {
+        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
+        for (int i = 0; i < CAR_COUNT; i++)
+            if (r->car_visible[i])
+                draw_mesh(r, r->lamps, r->car_models[i], white, false);
+        // Fuel cans glow softly so they can still be planned for in the dark.
+        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), .45f * r->night);
     }
     for (int i = 0; i < t->can_count; i++) {
         if (!menu && g->cars[0].can_cooldown[i] > 0)
@@ -866,8 +1001,10 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
                           mmul(rotate_y(g->clock * 1.5f + i), scale3(1.4f, 1.4f, 1.4f)));
         draw_mesh(r, r->fuel, model, white, depth);
     }
+    if (!depth)
+        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
     if (!depth && !menu) {
-        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), .30f);
+        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), .30f * (1 - r->night));
         for (int i = 0; i < MAX_PARTICLES; i++) {
             const Particle *p = &g->particles[i];
             if (p->life <= 0 || p->kind != PARTICLE_DUST)
@@ -896,6 +1033,7 @@ static void draw_weather(Renderer *r, const Game *g) {
     glUniform1f(glGetUniformLocation(p, "uIntensity"), w->intensity);
     glUniform1i(glGetUniformLocation(p, "uKind"), w->kind);
     glUniform1i(glGetUniformLocation(p, "uTrack"), g->selected);
+    glUniform1f(glGetUniformLocation(p, "uNight"), r->night);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
@@ -936,6 +1074,7 @@ static void draw_water(Renderer *r, const Game *g, bool overview, Color sky, flo
     cloud_uniforms(p, r, g, overview, false);
     glUniform1f(glGetUniformLocation(p, "uTime"), r->crowd_time);
     glUniform1f(glGetUniformLocation(p, "uOvercast"), overcast);
+    glUniform1f(glGetUniformLocation(p, "uNight"), r->night);
     glUniform1i(glGetUniformLocation(p, "uOrtho"), overview);
     glUniform1i(glGetUniformLocation(p, "uTrack"), g->selected);
     glUniform2f(glGetUniformLocation(p, "uResolution"), r->width, r->height);
@@ -1019,6 +1158,7 @@ static void draw_spray(Renderer *r, const Game *g) {
     uniform_matrix(p, "uVP", r->vp);
     uniform_vec(p, "uRight", v3(r->view.m[0],r->view.m[4],r->view.m[8]));
     uniform_vec(p, "uUp", v3(r->view.m[1],r->view.m[5],r->view.m[9]));
+    glUniform1f(glGetUniformLocation(p, "uNight"), r->night);
     glBindVertexArray(r->spray_vao);
     glBindBuffer(GL_ARRAY_BUFFER, r->spray_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, count * 8 * sizeof(float), data);
@@ -1049,11 +1189,17 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     r->draw_calls = 0;
     r->triangles = 0;
     r->bound_vao = 0;
-    Color clear = overview ? rgb(.956f, .949f, .922f) : t->sky;
+    // The garage stays a daylight studio; menus preview the chosen time of day.
+    r->night = g->profile.night && !garage ? 1.f : 0.f;
+    r->sky = t->sky;
+    if (r->night > 0)
+        r->sky = rgb(.012f + t->sky.r * .07f, .02f + t->sky.g * .08f, .045f + t->sky.b * .1f);
+    Color clear = overview ? rgb(.956f, .949f, .922f) : r->sky;
     float overcast = overview || g->weather.kind == WEATHER_WIND ? 0 : g->weather.intensity;
-    clear.r = lerpf(clear.r, .53f, overcast * .75f);
-    clear.g = lerpf(clear.g, .61f, overcast * .75f);
-    clear.b = lerpf(clear.b, .69f, overcast * .75f);
+    Color haze = r->night > 0 ? rgb(.10f, .12f, .15f) : rgb(.53f, .61f, .69f);
+    clear.r = lerpf(clear.r, haze.r, overcast * .75f);
+    clear.g = lerpf(clear.g, haze.g, overcast * .75f);
+    clear.b = lerpf(clear.b, haze.b, overcast * .75f);
     int vx = 0, vy = 0, vw = r->width, vh = r->height;
     if (overview) {
         vx = (int)(r->width * .37f);
@@ -1096,6 +1242,8 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     float shadow_span = garage ? 9 : menu ? 190 : 65;
     r->light_vp = mmul(ortho(-shadow_span, shadow_span, -shadow_span, shadow_span, 1, 650),
                        lookat(vadd(light_target, v3(-180, 300, 135)), light_target, v3(0, 1, 0)));
+    if (!garage)
+        update_cars(r, g, menu);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDisable(GL_BLEND);
@@ -1120,16 +1268,24 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     uniform_vec(r->shader, "uEye", r->eye);
     cloud_uniforms(r->shader, r, g, overview, garage);
     uniform_vec(r->shader, "uFog", v3(clear.r, clear.g, clear.b));
-    glUniform1f(glGetUniformLocation(r->shader, "uFogFar"), overview ? 1400 : 190 - 65 * overcast);
+    // Night haze closes in a little so distant scenery settles into the dark.
+    glUniform1f(glGetUniformLocation(r->shader, "uFogFar"),
+                overview ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night));
     glUniform1f(glGetUniformLocation(r->shader, "uOvercast"), overcast);
     glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
+    glUniform1f(glGetUniformLocation(r->shader, "uNight"), r->night);
+    lamp_uniforms(r);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, r->shadow_texture);
     glUniform1i(glGetUniformLocation(r->shader, "uShadow"), 0);
     render_objects(r, g, false, menu, garage);
-    if (!garage) draw_water(r, g, overview, clear, overcast, vx, vy, vw, vh);
+    // Menu water reflects the night sky rather than the paper backdrop.
+    Color reflected = overview && r->night > 0 ? r->sky : clear;
+    if (!garage) draw_water(r, g, overview, reflected, overcast, vx, vy, vw, vh);
     if (!overview) {
         draw_spray(r, g);
+        if (r->night > 0)
+            draw_lamp_glows(r);
         draw_weather(r, g);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, r->default_fbo);
@@ -1141,7 +1297,7 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     glUniform1i(glGetUniformLocation(r->post_shader, "uScene"), 0);
     glUniform2f(glGetUniformLocation(r->post_shader, "uResolution"), (float)r->width,
                 (float)r->height);
-    glUniform1f(glGetUniformLocation(r->post_shader, "uVignette"), overview ? 0 : .3f);
+    glUniform1f(glGetUniformLocation(r->post_shader, "uVignette"), overview ? 0 : .3f + .2f * r->night);
     const Car *player = &g->cars[0];
     float pace = clampf((player->speed - 16.f) / 24.f, 0, 1);
     pace = pace * pace * (3 - 2 * pace);
@@ -1201,6 +1357,7 @@ void renderer_destroy(Renderer *r) {
     mesh_delete(&r->cone);
     mesh_delete(&r->tire);
     mesh_delete(&r->fence);
+    mesh_delete(&r->lamps);
     mesh_delete(&r->car);
     mesh_delete(&r->fuel);
     mesh_delete(&r->helicopter);

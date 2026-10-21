@@ -24,7 +24,7 @@ typedef struct {
     GLuint shadow_fbo, shadow_texture, scene_fbo, scene_texture, scene_depth;
     Mesh wildlife[TRACK_COUNT], vegetation[TRACK_COUNT];
     Mesh tracks[3], crowds[3], car, fuel, plane, cube;
-    Mesh cone, tire, fence;
+    Mesh cone, tire, fence, lamps;
     Mesh boosts[TRACK_COUNT];
     Mesh helicopter, helicopter_rotor, helicopter_tail_rotor;
     Mat4 view, projection, vp, light_vp;
@@ -34,6 +34,12 @@ typedef struct {
     Vec3 helicopter_pos;
     float helicopter_yaw, helicopter_race_time;
     bool helicopter_ready;
+    // Car transforms shared by the shadow pass, color pass and night lamps.
+    Mat4 car_models[CAR_COUNT];
+    Color car_colors[CAR_COUNT];
+    bool car_visible[CAR_COUNT];
+    Color sky;
+    float night;
     int width, height, draw_calls, triangles;
     float ui_width, ui_height, alpha;
     GLuint bound_vao, default_fbo;

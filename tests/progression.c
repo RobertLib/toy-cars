@@ -156,6 +156,7 @@ static void test_reset(Game *g, const char *path) {
     g->profile.difficulty = 2;
     g->profile.auto_accel = true;
     g->profile.touch = g->profile.sound = g->profile.music = false;
+    g->profile.night = true;
     EXPECT(profile_save(&g->profile));
     Profile before = g->profile;
     g->selected = 2;
@@ -185,6 +186,32 @@ static void test_reset(Game *g, const char *path) {
     EXPECT(game_reset_profile(g)); // Resetting an already empty profile is harmless.
     EXPECT(SDL_RemovePath(path));
     EXPECT(game_reset_profile(g)); // Also works before a profile has ever been saved.
+}
+
+static void test_night_option(Game *g, const char *path) {
+    // Version 6 predates the option and keeps racing by day.
+    const char *v6 = "TOYCARS 6\n0 1 0 1 1 1\n82 0 0\n0 0 0\n1\n"
+                     "CHAMPIONSHIP 0 0 0\n0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0\n"
+                     "0 0 0 0 0 0 0 0\nRECORDS 0 AAA 0\n0 0\n0 0\n0 0\n";
+    EXPECT(SDL_SaveFile(path, v6, strlen(v6)));
+    profile_load(&g->profile);
+    EXPECT(!g->profile.night && g->profile.championship_completed == 1);
+    EXPECT(g->profile.best[0] == 82);
+    g->profile.night = true;
+    EXPECT(profile_save(&g->profile));
+    Profile saved;
+    profile_load(&saved);
+    EXPECT(saved.night && memcmp(&saved, &g->profile, sizeof saved) == 0);
+    const char *invalid[] = {
+        "TOYCARS 7\n0 1 0 1 1 1\n82 0 0\n0 0 0\n1\nCHAMPIONSHIP 0 0 0\n0 0 0 0 0 0 0 0\n"
+        "0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0\nOPTIONS 2\nRECORDS 0 AAA 0\n0 0\n0 0\n0 0\n",
+        "TOYCARS 7\n0 1 0 1 1 1\n82 0 0\n0 0 0\n1\nCHAMPIONSHIP 0 0 0\n0 0 0 0 0 0 0 0\n"
+        "0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0\nRECORDS 0 AAA 0\n0 0\n0 0\n0 0\n"};
+    for (size_t i = 0; i < SDL_arraysize(invalid); i++) {
+        EXPECT(SDL_SaveFile(path, invalid[i], strlen(invalid[i])));
+        profile_load(&saved);
+        EXPECT(!saved.night && saved.best[0] == 0 && saved.championship_completed == 0);
+    }
 }
 
 static void test_player_name(Game *g, const char *path) {
@@ -579,6 +606,7 @@ int main(int argc, char **argv) {
         profile_load(&g->profile);
         EXPECT(g->profile.championship_completed == 0 && g->profile.best[0] == 0);
     }
+    test_night_option(g, path);
     test_records(g, path);
     test_reset(g, path);
     test_player_name(g, path);
