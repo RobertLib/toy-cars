@@ -3786,6 +3786,13 @@ static void test_water(Game *g) {
         game_start(g);
         const Track *t = &g->tracks[k];
         CHECK(t->water_count > 100, "each environment has authored water");
+        bool gridded = true;
+        for (int i = 0; i < t->water_count; i++)
+            for (int j = 0; j < 3; j++) {
+                Vec3 p = (&t->water[i].a)[j];
+                gridded &= fabsf(p.x) <= -SURFACE_ORIGIN && fabsf(p.z) <= -SURFACE_ORIGIN;
+            }
+        CHECK(gridded, "water beyond the surface grid stays scenery, out of water queries");
         if (t->info->lava) {
             test_lava(g);
             game_start(g);

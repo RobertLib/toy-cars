@@ -22,6 +22,7 @@
 | `tools/biomes.py` | Scenery, trees, landmarks and animals of the seven later environments |
 | `tools/layout_svg.py` | Draws `screenshots/track-layouts.svg` from the exported tracks |
 | `tools/railway.py` | Crossing sites, rail bed and tunnel hill grading, crossing hardware, rolling stock |
+| `tools/surroundings.py` | The land beyond each island to the horizon: backdrop relief, distant scenery, boundary fence, outlet valleys, open sea |
 | `tools/build_sounds.py` | Rebuilds `assets/sounds` from recorded sources (numpy, scipy, oggenc) |
 
 The runtime has no Python dependency and no network calls. On Android the
@@ -74,6 +75,8 @@ checks that the later circuits grow longer. Islands of the later circuits are
 superellipses up to 450 × 454 m; their terrain is triangulated in rings about
 3.4 m apart. Beside the road their cuttings and embankments are limited to
 about 30 degrees, so a car leaving the road always meets drivable ground.
+Beyond the outline the world goes on as scenery (see Rendering and content),
+but the driving surface ends there.
 Bridge profiles use smooth approaches; their decks, undersides, railings and
 piers are authored together. Terrain grading excludes elevated spans so the
 lower route remains open. Piers stay clear of all lower carriageways.
@@ -254,6 +257,34 @@ exceed white; OpenGL ES devices without the extension get an 8-bit scene with a
 lower bloom threshold. The shadow frustum moves in whole shadow-map texels and
 is sampled with hardware comparison filtering.
 
+The world goes on beyond each island (`tools/surroundings.py`). A ring mesh
+starts on the island mesh's own outline vertices, so the two share their seam
+without a slit, and reaches at least 780 m from the centre. Its rings are 2.5 m
+apart beside the island and widen outward, with vertices at most 30 m apart
+round each ring; only stream valleys, islets and the harbour quay are refined.
+On dry land it mirrors the island's rim falloff, so the outline lies in a
+shallow valley, continues the island's terrain and rises into each environment's
+backdrop: snowy peaks round Alpine Rush, buttes and stepped sandstone walls
+beyond Canyon Dash, wooded and jungle ridges under their canopy, farmland with
+hedgerows and farmsteads, tea fields under a snow-capped cone, moorland rising
+to bare mountains. On the coast the rim slopes to a shallow shelf and the sea
+deepens offshore, round sandy islets, a city across the harbour basin with quays
+and cranes, or dark volcanic islands whose craters glow at night. Colours are
+per vertex, so fields and snowlines blend; faces beyond 45 m are flat shaded.
+Distant trees, houses, buildings and cranes are merged into one flat-shaded
+batch per colour. All of it is `<track>-land.tcm`, drawn in 125 m tiles in both
+passes: 9–30 thousand triangles per track, 5–16 thousand of them terrain. None
+of it is driving surface, so the outline still ends driving; a rail fence, a
+wire fence or a dry-stone wall just outside it marks it on dry land, with gaps
+where water crosses. Within 40 m of the outline the land stays within 25 m of
+the rim's height, below a chase camera trailing beyond the edge, and the race
+camera and the helicopter keep above the highest land, blended between 25 m
+cells. Scenery dissolves into the sky over the last 30% of the far clip distance
+(300 m racing, 550 m in the menu), so nothing is cut off at the far plane. The
+haze lies low: it thins on hills and peaks rising well above the eye, and lit
+windows shine through it at night. Water beyond 150 m skips the screen-space
+reflection rays.
+
 Post-processing then works from the scene's color and depth textures:
 
 - Half-resolution scalable ambient obscurance with a depth-aware 4x4 blur.
@@ -329,6 +360,8 @@ size, limits and finite geometry values before upload.
 **TCM1 mesh:** four-byte magic; `uint32 vertex_count`; ten floats per vertex:
 position XYZ, normal XYZ, material RGB and a body-paint interpolation mask.
 Vertices are a triangle list. Runtime recoloring affects the marked body material.
+Each track has three: the static scene `<track>.tcm`, its surroundings
+`<track>-land.tcm` and its water (below).
 
 **Water placement:** `tools/hydrology.py` traces valley drainage along the negative
 terrain gradient from authored hillside springs, then authors nonperiodic erosion
@@ -337,7 +370,8 @@ excavated into the terrain, including road grading. Meadow, sand and rock channe
 have different bend controls, width profiles and bank dressing; the coastal creek
 widens towards its tidal outlet. The country pond floods a connected depression
 with sediment shelves and promontories at one horizontal level. Its contour is
-smaller and non-convex; coastal and alpine streams continue to the boundary.
+smaller and non-convex; coastal streams meet the sea at the boundary, and a
+stream leaving a dry island runs on beyond it in a carved valley.
 Water layout does not depend on a fixed road index. Ground-level roads dip to
 meet the stream bed, including crossfall, and curbs/dashes stop at the ford.
 Elevated bridge spans leave the channel below them intact. Ground refinement
@@ -351,7 +385,10 @@ slots storing shoreline depth and current XZ instead of RGB. Blender exports
 water separately from opaque geometry and car-support surfaces. The game indexes
 its triangles in the same 8-meter spatial grid as the ground. Each grounded
 wheel checks water height against the road/terrain before emitting spray;
-water never replaces the solid road height.
+water never replaces the solid road height. The open sea reaches the horizon,
+and a stream leaving a dry island runs on for 480 m. Their triangles outside
+the ±256 m grid are scenery: loading keeps them for rendering and leaves them
+out of water queries.
 
 After opaque rendering, color and depth are blitted into separate textures.
 The water pass combines depth absorption, offset refraction with foreground

@@ -82,6 +82,7 @@ class Theme:
     patches = 115
     boulders = 40
     sea = False
+    land = None              # The world beyond the outline (tools/surroundings.py) and its boundary fence
     lava = False             # Liquid above the sea is lava (src/tracks.c has the same flag)
     four_lane = (.055, .09, .205, .24)
     passing = 65.            # Shortest full-width four-lane stretch, metres
@@ -173,7 +174,8 @@ COUNTRY = legacy(
          bed=(.43, .44, .33), edge=(.51, .37, .21), foundation=(.41, .44, .31), steel=(.52, .20, .12),
          boulder=(.59, .60, .46), pebble=(.40, .43, .34), spring=(.43, .46, .35), path=(.56, .51, .37),
          foliage=(.29, .43, .16), dry=(.64, .53, .27), flower=(.77, .69, .86), stone=(.47, .49, .37)),
-    edge_depth=-7, outfit='meadow', rail=dict(index=192, angle=125, before=38, after=34, kind='steam',
+    land=dict(style='farmland', fence='rail', fence_color=(.53, .29, .14)), outfit='meadow',
+    rail=dict(index=192, angle=125, before=38, after=34, kind='steam',
     limit=.9, ballast=(.45, .43, .40), sleeper=(.36, .25, .17), stone=(.66, .58, .48), trim=(.52, .42, .33)),
     water=dict(source=(-10., 10.), lake=True, bends=(0., 1.8, -3.8, 4.6, 1.3, -3.2, 3.6, -1.4, 0.), style='meadow',
                speed=.85, title='Watershed — spring to basin', destination='sheltered pond with sediment shelves',
@@ -185,7 +187,7 @@ BEACH = legacy(
          bed=(.63, .56, .39), edge=(.72, .59, .36), foundation=(.68, .57, .36), steel=(.16, .45, .49),
          boulder=(.68, .57, .38), pebble=(.57, .52, .38), spring=(.57, .53, .40), path=(.72, .65, .46),
          foliage=(.43, .50, .25), dry=(.70, .63, .39), flower=(.91, .78, .48), stone=(.64, .57, .43)),
-    edge_depth=-9, sea=True, outfit='beach', rail=dict(index=555, angle=90, before=23, after=23, kind='road'),
+    land=dict(style='coast'), sea=True, outfit='beach', rail=dict(index=555, angle=90, before=23, after=23, kind='road'),
     water=dict(source=(18., 47.), bends=(0., -2.5, 5.8, 1.5, -6.2, -3.5, 3.8, 0.), style='sand', speed=1.,
                title='Watershed — downhill outlet', destination='tidal estuary', character='sand-bar creek'))
 WINTER = legacy(
@@ -195,7 +197,8 @@ WINTER = legacy(
          bed=(.43, .53, .55), edge=(.44, .62, .67), foundation=(.66, .78, .80), steel=(.27, .37, .49),
          boulder=(.59, .72, .78), pebble=(.46, .56, .59), spring=(.89, .95, .94), path=(.73, .80, .80),
          foliage=(.17, .30, .25), dry=(.42, .35, .27), flower=(.76, .84, .82), stone=(.46, .54, .57)),
-    edge_depth=-7, outfit='winter', rail=dict(index=48, angle=125, before=30, after=38, kind='alpine',
+    land=dict(style='alpine', fence='rail', fence_color=(.42, .30, .20)), outfit='winter',
+    rail=dict(index=48, angle=125, before=30, after=38, kind='alpine',
     ballast=(.66, .70, .73), sleeper=(.42, .36, .31), stone=(.55, .58, .62), trim=(.43, .47, .52), cap=True),
     water=dict(source=(35., -35.), bends=(0., .8, -2.1, .4, 2.5, -1.2, -.6, 2., -.9, 0.), style='rock', speed=1.2,
                title='Watershed — downhill outlet', destination='rocky meltwater outlet',
@@ -227,7 +230,7 @@ CANYON = Theme(
                 boulder=(.66, .38, .24), pebble=(.55, .39, .27), spring=(.52, .38, .26), path=(.74, .55, .38),
                 foliage=(.45, .48, .27), dry=(.70, .55, .33), flower=(.93, .55, .30), stone=(.66, .36, .22),
                 plumage=(.20, .17, .15)),
-    edge_depth=-9, trees=95, boulders=70, patches=150, ramp_count=3, can_count=6, crowd_groups=17, benches=6,
+    land=dict(style='desert', fence='wire', fence_color=(.36, .25, .17)), trees=95, boulders=70, patches=150, ramp_count=3, can_count=6, crowd_groups=17, benches=6,
     tree='desert', sway=.3, scenery='canyon', banks='canyon', patch='desert', outfit='desert',
     wildlife=['coyote'] * 4 + ['jackrabbit'] * 6 + ['lizard'] * 6 + ['vulture'] * 8,
     rail=dict(fraction=.62, angle=110, before=30, after=34, kind='steam', ballast=(.55, .40, .30),
@@ -254,7 +257,7 @@ AUTUMN = Theme(
                 boulder=(.46, .48, .40), pebble=(.42, .42, .36), spring=(.44, .45, .38), path=(.55, .45, .32),
                 foliage=(.36, .42, .18), dry=(.62, .42, .18), flower=(.85, .55, .20), stone=(.48, .47, .40),
                 plumage=(.08, .08, .09)),
-    edge_depth=-8, trees=330, boulders=45, patches=170, ramp_count=4, can_count=6, crowd_groups=18, benches=6,
+    land=dict(style='forest', fence='rail', fence_color=(.45, .31, .18)), trees=330, boulders=45, patches=170, ramp_count=4, can_count=6, crowd_groups=18, benches=6,
     tree='autumn', sway=.55, scenery='autumn', banks='autumn', patch='autumn', outfit='winter',
     wildlife=['deer'] * 5 + ['fox'] * 4 + ['squirrel'] * 6 + ['duck'] * 5 + ['crow'] * 8,
     rail=dict(fraction=.47, angle=115, before=30, after=34, kind='alpine', ballast=(.47, .44, .40),
@@ -283,7 +286,7 @@ JUNGLE = Theme(
                 boulder=(.42, .46, .36), pebble=(.40, .38, .30), spring=(.40, .42, .32), path=(.52, .44, .32),
                 foliage=(.22, .44, .16), dry=(.45, .40, .22), flower=(.90, .30, .20), stone=(.50, .52, .42),
                 plumage=(.20, .40, .70)),
-    edge_depth=-8, trees=320, boulders=30, patches=190, ramp_count=4, can_count=6, crowd_groups=19, benches=6,
+    land=dict(style='rainforest', fence='rail', fence_color=(.62, .56, .30)), trees=320, boulders=30, patches=190, ramp_count=4, can_count=6, crowd_groups=19, benches=6,
     tree='jungle', sway=.6, scenery='jungle', banks='jungle', patch='jungle', outfit='beach',
     wildlife=['parrot'] * 8 + ['toucan'] * 4 + ['frog'] * 6 + ['tapir'] * 3 + ['emerald snake'] * 4,
     rail=dict(fraction=.45, angle=110, before=26, after=28, kind='steam', window=.2, ballast=(.42, .38, .32),
@@ -312,7 +315,7 @@ SAKURA = Theme(
                 boulder=(.52, .53, .50), pebble=(.48, .48, .46), spring=(.50, .52, .48), path=(.76, .72, .62),
                 foliage=(.32, .50, .22), dry=(.60, .55, .38), flower=(.55, .35, .80), stone=(.50, .51, .48),
                 plumage=(.52, .62, .22)),
-    edge_depth=-8, trees=260, boulders=35, patches=170, ramp_count=4, can_count=6, crowd_groups=20, benches=7,
+    land=dict(style='garden', fence='rail', fence_color=(.66, .60, .36)), trees=260, boulders=35, patches=170, ramp_count=4, can_count=6, crowd_groups=20, benches=7,
     tree='sakura', sway=.5, scenery='sakura', banks='sakura', patch='sakura', outfit='meadow',
     wildlife=['crane'] * 6 + ['sika deer'] * 5 + ['white-eye'] * 10,
     rail=dict(fraction=.3, angle=110, before=28, after=30, kind='alpine', window=.2, ballast=(.52, .52, .50),
@@ -345,7 +348,7 @@ HARBOR = Theme(
                 boulder=(.50, .50, .50), pebble=(.42, .42, .42), spring=(.46, .46, .46), path=(.62, .60, .56),
                 foliage=(.28, .44, .20), dry=(.50, .46, .36), flower=(.86, .40, .30), stone=(.48, .48, .48),
                 plumage=(.92, .93, .92)),
-    edge_depth=-9, sea=True, trees=120, boulders=0, patches=150, ramp_count=4, can_count=6, crowd_groups=21, benches=8,
+    land=dict(style='harbor'), sea=True, trees=120, boulders=0, patches=150, ramp_count=4, can_count=6, crowd_groups=21, benches=8,
     tree='harbor', sway=.4, scenery='harbor', banks='harbor', patch='harbor', outfit='meadow', tint=harbor_tint,
     wildlife=['gull'] * 12 + ['pigeon'] * 8 + ['cat'] * 3,
     rail=dict(fraction=.86, angle=100, before=28, after=30, kind='freight', window=.25, ballast=(.42, .42, .42),
@@ -373,7 +376,7 @@ HIGHLAND = Theme(
                 boulder=(.52, .52, .48), pebble=(.42, .42, .38), spring=(.46, .46, .42), path=(.58, .52, .40),
                 foliage=(.32, .40, .20), dry=(.58, .48, .28), flower=(.62, .40, .64), stone=(.50, .50, .46),
                 plumage=(.30, .20, .12)),
-    edge_depth=-9, trees=150, boulders=70, patches=210, ramp_count=5, can_count=6, crowd_groups=22, benches=8,
+    land=dict(style='moor', fence='wall', fence_color=(.50, .50, .46)), trees=150, boulders=70, patches=210, ramp_count=5, can_count=6, crowd_groups=22, benches=8,
     walls=14, tree='highland', sway=.45, scenery='highland', banks='highland', patch='highland', outfit='winter',
     wildlife=['sheep'] * 10 + ['highland cow'] * 4 + ['red deer'] * 4 + ['mountain hare'] * 4 + ['eagle'] * 5,
     rail=dict(fraction=.35, angle=110, before=30, after=34, kind='steam', window=.25, ballast=(.46, .44, .42),
@@ -412,7 +415,7 @@ VOLCANO = Theme(
                 boulder=(.17, .16, .16), pebble=(.20, .18, .18), spring=(.24, .12, .10), path=(.32, .30, .29),
                 foliage=(.26, .38, .22), dry=(.36, .30, .24), flower=(.88, .20, .10), stone=(.16, .15, .15),
                 plumage=(.06, .06, .07)),
-    edge_depth=-9, sea=True, trees=110, boulders=90, patches=200, ramp_count=5, can_count=6, crowd_groups=24, benches=8,
+    land=dict(style='volcanic'), sea=True, trees=110, boulders=90, patches=200, ramp_count=5, can_count=6, crowd_groups=24, benches=8,
     tree='volcano', sway=.35, scenery='volcano', banks='volcano', patch='volcano', outfit='meadow', tint=volcano_tint,
     wildlife=['raven'] * 8 + ['goat'] * 6 + ['black lizard'] * 5,
     rail=dict(fraction=.12, angle=110, before=30, after=34, kind='steam', window=.3, ballast=(.24, .22, .21),

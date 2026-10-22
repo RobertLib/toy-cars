@@ -174,18 +174,24 @@ static bool load_surface(Track *t, bool water) {
         SDL_free(data);
         return false;
     }
+    uint32_t kept = 0;
     for (uint32_t i = 0; i < count; i++) {
         float v[9];
+        bool beyond = false;
         for (int j = 0; j < 9; j++) {
             v[j] = read_float(data + 8 + i * stride + (water ? (j / 3) * 40 + (j % 3) * 4 : j * 4));
-            if (!isfinite(v[j]) || fabsf(v[j]) > -SURFACE_ORIGIN) {
+            if (!isfinite(v[j]) || fabsf(v[j]) > (water ? SCENERY_EXTENT : -SURFACE_ORIGIN)) {
                 SDL_free(data);
                 return false;
             }
+            beyond |= fabsf(v[j]) > -SURFACE_ORIGIN;
         }
-        triangles[i] =
+        if (beyond)
+            continue;
+        triangles[kept++] =
             (SurfaceTriangle){v3(v[0], v[1], v[2]), v3(v[3], v[4], v[5]), v3(v[6], v[7], v[8])};
     }
+    count = kept;
     SDL_free(data);
     if (water)
         t->water_count = (int)count;

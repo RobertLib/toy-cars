@@ -27,11 +27,16 @@ typedef struct {
     MeshTile *tiles;
     int tile_count;
 } TiledMesh;
+// The land beyond the island reaches the horizon. Its highest point in each
+// cell of this grid, centred on the island, keeps cameras and the helicopter above it.
+#define LAND_GRID 64
+#define LAND_CELL 25.f
 // The meshes of the circuit being shown; only one circuit is resident at a time.
 typedef struct {
     int track; // -1 before the first load
-    TiledMesh scene, vegetation, crowd, wildlife;
+    TiledMesh scene, vegetation, crowd, wildlife, land;
     Mesh water;
+    float land_top[LAND_GRID * LAND_GRID];
 } TrackScene;
 #define BLOOM_LEVELS 5
 typedef struct {
@@ -53,10 +58,11 @@ typedef struct {
     // and glints can exceed white; GL_RGBA8 otherwise.
     GLenum scene_format;
     Vec3 horizon, zenith, ember;
-    float overcast, fog_far, fade, vignette, speed_blur;
+    // Scenery dissolves into the sky before the far clip plane cuts it off.
+    float overcast, fog_far, clip_far, fade, vignette, speed_blur;
     int viewport[4];
     Mesh cars[CAR_MODEL_COUNT], lamps[CAR_MODEL_COUNT];
-    Mesh fuel, plane, cube;
+    Mesh fuel, cube;
     Mesh cone, tire, fence;
     Mesh boosts[TRACK_COUNT];
     Mesh helicopter, helicopter_rotor, helicopter_tail_rotor;

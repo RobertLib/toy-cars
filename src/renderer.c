@@ -150,7 +150,7 @@ static const char *world_vs[] = {
 static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "in float vGround,vMaterial;in vec3 vPos,vNormal,vColor;in vec4 vShadow;out vec4 frag;"
     "uniform sampler2DShadow uShadow;uniform "
-    "vec3 uEye;uniform float uFogFar,uUnlit,uGloss;uniform bool uBoost;uniform float uBoostTime;\n"
+    "vec3 uEye;uniform float uFogFar,uClipFar,uUnlit,uGloss;uniform bool uBoost;uniform float uBoostTime;\n"
     "uniform vec4 uLamps[8],uLampDirs[8];\n"
     // Night car lamps: a low beam tipped towards the road and a short red spill
     // behind. Softened facing lets the grazing beam still reach the asphalt.
@@ -237,9 +237,14 @@ static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "col=mix(col,metal?env*base*1.5:env,clamp(f*coat,0.,1.));"
     "col+=pow(max(0.,dot(n,halfV)),160.)*.55*coat*sh*sun*(1.-.75*uNight);}"
     // Fully unlit lamps are brighter than white so that they bloom.
-    "col=mix(col,base*(uUnlit>.99?2.4:1.),uUnlit);float "
-    "fog=smoothstep(uFogFar*.45,uFogFar,length(uEye-vPos));col=mix(col,fogColor(-V),fog*.88);frag=vec4(col,"
-    "1.);}"};
+    "col=mix(col,base*(uUnlit>.99?2.4:1.),uUnlit);float dist=length(uEye-vPos),"
+    // The haze lies low: hills and peaks rising well above the eye stay clearer.
+    // Lit windows and lanterns shine through it at night.
+    "fog=smoothstep(uFogFar*.45,uFogFar,dist)*(1.-.5*smoothstep(15.,150.,vPos.y-uEye.y))"
+    "*(1.-.45*uNight*step(5.5,vMaterial));"
+    "col=mix(col,fogColor(-V),fog*.88);"
+    // Distant land dissolves into the sky before the far clip plane cuts it off.
+    "col=mix(col,skyColor(-V),smoothstep(uClipFar*.7,uClipFar*.96,dist));frag=vec4(col,1.);}"};
 static const char *depth_vs = GLSL "layout(location=0)in vec3 aPos;uniform mat4 uModel,uVP;"
     CROWD_GLSL VEGETATION_GLSL "void main(){vec3 pos=aPos,n=vec3(0.,1.,0.);animateCrowd(pos,n);animateVegetation(pos,n);"
                "gl_Position=uVP*uModel*vec4(pos,1.);}";
@@ -288,7 +293,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "uniform sampler2D uOpaque,uDepth;uniform sampler2DShadow uShadow;uniform mat4 uVP,uLight;"
     "uniform vec3 uEye;uniform vec2 uResolution,uDepthParams;"
     "uniform vec4 uViewport,uWakes[8];uniform float uTime;"
-    "uniform vec3 uWaterTint,uWaterExtinction;uniform float uLavaAbove;"
+    "uniform vec3 uWaterTint,uWaterExtinction;uniform float uLavaAbove,uClipFar;"
     "float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
     "float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);"
     "return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),"
@@ -350,15 +355,16 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "sky=mix(sky,vec3(.92,.94,.90)*mix(1.,.16,uNight),cloud*.32*uCloudAmount);"
     // Short screen-space rays reflect nearby banks, trees and cars; sky fills
     // off-screen rays. Depth comes from the opaque scene, never the water itself.
-    "vec3 reflection=sky;"
-    "{for(int i=1;i<=16;i++){float stepD=float(i)*1.2;"
+    // Open water far out in the haze skips the rays.
+    "vec3 reflection=sky;float nearby=1.-smoothstep(110.,150.,length(uEye-vPos));"
+    "if(nearby>0.){for(int i=1;i<=16;i++){float stepD=float(i)*1.2;"
     "vec3 ray=vPos+n*.18+reflected*stepD;vec4 clip=uVP*vec4(ray,1.);"
     "if(clip.w<=0.)break;vec2 sampleUV=screenUV(clip);"
     "if(any(lessThan(sampleUV,uViewport.xy))||any(greaterThan(sampleUV,uViewport.xy+uViewport.zw)))break;"
     "float sceneD=distanceAt(texture(uDepth,sampleUV).r);"
     "float delta=distanceAt(clip.z/clip.w*.5+.5)-sceneD;"
     "if(delta>0.&&delta<.65){vec2 border=min(sampleUV-uViewport.xy,uViewport.xy+uViewport.zw-sampleUV);"
-    "float fade=smoothstep(0.,.045,min(border.x,border.y))*(1.-float(i)/20.);"
+    "float fade=smoothstep(0.,.045,min(border.x,border.y))*(1.-float(i)/20.)*nearby;"
     "reflection=mix(sky,texture(uOpaque,sampleUV).rgb,fade*.8);break;}}}"
     // Air/water Fresnel reflectance: no constant white varnish at steep views.
     "float fresnel=.0204+.9796*pow(1.-max(0.,dot(n,V)),5.);"
@@ -371,8 +377,9 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "col+=mix(vec3(1.,.94,.76),vec3(.62,.70,.88),uNight)*glint*lit*sunlight;"
     "float foam=shore*smoothstep(.68,.9,noise(q*3.))*moving;"
     "col=mix(col,vec3(.75,.83,.79)*mix(1.,.25,uNight),foam*.16);"
-    "float fog=smoothstep(85.,190.,length(uEye-vPos));"
+    "float dist=length(uEye-vPos),fog=smoothstep(85.,190.,dist);"
     "col=mix(col,fogColor(-V),fog*.88);"
+    "col=mix(col,skyColor(-V),smoothstep(uClipFar*.7,uClipFar*.96,dist));"
     "frag=vec4(col,smoothstep(0.,.065,depth));}"};
 static const char *spray_vs = GLSL
     "layout(location=0)in vec4 aPosition;layout(location=1)in vec4 aMotion;"
@@ -717,9 +724,11 @@ static bool mesh_load(Mesh *m, const char *path) {
 }
 #define TILE_SIZE 40.f
 #define TILE_GRID 13 // Tiles across the widest island, about 520 m
+#define LAND_TILE 125.f // The land beyond the island, out to about 810 m
 // Sorts whole triangles into ground tiles by their centre and records each
 // tile's bounds. Animated vertices sway, walk or fly up to reach metres.
-static bool tiled_load(TiledMesh *t, const char *path) {
+// With top, also records the highest point over each LAND_CELL cell.
+static bool tiled_load(TiledMesh *t, const char *path, float tile_size, float *top) {
     uint32_t count;
     size_t floats;
     bool animated, wildlife;
@@ -738,14 +747,27 @@ static bool tiled_load(TiledMesh *t, const char *path) {
         SDL_free(d);
         return false;
     }
-    float origin = -TILE_SIZE * TILE_GRID * .5f;
+    float origin = -tile_size * TILE_GRID * .5f;
+    for (int k = 0; top && k < LAND_GRID * LAND_GRID; k++)
+        top[k] = -1000;
     for (uint32_t i = 0; i < triangles; i++) {
         const float *a = v + i * 3 * floats, *b = a + floats, *c = b + floats;
         float x = (a[0] + b[0] + c[0]) / 3, z = (a[2] + b[2] + c[2]) / 3;
-        int tx = (int)clampf(floorf((x - origin) / TILE_SIZE), 0, TILE_GRID - 1);
-        int tz = (int)clampf(floorf((z - origin) / TILE_SIZE), 0, TILE_GRID - 1);
+        int tx = (int)clampf(floorf((x - origin) / tile_size), 0, TILE_GRID - 1);
+        int tz = (int)clampf(floorf((z - origin) / tile_size), 0, TILE_GRID - 1);
         tile_of[i] = tz * TILE_GRID + tx;
         counts[tile_of[i]]++;
+        if (!top)
+            continue;
+        // Every cell the triangle's bounds touch, so large distant triangles count too.
+        float high = fmaxf(a[1], fmaxf(b[1], c[1]));
+        int x0 = (int)floorf(fminf(a[0], fminf(b[0], c[0])) / LAND_CELL) + LAND_GRID / 2;
+        int x1 = (int)floorf(fmaxf(a[0], fmaxf(b[0], c[0])) / LAND_CELL) + LAND_GRID / 2;
+        int z0 = (int)floorf(fminf(a[2], fminf(b[2], c[2])) / LAND_CELL) + LAND_GRID / 2;
+        int z1 = (int)floorf(fmaxf(a[2], fmaxf(b[2], c[2])) / LAND_CELL) + LAND_GRID / 2;
+        for (int cz = SDL_max(z0, 0); cz <= SDL_min(z1, LAND_GRID - 1); cz++)
+            for (int cx = SDL_max(x0, 0); cx <= SDL_min(x1, LAND_GRID - 1); cx++)
+                top[cz * LAND_GRID + cx] = fmaxf(top[cz * LAND_GRID + cx], high);
     }
     int start[TILE_GRID * TILE_GRID], used = 0;
     for (int k = 0; k < TILE_GRID * TILE_GRID; k++) {
@@ -972,18 +994,6 @@ static void draw_props(Renderer *r, const Game *g, bool depth) {
     }
 }
 static void create_primitives(Renderer *r) {
-    Vertex plane[6] = {0};
-    Vec3 p[6] = {{-320, -8, 320}, {320, -8, 320},  {320, -8, -320},
-                 {-320, -8, 320}, {320, -8, -320}, {-320, -8, -320}};
-    for (int i = 0; i < 6; i++) {
-        memcpy(plane[i].p, &p[i], 12);
-        plane[i].n[1] = 1;
-        plane[i].c[0] = .90f;
-        plane[i].c[1] = .89f;
-        plane[i].c[2] = .85f;
-        plane[i].paint = 1;
-    }
-    r->plane = mesh_upload(plane, 6);
     Vertex cube[36] = {0};
     int n = 0;
     Vec3 normals[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
@@ -1051,6 +1061,7 @@ static void scene_delete(TrackScene *s) {
     tiled_delete(&s->vegetation);
     tiled_delete(&s->crowd);
     tiled_delete(&s->wildlife);
+    tiled_delete(&s->land);
     mesh_delete(&s->water);
     s->water = (Mesh){0};
     s->track = -1;
@@ -1061,13 +1072,16 @@ bool renderer_load_track(Renderer *r, int track) {
     Uint64 start = SDL_GetTicksNS();
     scene_delete(&r->scene);
     const char *id = TRACK_INFO[track].id;
-    char path[5][96];
-    const char *suffix[5] = {".tcm", "-vegetation.tcv", "-crowd.tca", "-wildlife.tcf", "-water.tcm"};
-    for (int i = 0; i < 5; i++)
+    char path[6][96];
+    const char *suffix[6] = {".tcm", "-vegetation.tcv", "-crowd.tca", "-wildlife.tcf", "-water.tcm", "-land.tcm"};
+    for (int i = 0; i < 6; i++)
         SDL_snprintf(path[i], sizeof path[i], "tracks/%s%s", id, suffix[i]);
-    bool ok = tiled_load(&r->scene.scene, path[0]) && tiled_load(&r->scene.vegetation, path[1]) &&
-              tiled_load(&r->scene.crowd, path[2]) && tiled_load(&r->scene.wildlife, path[3]) &&
-              mesh_load(&r->scene.water, path[4]);
+    bool ok = tiled_load(&r->scene.scene, path[0], TILE_SIZE, NULL) &&
+              tiled_load(&r->scene.vegetation, path[1], TILE_SIZE, NULL) &&
+              tiled_load(&r->scene.crowd, path[2], TILE_SIZE, NULL) &&
+              tiled_load(&r->scene.wildlife, path[3], TILE_SIZE, NULL) &&
+              mesh_load(&r->scene.water, path[4]) &&
+              tiled_load(&r->scene.land, path[5], LAND_TILE, r->scene.land_top);
     r->bound_vao = 0;
     if (!ok) {
         SDL_Log("Cannot load the scene of %s", id);
@@ -1234,6 +1248,19 @@ void renderer_resize(Renderer *r, int w, int h) {
     glBindFramebuffer(GL_FRAMEBUFFER, r->default_fbo);
 }
 
+// The highest land around a point, blended between cell centres so that a
+// camera held above it glides instead of stepping; far below off the land.
+static float land_top(const Renderer *r, Vec3 p) {
+    float fx = p.x / LAND_CELL + LAND_GRID / 2 - .5f, fz = p.z / LAND_CELL + LAND_GRID / 2 - .5f;
+    int x = (int)floorf(fx), z = (int)floorf(fz);
+    float h[4];
+    for (int k = 0; k < 4; k++) {
+        int cx = x + (k & 1), cz = z + (k >> 1);
+        bool inside = cx >= 0 && cz >= 0 && cx < LAND_GRID && cz < LAND_GRID;
+        h[k] = inside ? r->scene.land_top[cz * LAND_GRID + cx] : -1000;
+    }
+    return lerpf(lerpf(h[0], h[1], fx - x), lerpf(h[2], h[3], fx - x), fz - z);
+}
 static void update_helicopter(Renderer *r, const Game *g, float dt) {
     const Track *t = &g->tracks[g->selected];
     // A broad patrol brings the camera ship alongside briefly every 48 seconds.
@@ -1243,6 +1270,8 @@ static void update_helicopter(Renderer *r, const Game *g, float dt) {
     Vec3 direction;
     Vec3 p = track_at(t, g->cars[0].last_s + 38.f + 25.f * sinf(phase), lane, &direction);
     p.y = fmaxf(p.y, track_height(t, p, NULL)) + 19.f + 4.f * (1 - cosf(phase));
+    // Its patrol can leave the island; it clears the hills and trees beyond.
+    p.y = fmaxf(p.y, land_top(r, p) + 14);
     float yaw = atan2f(direction.x, direction.z);
     if (!r->helicopter_ready || r->last_track != g->selected ||
         g->time < r->helicopter_race_time || r->last_screen == SCREEN_MENU) {
@@ -1606,6 +1635,7 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
         return;
     }
     draw_tiled(r, &r->scene.scene, white, depth);
+    draw_tiled(r, &r->scene.land, white, depth);
     draw_boosts(r, g, depth);
     GLuint program = depth ? r->depth_shader : r->shader;
     glUniform1i(glGetUniformLocation(program, "uVegetation"), 1);
@@ -1633,9 +1663,6 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     set_gloss(r, depth, .7f);
     if (!menu)
         draw_helicopter(r, g, depth);
-    set_gloss(r, depth, 0);
-    if (!depth)
-        draw_mesh(r, r->plane, identity(), r->sky, depth);
     set_gloss(r, depth, 1);
     for (int i = 0; i < CAR_COUNT; i++)
         if (r->car_visible[i])
@@ -1899,6 +1926,7 @@ static void draw_water(Renderer *r, const Game *g, int vx, int vy, int vw, int v
     uniform_vec(p, "uWaterExtinction", info->water_extinction);
     // Only liquid above the sea is lava; the sea stays water.
     glUniform1f(glGetUniformLocation(p, "uLavaAbove"), info->lava ? LAVA_ABOVE : 1e9f);
+    glUniform1f(glGetUniformLocation(p, "uClipFar"), r->clip_far);
     glUniform2f(glGetUniformLocation(p, "uResolution"), r->width, r->height);
     glUniform2f(glGetUniformLocation(p, "uDepthParams"), r->projection.m[10], r->projection.m[14]);
     glUniform4f(glGetUniformLocation(p, "uViewport"), (float)vx/r->width, (float)vy/r->height,
@@ -2043,7 +2071,8 @@ static float hero_camera(Renderer *r, const Game *g, float aspect, float *blur) 
         r->focus = vlen(vsub(r->target, r->eye));
         fov = 30;
     }
-    r->projection = perspective(fov * PI / 180, aspect, .3f, 400);
+    r->clip_far = 550;
+    r->projection = perspective(fov * PI / 180, aspect, .3f, r->clip_far);
     // Shift the lens so the cars sit beside the menu panel, above the track cards.
     r->projection.m[8] -= r->hero_frame;
     r->projection.m[9] -= .12f;
@@ -2105,7 +2134,8 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     } else if (garage) {
         r->eye = v3(7.9f, 6.1f, 10);
         r->target = v3(0, .7f, 0);
-        r->projection = perspective(38 * PI / 180, aspect, .1f, 100);
+        r->clip_far = 100;
+        r->projection = perspective(38 * PI / 180, aspect, .1f, r->clip_far);
     } else {
         const Car *c = &g->cars[0];
         Vec3 p = vlerp(c->prev, c->pos, alpha);
@@ -2120,9 +2150,12 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
         r->target = vadd(r->cam_pos, vmul(forward, 9 + c->speed * .17f));
         r->eye = vadd(r->cam_pos,
                       vadd(vmul(forward, -23 - c->speed * .15f), v3(0, 32 + c->speed * .25f, 0)));
+        // Trailing beyond the island's edge, the camera stays above the land there.
+        r->eye.y = fmaxf(r->eye.y, land_top(r, r->eye) + 8);
         if (g->shake > 0)
             r->eye.x += sinf(g->clock * 95) * g->shake * .8f;
-        r->projection = perspective(49 * PI / 180, aspect, .5f, 300);
+        r->clip_far = 300;
+        r->projection = perspective(49 * PI / 180, aspect, .5f, r->clip_far);
     }
     r->view = lookat(r->eye, r->target, v3(0, 1, 0));
     r->vp = mmul(r->projection, r->view);
@@ -2170,6 +2203,7 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     // Night haze closes in a little so distant scenery settles into the dark.
     r->fog_far = garage ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night) * TRACK_INFO[g->selected].fog;
     glUniform1f(glGetUniformLocation(r->shader, "uFogFar"), r->fog_far);
+    glUniform1f(glGetUniformLocation(r->shader, "uClipFar"), r->clip_far);
     glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
     glUniform1f(glGetUniformLocation(r->shader, "uGloss"), 0);
     // Road material colors from tools/build_assets.py.
@@ -2255,7 +2289,6 @@ void renderer_destroy(Renderer *r) {
     mesh_delete(&r->helicopter);
     mesh_delete(&r->helicopter_rotor);
     mesh_delete(&r->helicopter_tail_rotor);
-    mesh_delete(&r->plane);
     mesh_delete(&r->cube);
     glDeleteProgram(r->shader);
     glDeleteProgram(r->depth_shader);

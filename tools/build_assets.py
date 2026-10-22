@@ -148,11 +148,12 @@ def tire_marks(surface,path,length,road,T):
         mesh('Tire marks '+str(shade),vertices,faces,
              mat('Worn rubber '+str(theme)+' '+str(shade),color))
 
-def export(path,crowd=False,wildlife=False,vegetation=False):
+def export(path,crowd=False,wildlife=False,vegetation=False,land=False):
     bpy.context.view_layer.update();deps=bpy.context.evaluated_depsgraph_get();data=[]
     for o in bpy.context.scene.objects:
         if o.type!='MESH' or o.hide_render:continue
         if o.get('water'):continue
+        if bool(o.get('land'))!=land:continue
         if ('spectator_group' in o)!=crowd:continue
         if ('wildlife_origin' in o)!=wildlife:continue
         if ('vegetation_origin' in o)!=vegetation:continue
@@ -578,7 +579,7 @@ def color_waterbed(island,sample,T,grass):
         blend=blend*blend*(3-2*blend)
         colors.data[i].color=(*(a+(b-a)*blend for a,b in zip(base,bed)),1)
 
-def build_water(T,sample,layout,ground_height,road_bvh):
+def build_water(T,sample,layout,ground_height,road_bvh,beyond=()):
     name=T.key;W=T.water
     vertices=[];faces=[];payload=[]
     def vertex(wx,wz):
@@ -627,6 +628,8 @@ def build_water(T,sample,layout,ground_height,road_bvh):
             q=[(cos(t)*r,-6.85,sin(t)*r,3.,.18,.08) for t,r in
                [(a,radii(a)[0]),(a,radii(a)[1]),(b,radii(b)[1]),(b,radii(b)[0])]]
             emit([q[0],q[2],q[1]],True);emit([q[0],q[3],q[2]],True)
+    # The open sea to the horizon, or a stream running on beyond the island.
+    for tri in beyond:emit(tri,True)
     obj=mesh(W['title'],vertices,faces,mat('Water preview',(.12,.36,.33)))
     obj['water']=True
     obj['water_route']=[v for p in layout.route for v in p]
@@ -864,7 +867,7 @@ def grade_bridges(path,legacy=True):
     return lift,distance+math.dist(path[-1][:3],path[0][:3])
 
 def island_grid(T):
-    """Flat terrain grid before grading: vertices, triangles and the outline.
+    """Flat terrain grid before grading: vertices and triangles.
 
     The first circuits use a polar grid of 40 rings and 192 spokes. Later
     islands follow their superellipse outline with rings about 3.4 m apart,
@@ -880,8 +883,7 @@ def island_grid(T):
             for j in range(slices):
                 a=1+(r-1)*slices+j;b=1+(r-1)*slices+(j+1)%slices;c=1+r*slices+(j+1)%slices;d=1+r*slices+j
                 fs.extend([(a,b,c),(a,c,d)])
-        outline=[(cos(j*2*pi/192)*128,sin(j*2*pi/192)*126) for j in range(192)]
-        return vs,fs,outline
+        return vs,fs
     big=max(T.radius);rings=int(round(big/3.4))
     vs=[(0,0,0)];ring_start=[0];ring_count=[1]
     for r in range(1,rings+1):
@@ -903,8 +905,7 @@ def island_grid(T):
                 fs.append((inner+i%ni,outer+(j+1)%no,outer+j));j+=1
             else:
                 fs.append((inner+i%ni,inner+(i+1)%ni,outer+j%no));i+=1
-    outline=[(vs[ring_start[rings]+j][0],vs[ring_start[rings]+j][2]) for j in range(ring_count[rings])]
-    return vs,fs,outline
+    return vs,fs
 
 def crossing_lift(path,legacy=True):
     """Bridge lift of each station, from the horizontal layout alone."""
@@ -1127,7 +1128,7 @@ def build_track(T):
             y+=(target-y)*bank_blend*road_blend
         return rail.grade(x,z,y,road_distance-closest[5],wet) if rail_grading else y
     rail.prepare(lambda x,z:graded_ground(x,z,False))
-    vs,fs,outline=island_grid(T)
+    vs,fs=island_grid(T)
     # The later islands also carve the trickle below a spring at 0.7 m.
     vs,fs=refine_water_ground(vs,fs,water_sample,(1.35,1.35) if T.legacy else (1.35,1.35,.7))
     vs,fs=rail.refine(vs,fs)
@@ -1182,16 +1183,13 @@ def build_track(T):
         for i in split:colors.data[i].color=(.025,.025,.03,1)
         for poly in island.data.polygons:
             if set(poly.vertices)<=split:poly.material_index=dark_index
-    edgevs=[];edgefs=[];slices=len(outline)
-    for x,z in outline:
-        y=graded_ground(x,z)
-        edgevs.extend([(x,y,z),(x,T.edge_depth,z)])
-    for j in range(slices):edgefs.append((j*2,j*2+1,((j+1)%slices)*2+1,((j+1)%slices)*2))
-    mesh('Exposed diorama edge',edgevs,edgefs,mat('Island edge '+name,C['edge']))
+    # The world goes on beyond the outline, which a fence or the shore marks.
+    from surroundings import build as build_surroundings
+    beyond=build_surroundings(globals(),T,vs,fs,watershed,water_sample)
     road_bvh=BVHTree.FromPolygons([v.co for v in ribbon.data.vertices],
                                   [p.vertices[:] for p in ribbon.data.loop_triangles
                                    if bridge_lift[p.polygon_index//across]<.05],all_triangles=True)
-    build_water(T,water_sample,watershed,ground_height,road_bvh)
+    build_water(T,water_sample,watershed,ground_height,road_bvh,beyond)
     # Paint follows the road's exact elevation and banking.
     ribbon.data.calc_loop_triangles();surface=[]
     for triangle in ribbon.data.loop_triangles:
@@ -1445,6 +1443,7 @@ def build_track(T):
     export(os.path.join(ROOT,'assets/tracks',name+'-vegetation.tcv'),vegetation=True)
     export(os.path.join(ROOT,'assets/tracks',name+'-wildlife.tcf'),wildlife=True)
     export(os.path.join(ROOT,'assets/tracks',name+'.tcm'))
+    export(os.path.join(ROOT,'assets/tracks',name+'-land.tcm'),land=True)
     export(os.path.join(ROOT,'assets/tracks',name+'-crowd.tca'),crowd=True)
     export_surface(os.path.join(ROOT,'assets/tracks',name+'.tcs'))
     rail.export(os.path.join(ROOT,'assets/tracks',name+'.tcr'))

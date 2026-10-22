@@ -96,6 +96,8 @@ if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
   if(Python3_Interpreter_FOUND)
     add_test(NAME track_layouts COMMAND ${Python3_EXECUTABLE}
       "${CMAKE_SOURCE_DIR}/tests/track_layouts.py")
+    add_test(NAME surroundings COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_SOURCE_DIR}/tests/surroundings.py")
   endif()
   add_executable(ToyCarsProgressionTests tests/progression.c src/game.c src/cars.c src/tracks.c src/props.c src/railway.c)
   foreach(PROPERTY INCLUDE_DIRECTORIES COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_LIBRARIES LINK_OPTIONS)

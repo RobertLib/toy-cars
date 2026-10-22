@@ -770,6 +770,41 @@ Problems found and fixed while verifying:
 - Four-card rows on mobile overlapped subtitles with the track maps; subtitles
   now share one fitted size.
 
+## The world beyond the islands (22 October 2026)
+
+- Every island now continues into its surroundings out to the horizon instead
+  of ending at an exposed edge over the sky. The driving surface is unchanged:
+  rebuilding all ten tracks reproduced every `.tcs`, `.tcp`, `.tcr`, `.tcg`,
+  crowd, vegetation and wildlife file byte for byte. Only the static scenes
+  (the boundary fence in, the diorama edge out), the water of the six tracks
+  with a sea or an outlet stream and the Blender scenes changed, besides the
+  new `<track>-land.tcm` files.
+- `tests/surroundings.py` (new, in CTest) passed on all ten tracks: 192–310
+  outline edges each shared exactly by the land, no land inside the outline,
+  land within 25 m of the rim's height for 40 m beyond it, land reaching
+  788–888 m, the sea reaching the horizon and the outlet streams running more
+  than 200 m beyond their islands. All 17 CTest entries passed, including the
+  ten simulations, which now also check that water beyond the ±256 m grid
+  stays out of water queries. The six Blender checks passed on all ten scenes.
+- The changed world and water shaders pass `glslangValidator` as OpenGL ES 3.00.
+- The opt-in graphics tests had only their known failure, "mobile recovery
+  target recovers the car", which a build of the previous commit shares.
+- On Apple M5 at 1440x900 (fixed-step benchmark, 900 frames), race frame time
+  rose by 0.3–0.4 ms on Harvest Hills and Alpine Rush and by 0.7–1.3 ms on the
+  coastal tracks, where open water now fills more of the view; menu frame time
+  by 0.3–1.6 ms (Volcano Peak 10.48 to 12.12 ms). Phones were not measured.
+- Review captures from the race camera, a low menu-like camera and a view back
+  across each island, by day and by night, led to these corrections: field and
+  snowline colours moved from faces to vertices, removing saw-toothed borders;
+  Canyon Dash's terrain beyond the island had been mesa everywhere, a wall
+  behind the fence, and now has its own floor with buttes from 25 m out; canopy
+  blobs read as boulders up close, so trees with trunks stand within 70 m;
+  the snow-capped cone and the volcanic islands stood beyond the far-plane fade
+  and were moved closer, the menu's far plane went from 400 to 550 m, and the
+  haze now thins on peaks well above the eye; the open sea read as uniformly
+  deep, so a shallow shelf rings the coasts; lit city windows vanished in the
+  night haze until lamps were allowed to shine through it.
+
 ## Still required before public release
 
 - Playtesting with people on physical phones, particularly steering feel,

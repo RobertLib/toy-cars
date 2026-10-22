@@ -91,6 +91,12 @@ an internet connection to run.
   Harvest Hills, dune grass, coastal scrub and driftwood on Sunshine Coast,
   and dwarf pines, scree and fallen branches in Alpine Rush. Grass, sand and
   snow have subtle procedural surface variation without extra texture assets.
+- Worlds that go on to the horizon. Beyond each island the land continues into
+  snowy peaks, buttes and canyon walls, wooded ridges under an autumn or jungle
+  canopy, farmland with hedgerows, tea fields under a snow-capped cone or open
+  moor; on the coast the sea reaches the horizon past sandy islets, a city
+  across the harbour or glowing volcanic islands. A fence or a dry-stone wall
+  marks where the island, and the driving, ends.
 - Animated wildlife away from the road: grazing deer, hopping hares, geese
   near country water, snakes in the warmer tracks, and birds circling overhead;
   coyotes and vultures in the canyon, foxes and ducks in the woods, parrots,
@@ -388,11 +394,12 @@ editable scenes in `art/`:
   buildings, landmarks, trees and props.
 
 Every circuit's parameters live in `tools/themes.py`: island size and shape,
-terrain, colours, counts of trees, jumps and spectators, water and railway. The
-later circuits are corner polygons in `tools/layouts.py`, and their scenery,
-landmarks and animals are modeled in `tools/biomes.py`. Jumps, fuel cans,
-signs, crowds and the level crossing are placed automatically on the
-straightest suitable stretches.
+terrain, colours, counts of trees, jumps and spectators, water, railway and the
+world beyond the island. The later circuits are corner polygons in
+`tools/layouts.py`, and their scenery, landmarks and animals are modeled in
+`tools/biomes.py`; `tools/surroundings.py` builds every island's surroundings.
+Jumps, fuel cans, signs, crowds and the level crossing are placed automatically
+on the straightest suitable stretches.
 
 Each circuit combines two-lane roads with a four-lane passing section of twice
 the width. Country and coast have long passing sectors; the alpine switchbacks
@@ -440,6 +447,7 @@ Both use the same C sources, bundled content and OpenGL ES 3.0 renderer.
 ```sh
 ctest --test-dir build --output-on-failure
 python3 tests/track_layouts.py
+python3 tests/surroundings.py
 ./build/ToyCars --test
 ./build/ToyCars --autoplay --track winter
 ./build/ToyCars --autoplay --track beach --night   # night in any mode
@@ -470,6 +478,10 @@ They also cover close finishes within one simulation step, consistent lap and
 finish timing, ramp edge and corner exits, and drift braking across input sources,
 seamless tire support across both road edges, and how rarely curb crossings
 onto the shoulder and back overturn the car.
+`tests/surroundings.py` checks each track's exported surroundings: the land
+shares every outline edge of the island without a slit, stays outside the
+driving surface and low beside the island, and reaches the horizon, like the sea
+on the coast and the stream that leaves a dry island.
 See [Validation](docs/VALIDATION.md)
 for executed checks and remaining release work.
 
@@ -526,6 +538,7 @@ cmake -S . -B build -DTOYCARS_GRAPHICS_TESTS=ON
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 python3 tests/track_layouts.py
+python3 tests/surroundings.py
 ```
 
 Use `ctest --test-dir build -LE graphics --output-on-failure` for headless checks
