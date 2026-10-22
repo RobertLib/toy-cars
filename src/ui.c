@@ -1691,9 +1691,8 @@ static void mobile_hud_top(UI *u, Game *g) {
     float cx = (x + end) * .5f;
     char text[100];
     rounded(u, (Rect){x, y, 156, 88}, 14, rgba(.08, .13, .16, .86f));
-    label(u, 0, 22, x + 14, y + 7, WHITE, g->mode == MODE_CHAMPIONSHIP ? "OVERALL" : "POSITION");
-    SDL_snprintf(text, sizeof text, "%d / 8",
-                 g->mode == MODE_CHAMPIONSHIP ? game_championship_rank(g) : g->rank);
+    label(u, 0, 22, x + 14, y + 7, WHITE, "POSITION");
+    SDL_snprintf(text, sizeof text, "%d / 8", g->rank);
     label(u, 1, 40, x + 14, y + 34, WHITE, text);
     rounded(u, (Rect){x + 168, y, 128, 88}, 14, rgba(.08, .13, .16, .86f));
     label(u, 0, 22, x + 182, y + 7, WHITE, "LAP");
@@ -1795,10 +1794,8 @@ static void hud(UI *u, Game *g, Renderer *r) {
         mobile_hud_top(u, g);
     } else {
         rounded(u, (Rect){m, y, 153, 91}, 14, rgba(.08, .13, .16, .86f));
-        caps(u, m + 17, y + 9, alpha(WHITE, .63f),
-             g->mode == MODE_CHAMPIONSHIP ? "OVERALL LIVE" : "POSITION");
-        SDL_snprintf(s, sizeof s, "%d",
-                     g->mode == MODE_CHAMPIONSHIP ? game_championship_rank(g) : g->rank);
+        caps(u, m + 17, y + 9, alpha(WHITE, .63f), "POSITION");
+        SDL_snprintf(s, sizeof s, "%d", g->rank);
         label(u, 1, 53, m + 17, y + 29, WHITE, s);
         label(u, 0, 20, m + 58, y + 56, alpha(WHITE, .62f), "/ 8");
         rounded(u, (Rect){m + 165, y, 140, 91}, 14, rgba(.08, .13, .16, .72f));
@@ -1809,8 +1806,8 @@ static void hud(UI *u, Game *g, Renderer *r) {
         format_time(s, sizeof s, g->time);
         center_label(u, 0, 27, w * .5f, y + 36, WHITE, s);
         const CupInfo *cup = &CUPS[game_cup(g)];
-        SDL_snprintf(s, sizeof s, "STAGE %d / %d  |  RACE P%d  |  %d PTS LIVE%s",
-                     g->selected - cup->first + 1, cup->count, g->rank, game_championship_points(g, 0),
+        SDL_snprintf(s, sizeof s, "STAGE %d / %d  |  %d PTS LIVE%s",
+                     g->selected - cup->first + 1, cup->count, game_championship_points(g, 0),
                      g->selected < cup->first + cup->count - 1 ? "  |  TOP 4 ADVANCE" : "");
         center_label(u, 0, 13, w * .5f, y + 73, WHITE, g->mode == MODE_CHAMPIONSHIP ? s : "ARCADE");
         float fx = w - 329 - u->safe_right;

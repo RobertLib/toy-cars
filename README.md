@@ -151,9 +151,9 @@ an internet connection to run.
   Lights, Highland Loch, Volcano Peak). Places 1–8 earn 10 / 8 / 6 / 5 / 4 / 3 /
   2 / 1 points; a DNF earns zero. Finish in the top four in every stage before a
   cup's final to advance and unlock the next track. Fifth or worse, or a DNF,
-  eliminates you and ends that cup's run. The HUD shows live projected overall
-  position in the cup, with race position secondary. Results show the overall
-  points table; standings are final once all rivals finish or retire.
+  eliminates you and ends that cup's run. The HUD shows your position in the
+  race and live projected cup points. Results show the overall points table;
+  standings are final once all rivals finish or retire.
   Equal totals are resolved by most wins, then most second places and so on;
   exact ties use stable driver order.
   After a cup's final, overall first / second / third wins a gold / silver /

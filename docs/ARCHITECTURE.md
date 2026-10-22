@@ -524,9 +524,9 @@ elimination and `championship_medal[cup]` the best overall medal won.
 `championship_places[track][driver]` stores all classifications (0 means DNF).
 Points are derived as 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1, with zero for DNFs.
 Ties compare the number of wins, second places and so on, then stable driver order.
-The HUD projects the current race into the cup's overall standings. After the
-player finishes, rivals keep racing; advancement and final medals wait for every
-rival to finish or retire. Scoring happens once and saves the full classification.
+The HUD shows the player's race position and projects the current race into the
+player's cup points. After the player finishes, rivals keep racing; advancement
+and final medals wait for every rival to finish or retire. Scoring happens once and saves the full classification.
 Every stage but a cup's final requires a top-four finish to advance and unlock the
 next track. A lower finish or DNF eliminates the player from that cup's series.
 The failed stage still saves its classification and any finish record, but cannot
