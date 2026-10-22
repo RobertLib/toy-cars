@@ -106,8 +106,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--train-at") && i + 1 < argc)
             train_at = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--track") && i + 1 < argc) {
-            i++;
-            track = !strcmp(argv[i], "beach") ? 1 : !strcmp(argv[i], "winter") ? 2 : 0;
+            track = game_track_index(argv[++i]);
+            if (track < 0) {
+                fprintf(stderr, "Unknown track: %s\n", argv[i]);
+                return 1;
+            }
         } else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc)
@@ -122,7 +125,8 @@ int main(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "--help")) {
             printf("ToyCars\n  --test                     Run deterministic simulation tests (no "
-                   "window)\n  --track country|beach|winter\n  --screen "
+                   "window; with --track, only that circuit)\n  --track ID                 country, beach, winter, canyon, autumn,\n"
+                   "                             jungle, sakura, harbor, highland or volcano\n  --screen "
                    "menu|race|garage|help|settings|results|championship|records\n  --autoplay      "
                    "           Drive the "
                    "player with AI for a demo\n  --frames N                 Exit after N rendered "
@@ -143,8 +147,9 @@ int main(int argc, char **argv) {
     if (test) {
         if (!SDL_Init(0))
             return 1;
-        int code = game_tests();
-        code |= ui_tests();
+        int code = game_tests(track);
+        if (track <= 0)
+            code |= ui_tests();
         SDL_Quit();
         return code;
     }
@@ -324,6 +329,19 @@ int main(int argc, char **argv) {
                     game_continue(g);
                     ui_clear_input(u);
                 }
+                // The D-pad steps through the circuits, the shoulders through the cups.
+                if (g->screen == SCREEN_MENU) {
+                    if (e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_LEFT)
+                        g->selected = (g->selected + TRACK_COUNT - 1) % TRACK_COUNT;
+                    if (e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_RIGHT)
+                        g->selected = (g->selected + 1) % TRACK_COUNT;
+                    if (e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)
+                        game_select_cup(g, (game_cup(g) + CUP_COUNT - 1) % CUP_COUNT);
+                    if (e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)
+                        game_select_cup(g, (game_cup(g) + 1) % CUP_COUNT);
+                    if (e.gbutton.button == SDL_GAMEPAD_BUTTON_WEST)
+                        game_set_mode(g, g->mode == MODE_CHAMPIONSHIP ? MODE_ARCADE : MODE_CHAMPIONSHIP);
+                }
                 break;
             case SDL_EVENT_KEY_DOWN:
                 if ((ui_input_blocked(u) || background || graphics_reset_pending ||
@@ -345,8 +363,19 @@ int main(int argc, char **argv) {
                 }
                 if (e.key.key == SDLK_R && g->screen == SCREEN_RACE)
                     game_reset_car(g, 0);
-                if (e.key.key >= SDLK_1 && e.key.key <= SDLK_3 && g->screen == SCREEN_MENU)
-                    g->selected = (int)(e.key.key - SDLK_1);
+                // 1-9 and 0 pick a circuit; the arrows step through all ten, C the cups.
+                if (g->screen == SCREEN_MENU) {
+                    int pick = e.key.key >= SDLK_1 && e.key.key <= SDLK_9 ? (int)(e.key.key - SDLK_1)
+                               : e.key.key == SDLK_0                     ? 9
+                                                                         : -1;
+                    if (pick >= 0 && pick < TRACK_COUNT)
+                        g->selected = pick;
+                    if (e.key.key == SDLK_LEFT || e.key.key == SDLK_RIGHT)
+                        g->selected = (g->selected + (e.key.key == SDLK_LEFT ? TRACK_COUNT - 1 : 1)) %
+                                      TRACK_COUNT;
+                    if (e.key.key == SDLK_C)
+                        game_select_cup(g, (game_cup(g) + 1) % CUP_COUNT);
+                }
                 if (e.key.key == SDLK_TAB && g->screen == SCREEN_MENU)
                     game_set_mode(g,
                                   g->mode == MODE_CHAMPIONSHIP ? MODE_ARCADE : MODE_CHAMPIONSHIP);
@@ -491,6 +520,7 @@ int main(int argc, char **argv) {
     renderer_destroy(r);
     free(u);
     free(r);
+    game_free(g);
     free(g);
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window);

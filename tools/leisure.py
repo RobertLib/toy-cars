@@ -4,7 +4,8 @@ import random
 from mathutils import Vector
 
 
-def build(api, theme, path, ground, water, obstacles):
+def build(api, T, path, ground, water, obstacles):
+    theme = T.index
     bpy = api['bpy']
     box, beam, ico = (api[k] for k in ('box', 'beam', 'ico'))
     mat = api['mat']
@@ -18,11 +19,11 @@ def build(api, theme, path, ground, water, obstacles):
     def near_bounds(x,z,r,bounds):
         return any(a-r<x<b+r and c-r<z<d+r for a,b,c,d in bounds)
     def safe(x,z,r):
-        return ((x/113)**2+(z/111)**2<1 and
+        return (T.within(x,z,113,111) and
                 all(math.hypot(x-p[0],z-p[2])>p[5]+r+2.5 for p in path) and
                 all(water(x+dx*r,z+dz*r)[0]<-2 for dx,dz in
                     [(0,0),(-1,0),(1,0),(0,-1),(0,1),(-.7,-.7),(.7,.7),(-.7,.7),(.7,-.7)]))
-    gravel=mat('Natural footpath '+str(theme),[(.56,.51,.37),(.72,.65,.46),(.73,.80,.80)][theme])
+    gravel=mat('Natural footpath '+str(theme),T.colors.get('path',(.56,.51,.37)))
     paths=[]
     def trail(points,width,name):
         # Narrow ribbons retain the grass between paths and follow the island.
@@ -87,7 +88,7 @@ def build(api, theme, path, ground, water, obstacles):
             block('Seated visitor coat',a,y+1.12,b-.04,(.58,.60,.34),shirt)
             ico('Seated visitor head',pos(a,y+1.69,b-.02),(.23,.28,.23),skin,2)
             block('Seated visitor nose',a,y+1.69,b+.21,(.09,.10,.10),skin)
-            block('Seated visitor hat',a,y+1.92,b-.04,(.47,.14,.43),shirt if theme==2 else dark)
+            block('Seated visitor hat',a,y+1.92,b-.04,(.47,.14,.43),shirt if T.outfit=='winter' else dark)
         for obj in set(bpy.context.scene.objects)-before:
             obj['landscape_bench']=site
             obj['bench_occupied']=occupied
@@ -96,7 +97,7 @@ def build(api, theme, path, ground, water, obstacles):
     # The countryside gets one substantial park. Its lawn is the existing
     # terrain, with an irregular walking loop, open glades and grouped trees.
     park=None
-    if theme==0:
+    if T.key=='country':
         fixed=[bounds_of(o) for o in obstacles if o.type=='MESH' and
                'vegetation_origin' not in o and not o.name.startswith('Granite boulder')]
         candidates=[]
@@ -176,7 +177,7 @@ def build(api, theme, path, ground, water, obstacles):
     bounds=[bounds_of(o) for o in obstacles if o.type=='MESH']
     sites=[]
     for attempt in range(5000):
-        if len(sites)==5:break
+        if len(sites)==T.benches:break
         p=path[rng.randrange(len(path))]
         lane=rng.choice([-1,1])*(p[5]+rng.uniform(5.5,9))
         x,z=p[0]+p[4]*lane,p[2]-p[3]*lane
@@ -187,5 +188,5 @@ def build(api, theme, path, ground, water, obstacles):
         if max(abs(ground(x+dx,z+dz)-h) for dx,dz in [(-1.5,0),(1.5,0),(0,-1),(0,1)])>.28:continue
         sites.append((x,z))
         bench_at(x,z,math.atan2(p[0]-x,p[2]-z)+rng.uniform(-.35,.35),len(sites)+3)
-    assert len(sites)==5,('Too few natural bench locations',theme)
+    assert len(sites)==T.benches,('Too few natural bench locations',theme)
     print('INDIVIDUAL BENCHES',theme,sites,flush=True)

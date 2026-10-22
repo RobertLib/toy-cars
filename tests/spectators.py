@@ -6,14 +6,21 @@ from collections import Counter
 from pathlib import Path
 import math
 import struct
+import sys
 
 import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+from themes import THEMES
+import os
+# TOYCARS_TRACKS=canyon,volcano checks only those scenes.
+THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
 
-for name in ('country', 'beach', 'winter'):
+for T in THEMES:
+    name = T.key
     bpy.ops.wm.open_mainfile(filepath=str(ROOT / 'art' / (name + '.blend')))
     island = bpy.data.objects['Sculpted island']
     ground = BVHTree.FromPolygons(
@@ -34,7 +41,7 @@ for name in ('country', 'beach', 'winter'):
                row[15] in range(4) and .5 <= row[16] <= 2 and .5 <= row[17] <= 2 for row in records)
     spectators = [o for o in bpy.context.scene.objects if 'spectator_group' in o]
     groups = Counter(o['spectator_group'] for o in spectators)
-    assert len(groups) == 15 and min(groups.values()) >= 3, (name, groups)
+    assert len(groups) == T.crowd_groups and min(groups.values()) >= 3, (name, groups)
     assert len(set(groups.values())) >= 3, (name, 'group sizes lack variety')
     assert {o['spectator_kind'] for o in spectators} == {'adult', 'child', 'broad', 'senior', 'tall'}
     assert {o['spectator_pose'] for o in spectators} == {'cheer', 'wave', 'clap', 'camera', 'flag'}

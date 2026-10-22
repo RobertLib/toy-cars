@@ -347,7 +347,10 @@ static void fences_reset(Game *g) {
             }
             float lane=(turn>0 ? -1 : 1)*(t->points[i].half+3.2f);
             for (int k=-8;k<=8;k+=2) {
+                // Judge each stake where it will stand: on the ground, which may
+                // lie nearer another level of the road than this one.
                 Vec3 p=track_at(t,s+k,lane,NULL); float water;
+                p.y=track_height(t,p,NULL)+.665f;
                 int nearest=-1; float offset;
                 track_nearest(t,p,&nearest,NULL,&offset);
                 if (fabsf(offset)<t->points[nearest].half+2 ||

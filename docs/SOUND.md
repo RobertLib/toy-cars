@@ -1,7 +1,7 @@
 # ToyCars sound effects
 
 Every sound effect is a recording released under CC0, edited for the game and
-shipped as Ogg Vorbis in `assets/sounds` (44 files, 6.0 MB). The same vendored
+shipped as Ogg Vorbis in `assets/sounds` (51 files, 11.6 MB). The same vendored
 [stb_vorbis](../third_party/stb_vorbis/stb_vorbis.c) decoder as the soundtrack
 reads them, so SDL3 stays the only runtime library. Credits for every source are
 in [SOUNDS.txt](../assets/licenses/SOUNDS.txt); the music is described in
@@ -35,7 +35,8 @@ one character.
 | Crowd | Pól, cheering and clapping; roaring with air horns for a medal | Finish; championship medal |
 | Bell | domrodrig, a hand bell | Final lap with music off |
 | Helicopter | unikumpu, a rotor loop | The camera helicopter |
-| Ambience | Kinoton's spring countryside, jackmichaelking's waves and gulls, xkeril's Swiss mountain morning, sengjinn's night crickets | Each track; Harvest Hills at night |
+| Ambience | Kinoton's spring countryside, jackmichaelking's waves and gulls, xkeril's Swiss mountain morning, sengjinn's night crickets | Harvest Hills, Sunshine Coast, Alpine Rush; crickets for the daytime landscapes at night |
+| Ambience, later tracks | fran_marenco's wind and birds in the Patagonian desert; cribbler's wind and crows; Felix Blume's night frogs and crickets in French Guiana; tomasloos's bird by a bamboo grove over a stream in Japan; Kinoton's harbour with lapping water and creaking boats; Kinoton's skylarks over windy grassland; Felix Blume's Mount Yasur volcano at night | Canyon Dash, Maple Woods, Jungle Ruins, Sakura Hills, Harbor Lights, Highland Loch, Volcano Peak |
 | Weather | speakwithanimals' rain, Fission9's gusting polar wind | Rain; wind and snow |
 | Menu | Kenney UI Audio, a click and a switch | Every menu change |
 | Crossing bell | mpaol2023, an electronic level-crossing bell, twelve strikes 0.413 s apart | Level crossings while their lights flash |
@@ -70,6 +71,21 @@ one character.
   passing train are the steadiest material.
 - Freesound sources are its public high-quality previews (Ogg Vorbis around
   190 kb/s); its original files need an account.
+- **Ambience for the later tracks (22 October 2026):** about 70 CC0 candidates
+  were compared on spectrogram sheets, narrow-peak scans, loudness over time,
+  stereo correlation and loop seams. Each bed is one steady minute of a real
+  field recording; the garden mixes two recordings by the same recordist in
+  Japan, a bird by a bamboo grove and a stream under a bridge at −18 dB.
+  Rejected: recordings with traffic, aircraft, engines, music, voices, hum
+  lines (most explicitly autumnal forests and a Yorkshire moor carry an 84–250
+  Hz hum), chimes or clanking rigging, clipping, synthesized "desert wind" and
+  edited clips with digital silence. Compromises: the desert was recorded in the
+  Patagonian steppe and the moor on spring dunes (skylarks, no sheep or
+  curlew); no CC0 Japanese bush warbler exists; the harbour may be a daytime
+  recording; the volcano is the quietest stretch between eruptions of Mount
+  Yasur and still swells by up to 13 dB in a slow rumble. The countryside,
+  desert, forest, garden and moor beds give way to night crickets after dark;
+  the jungle, harbour and volcano beds are night recordings.
 
 ## Engine
 
@@ -156,7 +172,7 @@ it never engages and peaks stay at 0.54–0.66.
 `src/sfx.c` is a small mixer, independent of the game like `src/music.c`:
 
 - Short sounds and loops are decoded to 16-bit samples at start-up (123 s,
-  10.8 MB). The ambience and weather beds (4.5 MB of files) stream from memory
+  10.8 MB). The ambience and weather beds (10.1 MB of files) stream from memory
   through their own decoders only while they play.
 - 48 voices. A held sound (`sfx_hold`) follows new gain, pitch, pan and filter
   targets over each rendered block and frees its voice once faded out; a full

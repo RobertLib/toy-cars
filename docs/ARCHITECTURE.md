@@ -6,6 +6,7 @@
 | --- | --- |
 | `main.c` | SDL lifecycle, window, input events, fixed-step loop, gamepads, diagnostic CLI |
 | `src/game.c` | Vehicle dynamics, AI, fuel, laps, ranking, collisions, particles and race state |
+| `src/tracks.c` | The ten circuits and three cups: names, surfaces, climate, lighting, sounds, railway |
 | `src/railway.c` | Level crossings: timetables, barriers, the trains' poses and their collisions with cars |
 | `src/assets.c` | Checked binary loading, APK asset lookup, local profile persistence |
 | `src/renderer.c` | OpenGL/GLES scene, shadow pass, follow camera, fog, postprocess, screenshot |
@@ -15,6 +16,10 @@
 | `src/sfx.c` | Recorded sound effects: decoding, loudness table, voices, pitch, panning, streamed beds |
 | `third_party/stb_vorbis` | Vendored public-domain Ogg Vorbis decoder used by the soundtrack and effects |
 | `tools/build_assets.py` | Blender-only modeling, scene saving and geometry/path export |
+| `tools/themes.py` | Every circuit's authored parameters: island, terrain, colours, counts, water, railway |
+| `tools/layouts.py` | Corner polygons of the later circuits, rounded into spline knots |
+| `tools/biomes.py` | Scenery, trees, landmarks and animals of the seven later environments |
+| `tools/layout_svg.py` | Draws `screenshots/track-layouts.svg` from the exported tracks |
 | `tools/railway.py` | Crossing sites, rail bed and tunnel hill grading, crossing hardware, rolling stock |
 | `tools/build_sounds.py` | Rebuilds `assets/sounds` from recorded sources (numpy, scipy, oggenc) |
 
@@ -31,8 +36,9 @@ suspension. The renderer interpolates the previous and current car transforms.
 Cars keep a planar velocity vector, heading, vertical velocity, fuel and
 unwrapped distance around the circuit. Throttle, drag and braking alter forward
 speed; a surface-specific grip coefficient damps lateral velocity, with a cap on
-lateral acceleration. Grounded steering is limited by speed and available grip
-(28 / 24 / 20 game meters per second squared for country / beach / winter).
+lateral acceleration. Grounded steering is limited by speed and available grip,
+from 29 game meters per second squared on Highland Loch's asphalt to 20 on Alpine
+Rush's ice (`TRACK_INFO[].corner_grip`).
 Excess steering demand scrubs speed and widens the turn; braking restores a
 tighter radius. Drift lowers lateral grip and permits more chassis rotation,
 so the car slides rather than gaining a tighter full-speed trajectory. AI corner
@@ -42,11 +48,31 @@ velocity; gravity integrates flight and landing. The world is 3D, while tire
 contact follows the rendered road, shoulders and terrain: this is an arcade vehicle model, not a
 general-purpose rigid-body engine.
 
-Each environment uses its own control-point layout: a country infield weave,
-three coastal lobes, and alpine switchbacks with a diagonal return. The circuits
-span 0.96–1.09 km and contain three, three and two self-crossings respectively.
+Each environment uses its own layout. The Rookie Cup's three circuits are
+spline knots (a country infield weave, three coastal lobes, alpine switchbacks
+with a diagonal return; 0.96–1.09 km). The seven later ones are corner polygons
+in `tools/layouts.py`, rounded with per-corner radii, resampled every 1.6 m by
+arc length and smoothed vertically; each is longer than the one before:
+
+| Cup | Circuit | Length | Crossings | Jumps | Corner grip | Time | Railway |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Rookie | Harvest Hills | 1.09 km | 3 | 3 | 28 | day | steam |
+| Rookie | Sunshine Coast | 0.99 km | 3 | 3 | 24 | day | road train |
+| Rookie | Alpine Rush | 0.96 km | 2 | 3 | 20 (ice) | night | mountain |
+| Pro | Canyon Dash | 1.20 km | 1 | 3 | 23.5 | day | steam |
+| Pro | Maple Woods | 1.33 km | 2 | 4 | 25.5 | day | mountain |
+| Pro | Jungle Ruins | 1.58 km | 3 | 4 | 22 (mud) | night | steam |
+| Master | Sakura Hills | 1.67 km | 1 | 4 | 27.5 | day | mountain |
+| Master | Harbor Lights | 1.83 km | 2 | 4 | 29 | night | freight |
+| Master | Highland Loch | 2.04 km | 2 | 5 | 24.5 | day | steam |
+| Master | Volcano Peak | 2.47 km | 2 | 5 | 22.5 (ash) | night | steam |
+
 The layout regression fits every pair under affine transforms, cyclic shifts
-and reversed traversal, rejecting scaled, rotated or sheared duplicates.
+and reversed traversal, rejecting scaled, rotated or sheared duplicates, and
+checks that the later circuits grow longer. Islands of the later circuits are
+superellipses up to 450 × 454 m; their terrain is triangulated in rings about
+3.4 m apart. Beside the road their cuttings and embankments are limited to
+about 30 degrees, so a car leaving the road always meets drivable ground.
 Bridge profiles use smooth approaches; their decks, undersides, railings and
 piers are authored together. Terrain grading excludes elevated spans so the
 lower route remains open. Piers stay clear of all lower carriageways.
@@ -120,9 +146,9 @@ Within 15 meters they race at their difficulty pace; beyond that the adjustment
 grows over the next 100 meters. A rival ahead lowers its pace by up to
 40 / 30 / 15 percent on easy / normal / hard. A rival behind gains up to
 12 / 14 / 18 percent engine power (throttle above 1, AI only) and corners at up
-to 1.0 / 1.10 / 1.14 times normal pace, which stays below the tire limit. Ice
-recovers grip too slowly for that, so on Alpine Rush catch-up never raises
-corner pace above 1.0. Jump takeoff speeds are unchanged. Adaptation stops once the player
+to 1.0 / 1.10 / 1.14 times normal pace, which stays below the tire limit. Ice,
+mud and volcanic ash recover grip too slowly for that, so on Alpine Rush, Jungle
+Ruins and Volcano Peak catch-up never raises corner pace above 1.0. Jump takeoff speeds are unchanged. Adaptation stops once the player
 finishes, so the remaining classification settles at regular pace.
 
 Track projection searches a bounded neighborhood around the previous segment.
@@ -181,7 +207,12 @@ for demonstrations and screenshots.
 ## Rendering and content
 
 Blender evaluates bevel and weighted-normal modifiers and exports triangles.
-Static environment geometry is merged into one vertex buffer per track. A frame
+Static environment geometry is merged into one vertex buffer per track, sorted
+into 40 m ground tiles with their bounds (`TiledMesh`): the color and shadow
+passes draw only the tiles inside their frustum, joining neighbouring tiles into
+single draws. Only the selected circuit's meshes are resident; changing tracks
+replaces them (10–20 ms on a desktop). Static scenes hold 110–195 thousand
+triangles, plus separate vegetation, crowd, wildlife and water batches. A frame
 renders a depth shadow pass and a colored scene pass; the sky then fills the
 remaining background at the far plane. The scene target is `R11F_G11F_B10F`, or
 `RGBA16F`, where the GPU can render to floating point, so lamps and glints can
@@ -203,13 +234,17 @@ Post-processing then works from the scene's color and depth textures:
   passes, and the speed blur test uses it.
 
 Glossy materials (paint, glazing, aluminum, rubber) and asphalt are recognized
-by their exported vertex colors, so the mesh formats are unchanged. Phones take
+by their exported vertex colors, so the mesh formats are unchanged. One warm
+color (0.98, 0.80, 0.40) marks lanterns, torches and lit windows, which glow at
+night. Terrain paint values -1 to -10 select each environment's ground shading
+(meadow, sand, snow, red desert, leaf litter, jungle floor, spring lawn with petals,
+paving, heather moor and volcanic ash). Phones take
 8 occlusion samples and 16 depth-of-field taps; desktops take 12 and 24.
 The UI uses a separate batched triangle stream and single-channel glyph atlases.
 The GL and GLES shader variants share their shader bodies.
 
-Each environment includes 15 irregular spectator groups near the start, bends
-and jumps. Blender authors low-poly figures with five body types, five cheering
+Each environment includes 15 to 24 irregular spectator groups near the start,
+bends and jumps. Blender authors low-poly figures with five body types, five cheering
 or photography poses, varied skin/clothing colors and seasonal accessories.
 Placement rejects scenery footprints and nearby road segments, and grounds each
 shoe on the triangulated island. A separate crowd batch carries each figure's
@@ -230,7 +265,12 @@ towards the road, with softened facing so grazing asphalt still lights) and a
 short red tail-lamp spill, evaluated per fragment for all eight cars. Emissive
 lens boxes add one draw per car, and lamp halos are one additive instanced draw
 after the spray, using a reserved region of the spray buffer. Water, weather and
-spray dim their fixed colors; the garage always renders by day.
+spray dim their fixed colors; the garage always renders by day. On a lava
+track (Volcano Peak) an ember color lights the night: a red glow along the
+horizon and in the haze, and warm bounce light on the ground. Only liquid above
+the surrounding sea (`LAVA_ABOVE`) is lava: it is shaded as a glowing, crusted
+melt brighter than white, throws no spray, and a tire touching it recovers the
+car to its last legal road position.
 
 On a graphics-device reset, the main loop pauses a running race and rebuilds
 world and UI resources in SDL's replacement GL context. Names from the lost
@@ -311,7 +351,7 @@ and width. Each `<track>-crowd.tca` is separate from the static track mesh to
 avoid duplicate figures. Loading validates finite values and animation ranges.
 
 **TCR1 railway:** four-byte magic; `uint32` kind (0 steam, 1 road train,
-2 mountain railway), closed-route flag, point, pass, stop, arm and light counts;
+2 mountain railway, 3 container freight), closed-route flag, point, pass, stop, arm and light counts;
 six floats: race distance of the crossing centre, stop line and far side, the
 pass zone half-length and the visible part of the route; route points (XYZ, about
 0.8 m apart, 0.6 m for the promenade); path distances of the passes and stops;
@@ -331,8 +371,10 @@ the road's triangles like the other paint.
 per triangle (three XYZ vertices). Terrain, road, shoulders, curbs and ramp
 decks use their exact rendered triangles. Vertical faces, paint and scenery
 are excluded. Loading validates size, finite coordinates, triangle and grid
-capacity limits, then indexes triangle bounds in a 32 × 32 grid of eight-meter
-cells. The files belong beside each track's TCM1 and TCP1 exports.
+capacity limits (262 144 triangles, coordinates within ±256 m), then indexes
+triangle bounds in a 64 × 64 grid of eight-meter cells. The arrays are
+allocated per track to its actual size, and the extent of each island is
+measured at load. The files belong beside each track's TCM1 and TCP1 exports.
 
 **TCF1 font:** four-byte magic; `uint32 width,height`; 96 records of seven floats
 (UV bounds, bitmap width, bitmap height, advance); one byte per atlas pixel.
@@ -391,7 +433,7 @@ advances using elapsed time spent in the background.
 
 ## Current boundaries
 
-There is one car model with six colors, three tracks, Championship progression,
+There is one car model with six colors, ten tracks in three cups, Championship progression,
 Arcade single races and local records. Both modes use two-lap races. There are
 no weapons, network mode, upgrades, track
 editor UI, replay files or cloud storage. Real-device thermal, battery and
@@ -399,27 +441,44 @@ frame-pacing measurements are still required before a public mobile release.
 
 ## Championship progression
 
-`Profile.championship_completed` retains permanent track unlocks (0–3).
-`championship_stages` counts scored stages in the current series, while
-`championship_places[stage][driver]` stores all classifications (0 means DNF).
+The ten circuits form three cups in Championship order (`CUPS` in
+`src/tracks.c`): the Rookie Cup (Harvest Hills, Sunshine Coast, Alpine Rush),
+the Pro Cup (Canyon Dash, Maple Woods, Jungle Ruins) and the Master Cup (Sakura
+Hills, Harbor Lights, Highland Loch, Volcano Peak). Each cup is its own series.
+
+`Profile.championship_completed` retains permanent track unlocks (0–9): every
+track up to that index is open. Per cup, `championship_stages[cup]` counts the
+scored stages of its current series, `championship_eliminated[cup]` records an
+elimination and `championship_medal[cup]` the best overall medal won.
+`championship_places[track][driver]` stores all classifications (0 means DNF).
 Points are derived as 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1, with zero for DNFs.
 Ties compare the number of wins, second places and so on, then stable driver order.
-The HUD projects the current race into the overall standings. After the player
-finishes, rivals keep racing; advancement and final medals wait for every rival
-to finish or retire. Scoring happens once and saves the full classification.
-The first two stages require a top-four finish to advance. A lower finish or DNF
-sets `championship_eliminated`, ends the series and does not unlock the next track.
+The HUD projects the current race into the cup's overall standings. After the
+player finishes, rivals keep racing; advancement and final medals wait for every
+rival to finish or retire. Scoring happens once and saves the full classification.
+Every stage but a cup's final requires a top-four finish to advance and unlock the
+next track. A lower finish or DNF eliminates the player from that cup's series.
 The failed stage still saves its classification and any finish record, but cannot
 award an overall medal even if the accumulated points place the player in the top three.
-The final overall top three earn gold, silver or bronze; other places lose.
-`championship_medal` retains the best overall medal across completed series.
-Starting another series clears its classifications but preserves unlocks and records.
-Championship always starts the next unscored stage; Arcade permits single-track replays.
+After a cup's final, the overall top three earn gold, silver or bronze; other
+places lose. A medal in a cup unlocks the first track of the next cup. Starting a
+finished or eliminated cup again clears its classifications but preserves unlocks,
+records and medals; the other cups' series are untouched. Championship always
+starts the next unscored stage of the selected cup; Arcade permits single-track
+replays of every unlocked track.
+
+Profile version 8 stores ten tracks: ten best times and medals, the unlock
+index, a `CHAMPIONSHIP <cups>` line followed by one line per cup (stages,
+medal, eliminated), one line of eight places per track, `OPTIONS` and the
+records of all ten tracks. Loading checks that each cup's series lies within
+the unlocked tracks. Versions 1–7 describe the first three circuits and import
+as the Rookie Cup: their records, medals and series carry over, and a completed
+championship with a medal unlocks Canyon Dash, the first track of the Pro Cup.
 
 Profile version 7 adds an `OPTIONS` line with the Arcade time of day before the
 records; a missing or out-of-range value is treated as a malformed profile.
 Versions 1–6 load with daytime Arcade races. Championship lighting is not saved:
-`CHAMPIONSHIP_NIGHT` fixes it per stage, and `game_night` resolves the current
+`TRACK_INFO[].night` fixes it per stage, and `game_night` resolves the current
 race (or menu preview) from the mode, the selected track and that choice.
 
 Profile version 6 also persists elimination separately from permanent unlocks.

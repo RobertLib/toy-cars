@@ -26,7 +26,7 @@ typedef struct {
 } UIClick;
 // Targets of the race menu as last drawn, shared by both layouts and scripted tests.
 typedef struct {
-    Rect modes[2], start, secondary, times[2], cards[TRACK_COUNT];
+    Rect modes[2], start, secondary, times[2], cards[TRACK_COUNT], cups[CUP_COUNT];
 } MenuLayout;
 typedef struct {
     GLuint program, vao, vbo, white, current_texture;

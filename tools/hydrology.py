@@ -10,7 +10,6 @@ from collections import deque
 
 
 class Watershed:
-    SOURCES = ((-10., 10.), (18., 47.), (35., -35.))
     SEA_LEVEL = -6.85
 
     @staticmethod
@@ -23,10 +22,13 @@ class Watershed:
         a,b,c,d = (values[max(0,min(len(values)-1,j))] for j in (i-1,i,i+1,i+2))
         return .5*((2*b)+(-a+c)*f+(2*a-5*b+4*c-d)*f*f+(-a+3*b-3*c+d)*f*f*f)
 
-    def __init__(self, theme, terrain):
-        self.theme = theme
-        self.terrain = terrain
-        self.source = self.SOURCES[theme]
+    def __init__(self, T):
+        self.T = T
+        theme = self.theme = T.index
+        W = T.water
+        self.terrain = T.terrain
+        self.source = W['source']
+        style = W['style']
         self.lake_level = None
         self.lake_cells = set()
         self.lake_bounds = None
@@ -35,7 +37,7 @@ class Watershed:
         for _ in range(400):
             height = self.ground(x, z)
             self.route.append((x, height - .08, z))
-            if math.hypot(x / 128, z / 126) >= 1.015:
+            if not T.within(x, z, 128 * 1.015, 126 * 1.015):
                 break
             dx = (self.ground(x + .15, z) - self.ground(x - .15, z)) / .3
             dz = (self.ground(x, z + .15) - self.ground(x, z - .15)) / .3
@@ -47,7 +49,7 @@ class Watershed:
             if self.ground(nx, nz) >= height:
                 break
             x, z = nx, nz
-        if theme == 0:
+        if W.get('lake'):
             # A closed lowland depression. Flood only its connected component,
             # not every unrelated patch at the same altitude near the map edge.
             x, floor, z = self.route[-1]
@@ -60,8 +62,8 @@ class Watershed:
                 a, b = cell
                 if self.ground(a, b) >= self.lake_level:
                     continue
-                if math.hypot(a / 128, b / 126) >= .985:
-                    raise ValueError('The country pond must be enclosed by its basin')
+                if not T.within(a, b, 128 * .985, 126 * .985):
+                    raise ValueError('The pond must be enclosed by its basin')
                 self.lake_cells.add(cell)
                 queue.extend(((a-1, b), (a+1, b), (a, b-1), (a, b+1)))
             self.lake_bounds = (min(a for a, b in self.lake_cells),
@@ -76,9 +78,7 @@ class Watershed:
         # Give each valley its own bends, then excavate the actual bed under the
         # resulting water profile in build_assets. No upward water or floating
         # decorative curves: the road and both banks use this same channel.
-        bends = ((0.,1.8,-3.8,4.6,1.3,-3.2,3.6,-1.4,0.),
-                 (0.,-2.5,5.8,1.5,-6.2,-3.5,3.8,0.),
-                 (0.,.8,-2.1,.4,2.5,-1.2,-.6,2.,-.9,0.))[theme]
+        bends = W['bends']
         valley = self.route
         self.route = []
         for i,p in enumerate(valley):
@@ -94,18 +94,21 @@ class Watershed:
             length = math.hypot(dx, dz)
             # Spring heads are narrow; channels widen gradually downstream.
             fraction = distance / max(1.,len(self.route)*1.25)
-            if theme == 0:
+            if style == 'meadow':
                 width = .72 + min(.35,distance*.005)
                 width *= self.smooth_curve((.8,1.25,.75,1.1,.72,1.3,.85,1.),fraction)
-            elif theme == 1:
+            elif style == 'sand':
                 # Sand bars pinch the upper creek; the tidal mouth broadens.
                 width = .85 + 1.6*min(1.,fraction)**2
                 width *= self.smooth_curve((1.,.75,1.25,.85,1.1,.8,1.3),fraction)
+            elif style == 'river':
+                # A broad lowland river with gravel bars, widening downstream.
+                width = (1.6 + 1.4*min(1.,fraction)) * self.smooth_curve((.9,1.2,.8,1.15,.85,1.25,1.),fraction)
             else:
                 # Rock constrictions alternate with small scour pools.
                 width = .68*self.smooth_curve((.8,1.3,.75,1.7,.8,1.1,1.65,.9,1.2),fraction)
             width *= min(1., .18 + distance / 7.)
-            speed = [.85, 1., 1.2][theme]
+            speed = W['speed']
             self.segments.append((a, b, dx, dz, length, width,
                                   (dx / length * speed, dz / length * speed)))
             distance += length
@@ -128,10 +131,10 @@ class Watershed:
             self.bounds = (self.bounds[0]-3,self.bounds[1]+3,self.bounds[2]-3,self.bounds[3]+3)
 
     def ground(self, x, z):
-        radius = math.hypot(x / 128, z / 126)
+        radius = math.hypot(x / 128, z / 126) if self.T.legacy else self.T.island(x, z)
         edge = max(0., (radius - .87) / .13)
-        y = self.terrain(x, z, self.theme) - .14 - edge * edge * 5
-        if self.theme == 0 and x < -70 and -20 < z < 25:
+        y = self.terrain(x, z) - .14 - edge * edge * 5
+        if self.T.key == 'country' and x < -70 and -20 < z < 25:
             # Uneven sediment shelves and two promontories interrupt the old
             # elliptical contour. Flooding still finds one connected basin.
             for cx,cz,rx,rz,height in ((-86,5,7,3,.58),(-99,-2,4,4,.48),
@@ -151,7 +154,7 @@ class Watershed:
             edge = width-distance+bank
             if edge > best[0]:
                 level = a[1]+(b[1]-a[1])*f
-                if self.theme == 1 and level < self.SEA_LEVEL:
+                if self.T.sea and level < self.SEA_LEVEL:
                     level = self.SEA_LEVEL
                     flow = (.18,.08)
                 best = (edge, level, flow)

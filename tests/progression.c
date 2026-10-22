@@ -194,13 +194,16 @@ static void test_night_option(Game *g, const char *path) {
     for (int track = 0; track < TRACK_COUNT; track++) {
         game_set_mode(g, MODE_CHAMPIONSHIP);
         g->selected = track;
-        g->profile.arcade_night = !CHAMPIONSHIP_NIGHT[track];
-        EXPECT(game_night(g) == CHAMPIONSHIP_NIGHT[track]);
+        g->profile.arcade_night = !TRACK_INFO[track].night;
+        EXPECT(game_night(g) == TRACK_INFO[track].night);
         game_set_mode(g, MODE_ARCADE);
         g->selected = track;
         EXPECT(game_night(g) == g->profile.arcade_night);
     }
-    EXPECT(!CHAMPIONSHIP_NIGHT[0] && CHAMPIONSHIP_NIGHT[TRACK_COUNT - 1]);
+    EXPECT(!TRACK_INFO[0].night && TRACK_INFO[TRACK_COUNT - 1].night);
+    // Each cup's final runs at night.
+    for (int c = 0; c < CUP_COUNT; c++)
+        EXPECT(TRACK_INFO[CUPS[c].first + CUPS[c].count - 1].night);
     g->profile.arcade_night = false;
     g->force_night = true;
     EXPECT(game_night(g));
@@ -286,17 +289,18 @@ static void test_player_name(Game *g, const char *path) {
 static void test_result_save_failure(Game *g, const char *path) {
     char temp[2300];
     SDL_snprintf(temp, sizeof temp, "%s.tmp", path);
-    for (int stage = 1; stage < TRACK_COUNT; stage++) {
+    for (int stage = 1; stage < CUPS[0].count; stage++) {
         EXPECT(game_reset_profile(g));
         g->test_mode = false;
         g->profile.championship_completed = stage;
-        g->profile.championship_stages = stage;
+        g->profile.championship_stages[0] = stage;
         EXPECT(profile_save(&g->profile));
         game_set_mode(g, MODE_CHAMPIONSHIP);
         EXPECT(SDL_CreateDirectory(temp));
         finish(g, 1, false);
         unsigned serial = g->profile.record_serial;
         EXPECT(game_save_warning(g) && !g->initials_pending);
+        // Winning the final opens the next cup; earlier stages open the next track.
         EXPECT(g->profile.championship_completed == stage + 1);
         Profile disk;
         profile_load(&disk);
@@ -312,14 +316,14 @@ static void test_result_save_failure(Game *g, const char *path) {
         EXPECT(disk.championship_completed == stage + 1 && disk.record_serial == serial);
         EXPECT(disk.records[stage].history_count == 1 && disk.medals[stage] == 3);
         game_continue(g);
-        EXPECT(stage == TRACK_COUNT - 1 ? g->screen == SCREEN_RESULTS :
+        EXPECT(stage == CUPS[0].count - 1 ? g->screen == SCREEN_RESULTS :
                    g->screen == SCREEN_COUNTDOWN && g->selected == stage + 1);
     }
     // Explicitly continuing unsaved retains pending data across a new race,
     // including a DNF, until a later successful save writes the whole profile.
     EXPECT(game_reset_profile(g));
     g->profile.championship_completed = 1;
-    g->profile.championship_stages = 1;
+    g->profile.championship_stages[0] = 1;
     EXPECT(profile_save(&g->profile));
     game_set_mode(g, MODE_CHAMPIONSHIP);
     EXPECT(SDL_CreateDirectory(temp));
@@ -333,29 +337,139 @@ static void test_result_save_failure(Game *g, const char *path) {
     EXPECT(game_save_profile(g));
     Profile disk;
     profile_load(&disk);
-    EXPECT(disk.championship_completed == 3 && disk.records[1].history_count == 1);
+    // A DNF in the final leaves the Pro Cup locked unless the points still earn a medal.
+    EXPECT(disk.championship_completed == (disk.championship_medal[0] ? 3 : 2));
+    EXPECT(disk.records[1].history_count == 1);
     EXPECT(!g->record_save_failed && !g->save_failure_acknowledged);
     // Retrying an elimination save keeps previous unlocks, medals and records.
     EXPECT(game_reset_profile(g));
-    g->profile.championship_completed = TRACK_COUNT;
-    g->profile.championship_medal = 3;
+    g->profile.championship_completed = TRACK_COUNT - 1;
+    g->profile.championship_medal[0] = 3;
     EXPECT(profile_save(&g->profile));
     EXPECT(SDL_CreateDirectory(temp));
     finish(g, 5, false);
-    EXPECT(g->profile.championship_eliminated && game_save_warning(g));
-    EXPECT(!g->championship_celebration && g->profile.championship_medal == 3);
+    EXPECT(g->profile.championship_eliminated[0] && game_save_warning(g));
+    EXPECT(!g->championship_celebration && g->profile.championship_medal[0] == 3);
     game_continue(g);
     EXPECT(g->screen == SCREEN_RESULTS);
     EXPECT(SDL_RemovePath(temp));
     EXPECT(game_submit_initials(g));
     profile_load(&disk);
-    EXPECT(disk.championship_eliminated && disk.championship_completed == TRACK_COUNT);
-    EXPECT(disk.championship_medal == 3 && disk.records[0].history_count == 1);
+    EXPECT(disk.championship_eliminated[0] && disk.championship_completed == TRACK_COUNT - 1);
+    EXPECT(disk.championship_medal[0] == 3 && disk.records[0].history_count == 1);
     game_continue(g);
     game_continue(g);
-    EXPECT(g->selected == 0 && !g->profile.championship_eliminated);
-    EXPECT(g->profile.championship_medal == 3 && g->profile.championship_completed == TRACK_COUNT);
+    EXPECT(g->selected == 0 && !g->profile.championship_eliminated[0]);
+    EXPECT(g->profile.championship_medal[0] == 3 &&
+           g->profile.championship_completed == TRACK_COUNT - 1);
     EXPECT(g->profile.records[0].history_count == 1);
+}
+
+// The later cups open one by one with a medal, and each keeps its own series.
+static void test_cups(Game *g, const char *path) {
+    EXPECT(game_reset_profile(g));
+    g->test_mode = false;
+    EXPECT(!game_track_unlocked(&g->profile, CUPS[1].first));
+    // A fourth place overall in the Rookie Cup completes it without a medal.
+    for (int stage = 0; stage < CUPS[0].count; stage++) {
+        finish(g, stage == CUPS[0].count - 1 ? 8 : 4, false);
+        if (g->initials_pending)
+            EXPECT(game_submit_initials(g));
+        if (stage < CUPS[0].count - 1)
+            game_continue(g);
+    }
+    EXPECT(game_championship_finished(g) && game_championship_rank(g) > 3);
+    EXPECT(!game_track_unlocked(&g->profile, CUPS[1].first) && g->unlocked_track == -1);
+    // A locked cup previews its first track but cannot start.
+    game_select_cup(g, 1);
+    EXPECT(g->selected == CUPS[1].first);
+    g->screen = SCREEN_MENU;
+    game_start(g);
+    EXPECT(g->screen == SCREEN_MENU);
+    // A Rookie Cup medal opens the Pro Cup.
+    game_select_cup(g, 0);
+    for (int stage = 0; stage < CUPS[0].count; stage++) {
+        finish(g, 1, false);
+        if (g->initials_pending)
+            EXPECT(game_submit_initials(g));
+        if (stage < CUPS[0].count - 1)
+            game_continue(g);
+    }
+    EXPECT(g->profile.championship_medal[0] == 3 && g->championship_celebration);
+    EXPECT(g->unlocked_track == CUPS[1].first && game_track_unlocked(&g->profile, CUPS[1].first));
+    EXPECT(!game_track_unlocked(&g->profile, CUPS[1].first + 1));
+    Profile disk;
+    profile_load(&disk);
+    EXPECT(disk.championship_completed == CUPS[1].first && disk.championship_medal[0] == 3);
+    // The Pro Cup runs its own series; leaving it half way keeps both cups' state.
+    game_select_cup(g, 1);
+    EXPECT(g->selected == CUPS[1].first && game_cup(g) == 1);
+    finish(g, 2, false);
+    EXPECT(g->initials_pending); // A cup's opening stage asks for initials.
+    EXPECT(game_submit_initials(g));
+    EXPECT(g->profile.championship_stages[1] == 1 && g->profile.championship_stages[0] == CUPS[0].count);
+    EXPECT(game_championship_points(g, 0) == 8 && game_next_track(g) == CUPS[1].first + 1);
+    game_leave_results(g);
+    game_select_cup(g, 0);
+    EXPECT(g->selected == 0 && game_cup_fresh(g, 0)); // A completed cup starts over.
+    game_select_cup(g, 1);
+    EXPECT(g->selected == CUPS[1].first + 1);
+    EXPECT(game_load(g));
+    EXPECT(game_cup(g) == 1 && g->selected == CUPS[1].first + 1); // Opens on the furthest cup.
+    // Eliminated from the Pro Cup: the Rookie Cup medal and unlocks remain.
+    finish(g, 6, false);
+    EXPECT(g->profile.championship_eliminated[1] && !g->profile.championship_eliminated[0]);
+    EXPECT(g->profile.championship_medal[0] == 3 && !game_track_unlocked(&g->profile, CUPS[1].first + 2));
+    game_continue(g);
+    EXPECT(g->screen == SCREEN_MENU && g->selected == CUPS[1].first);
+    // Win the Pro and Master Cups; the last final opens nothing further.
+    for (int c = 1; c < CUP_COUNT; c++) {
+        game_select_cup(g, c);
+        for (int stage = 0; stage < CUPS[c].count; stage++) {
+            EXPECT(g->selected == CUPS[c].first + stage);
+            finish(g, 1, false);
+            if (g->initials_pending)
+                EXPECT(game_submit_initials(g));
+            if (stage < CUPS[c].count - 1) {
+                EXPECT(g->unlocked_track == g->selected + 1 || game_track_unlocked(&g->profile, g->selected + 1));
+                game_continue(g);
+            }
+        }
+        EXPECT(g->profile.championship_medal[c] == 3 && game_championship_finished(g));
+        game_continue(g);
+        game_continue(g);
+    }
+    EXPECT(g->profile.championship_completed == TRACK_COUNT - 1);
+    for (int k = 0; k < TRACK_COUNT; k++)
+        EXPECT(game_track_unlocked(&g->profile, k));
+    // A saved profile reads back identically.
+    EXPECT(profile_save(&g->profile));
+    profile_load(&disk);
+    EXPECT(memcmp(&disk, &g->profile, sizeof disk) == 0);
+    // A version 7 series that finished with a medal opens the Pro Cup on import.
+    for (int medal = 0; medal < 2; medal++) {
+        char v7[400];
+        SDL_snprintf(v7, sizeof v7, "TOYCARS 7\n0 1 0 1 1 1\n80 81 82\n1 2 %d\n3\nCHAMPIONSHIP 3 %d 0\n"
+                     "1 2 3 4 5 6 7 8\n1 2 3 4 5 6 7 8\n%s\nOPTIONS 1\n"
+                     "RECORDS 0 AAA 0\n0 0\n0 0\n0 0\n", medal ? 3 : 0, medal ? 3 : 0,
+                     medal ? "1 2 3 4 5 6 7 8" : "8 2 3 4 5 6 7 1");
+        EXPECT(SDL_SaveFile(path, v7, strlen(v7)));
+        profile_load(&disk);
+        EXPECT(disk.championship_completed == (medal ? 3 : 2) && disk.arcade_night);
+        EXPECT(disk.championship_stages[0] == 3 && disk.championship_medal[0] == (medal ? 3 : 0));
+        EXPECT(disk.championship_stages[1] == 0 && disk.best[2] == 82 && disk.best[3] == 0);
+    }
+    // Version 8 rejects places beyond a cup's scored stages and a short cup list.
+    const char *invalid[] = {
+        "TOYCARS 8\n0 1 0 1 1 1\n0 0 0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0 0 0\n0\nCHAMPIONSHIP 2\n",
+        "TOYCARS 8\n0 1 0 1 1 1\n0 0 0 0 0 0 0 0 0 0\n0 0 0 0 0 0 0 0 0 0\n0\nCHAMPIONSHIP 3\n"
+        "0 0 0\n0 0 0\n0 0 0\n1 2 3 4 5 6 7 8\n"};
+    for (size_t i = 0; i < SDL_arraysize(invalid); i++) {
+        EXPECT(SDL_SaveFile(path, invalid[i], strlen(invalid[i])));
+        profile_load(&disk);
+        EXPECT(disk.championship_completed == 0 && disk.best[0] == 0);
+    }
+    EXPECT(game_reset_profile(g));
 }
 
 static void test_settings_save_failure(Game *g, const char *path) {
@@ -450,15 +564,18 @@ int main(int argc, char **argv) {
     EXPECT(g->profile.medals[0] == 3 && g->profile.championship_completed == 0);
     EXPECT(game_next_track(g) == -1); // Arcade victory cannot unlock the next stage.
     // Qualified finishes retain overall scoring and a saved result for each driver.
+    const CupInfo *rookie = &CUPS[0];
     for (int rank = 1; rank <= 4; rank++) {
         EXPECT(game_reset_profile(g));
-        for (int stage = 0; stage < TRACK_COUNT; stage++) {
+        for (int stage = 0; stage < rookie->count; stage++) {
             game_set_mode(g, MODE_CHAMPIONSHIP);
             EXPECT(g->selected == stage);
             finish(g, rank, false);
             EXPECT(g->championship_scored && g->championship_advanced);
-            EXPECT(g->profile.championship_stages == stage + 1);
-            EXPECT(g->profile.championship_completed == stage + 1);
+            EXPECT(g->profile.championship_stages[0] == stage + 1);
+            bool final = stage == rookie->count - 1;
+            // The final opens the next cup only with a medal.
+            EXPECT(g->profile.championship_completed == (!final ? stage + 1 : rank <= 3 ? stage + 1 : stage));
             EXPECT(g->initials_pending == (stage == 0));
             if (g->initials_pending) {
                 SDL_strlcpy(g->initials, "ROB", sizeof g->initials);
@@ -466,16 +583,16 @@ int main(int argc, char **argv) {
             }
             Profile saved;
             profile_load(&saved);
-            EXPECT(saved.championship_stages == stage + 1);
+            EXPECT(saved.championship_stages[0] == stage + 1);
             EXPECT(memcmp(saved.championship_places, g->profile.championship_places,
                           sizeof saved.championship_places) == 0);
             EXPECT(game_championship_rank(g) == rank);
-            EXPECT(game_next_track(g) == (stage < 2 ? stage + 1 : -1));
+            EXPECT(game_next_track(g) == (!final ? stage + 1 : -1));
             Profile before = g->profile;
             game_results(g);
             game_tick(g, (Controls){0}, FIXED_DT, false);
             EXPECT(memcmp(&before, &g->profile, sizeof before) == 0);
-            if (stage < 2) {
+            if (!final) {
                 // Reload and resume the next stage, including after a non-podium finish.
                 g->profile = saved;
                 game_set_mode(g, MODE_CHAMPIONSHIP);
@@ -483,7 +600,8 @@ int main(int argc, char **argv) {
             } else {
                 EXPECT(game_championship_finished(g));
                 EXPECT(g->championship_celebration == (rank <= 3));
-                EXPECT(saved.championship_medal == (rank <= 3 ? 4 - rank : 0));
+                EXPECT(saved.championship_medal[0] == (rank <= 3 ? 4 - rank : 0));
+                EXPECT(g->unlocked_track == (rank <= 3 ? CUPS[1].first : -1));
                 if (rank <= 3) {
                     game_continue(g);
                     EXPECT(!g->championship_celebration && g->screen == SCREEN_RESULTS);
@@ -491,8 +609,8 @@ int main(int argc, char **argv) {
                 game_continue(g);
                 EXPECT(g->screen == SCREEN_MENU);
                 game_continue(g);
-                EXPECT(g->selected == 0 && g->profile.championship_stages == 0);
-                EXPECT(g->profile.championship_completed == TRACK_COUNT);
+                EXPECT(g->selected == 0 && g->profile.championship_stages[0] == 0);
+                EXPECT(g->profile.championship_completed == (rank <= 3 ? CUPS[1].first : rookie->count - 1));
             }
         }
     }
@@ -503,8 +621,8 @@ int main(int argc, char **argv) {
     finish(g, 4, false);
     finish(g, 8, false);
     EXPECT(game_championship_rank(g) > 3 && !g->championship_celebration);
-    EXPECT(game_championship_finished(g) && !g->profile.championship_eliminated);
-    EXPECT(game_championship_points(g, 0) == 11 && g->profile.championship_medal == 0);
+    EXPECT(game_championship_finished(g) && !g->profile.championship_eliminated[0]);
+    EXPECT(game_championship_points(g, 0) == 11 && g->profile.championship_medal[0] == 0);
     // Two wins secure silver even with fourth place in the finale.
     EXPECT(game_reset_profile(g));
     finish(g, 1, false);
@@ -512,9 +630,9 @@ int main(int argc, char **argv) {
     finish(g, 1, false);
     finish(g, 4, false);
     EXPECT(game_championship_rank(g) == 2 && g->championship_celebration);
-    EXPECT(g->profile.championship_medal == 2 && game_championship_points(g, 0) == 25);
+    EXPECT(g->profile.championship_medal[0] == 2 && game_championship_points(g, 0) == 25);
     // Every non-qualifying place and DNF ends the run on either opening stage.
-    for (int stage = 0; stage < TRACK_COUNT - 1; stage++) {
+    for (int stage = 0; stage < rookie->count - 1; stage++) {
         for (int rank = 0; rank <= CAR_COUNT; rank++) {
             if (rank >= 1 && rank <= 4)
                 continue;
@@ -527,12 +645,12 @@ int main(int argc, char **argv) {
             if (g->initials_pending)
                 EXPECT(game_submit_initials(g));
             EXPECT(g->championship_scored && !g->championship_advanced);
-            EXPECT(g->profile.championship_eliminated && game_championship_finished(g));
-            EXPECT(g->profile.championship_stages == stage + 1);
+            EXPECT(g->profile.championship_eliminated[0] && game_championship_finished(g));
+            EXPECT(g->profile.championship_stages[0] == stage + 1);
             EXPECT(g->profile.championship_completed == stage && g->unlocked_track == -1);
             EXPECT(!game_track_unlocked(&g->profile, stage + 1));
             EXPECT(game_next_track(g) == -1 && !g->championship_celebration);
-            EXPECT(g->profile.championship_medal == 0);
+            EXPECT(g->profile.championship_medal[0] == 0);
             if (!rank)
                 EXPECT(game_championship_points(g, 0) == (stage ? 10 : 0));
             Profile before = g->profile;
@@ -542,15 +660,15 @@ int main(int argc, char **argv) {
             game_continue(g);
             EXPECT(g->screen == SCREEN_MENU && g->selected == 0);
             EXPECT(game_load(g));
-            EXPECT(g->profile.championship_eliminated && g->selected == 0);
+            EXPECT(g->profile.championship_eliminated[0] && g->selected == 0);
             EXPECT(g->profile.championship_completed == stage);
             unsigned serial = g->profile.record_serial;
             game_set_mode(g, MODE_ARCADE);
             game_set_mode(g, MODE_CHAMPIONSHIP);
-            EXPECT(g->selected == 0 && g->profile.championship_eliminated);
+            EXPECT(g->selected == 0 && g->profile.championship_eliminated[0]);
             game_continue(g);
             EXPECT(g->screen == SCREEN_COUNTDOWN && g->selected == 0);
-            EXPECT(!g->profile.championship_eliminated && g->profile.championship_stages == 0);
+            EXPECT(!g->profile.championship_eliminated[0] && g->profile.championship_stages[0] == 0);
             EXPECT(game_championship_points(g, 0) == 0);
             EXPECT(g->profile.championship_completed == stage && g->profile.record_serial == serial);
         }
@@ -569,7 +687,7 @@ int main(int argc, char **argv) {
     EXPECT(g->screen == SCREEN_RESULTS && g->selected == 1);
     g->time = 221;
     game_tick(g, (Controls){0}, FIXED_DT, false);
-    EXPECT(g->championship_scored && g->profile.championship_stages == 2);
+    EXPECT(g->championship_scored && g->profile.championship_stages[0] == 2);
     // Leaving to the menu races the pending rivals out instead of losing the stage.
     EXPECT(game_reset_profile(g));
     finish(g, 4, false);
@@ -579,16 +697,16 @@ int main(int argc, char **argv) {
     g->cars[0].finished = true;
     g->cars[0].finish_time = 80;
     game_results(g);
-    EXPECT(!g->championship_scored && g->profile.championship_stages == 1);
+    EXPECT(!g->championship_scored && g->profile.championship_stages[0] == 1);
     game_leave_results(g);
     EXPECT(g->screen == SCREEN_MENU && g->championship_scored);
-    EXPECT(g->profile.championship_stages == 2 && g->profile.championship_places[1][0] > 0);
-    EXPECT(g->selected == (g->profile.championship_eliminated ? 0 : 2));
+    EXPECT(g->profile.championship_stages[0] == 2 && g->profile.championship_places[1][0] > 0);
+    EXPECT(g->selected == (g->profile.championship_eliminated[0] ? 0 : 2));
     for (int i = 1; i < CAR_COUNT; i++)
         EXPECT(g->cars[i].finished || g->cars[i].dnf);
     // Ties count back wins before stable driver order.
     EXPECT(game_reset_profile(g));
-    g->profile.championship_completed = g->profile.championship_stages = 2;
+    g->profile.championship_completed = g->profile.championship_stages[0] = 2;
     g->profile.championship_places[0][0] = 1;
     g->profile.championship_places[1][0] = 7;
     g->profile.championship_places[0][1] = g->profile.championship_places[1][1] = 3;
@@ -609,16 +727,16 @@ int main(int argc, char **argv) {
                      "0 0 0 0 0 0 0 0\nRECORDS 0 AAA 0\n0 0\n0 0\n0 0\n";
     EXPECT(SDL_SaveFile(path, v5, strlen(v5)));
     EXPECT(game_load(g));
-    EXPECT(g->profile.championship_stages == 1 && g->selected == 1);
-    EXPECT(!g->profile.championship_eliminated && g->profile.championship_medal == 2);
+    EXPECT(g->profile.championship_stages[0] == 1 && g->selected == 1);
+    EXPECT(!g->profile.championship_eliminated[0] && g->profile.championship_medal[0] == 2);
     EXPECT(profile_save(&g->profile));
     EXPECT(game_load(g));
-    EXPECT(g->profile.championship_places[0][0] == 8 && !g->profile.championship_eliminated);
+    EXPECT(g->profile.championship_places[0][0] == 8 && !g->profile.championship_eliminated[0]);
     const char *legacy = "TOYCARS 1\n2 0 1 1 0 1\n82 83 84\n1 2 0\n";
     EXPECT(SDL_SaveFile(path, legacy, strlen(legacy)));
     profile_load(&g->profile);
     EXPECT(g->profile.championship_completed == 2 && g->profile.color == 2);
-    EXPECT(g->profile.championship_stages == 0 && g->profile.championship_medal == 0);
+    EXPECT(g->profile.championship_stages[0] == 0 && g->profile.championship_medal[0] == 0);
     EXPECT(g->profile.best[2] == 84 && g->profile.medals[1] == 2);
     legacy = "TOYCARS 1\n2 0 1 1 0 1\n82 83 84\n0 3 3\n";
     EXPECT(SDL_SaveFile(path, legacy, strlen(legacy)));
@@ -643,9 +761,11 @@ int main(int argc, char **argv) {
     test_reset(g, path);
     test_player_name(g, path);
     test_result_save_failure(g, path);
+    test_cups(g, path);
     test_settings_save_failure(g, path);
     test_dnf_classification(g);
     SDL_RemovePath(path);
+    game_free(g);
     free(g);
     printf("Progression tests: %s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

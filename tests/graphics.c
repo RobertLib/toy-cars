@@ -159,6 +159,26 @@ static void test_resize(Renderer *r, int w, int h) {
     renderer_resize(r, wide ? 960 : w, wide ? 270 : h);
 }
 
+// Restores renderer state saved before a test. The saved copy may name the
+// meshes of a circuit that was unloaded since, so keep the resident scene.
+static void restore_renderer(Renderer *r, const Renderer *saved) {
+    TrackScene scene = r->scene;
+    *r = *saved;
+    r->scene = scene;
+    r->bound_vao = 0;
+}
+
+// A profile without Championship progress, showing the Rookie Cup's opener.
+static void reset_championship(Game *g) {
+    Profile *p = &g->profile;
+    p->championship_completed = 0;
+    memset(p->championship_stages, 0, sizeof p->championship_stages);
+    memset(p->championship_medal, 0, sizeof p->championship_medal);
+    memset(p->championship_eliminated, 0, sizeof p->championship_eliminated);
+    memset(p->championship_places, 0, sizeof p->championship_places);
+    g->selected = 0;
+}
+
 static void test_crowd_animation(Renderer *r, const Game *g, bool wildlife) {
     Renderer saved = *r;
     Game *scene = SDL_malloc(sizeof *scene);
@@ -172,23 +192,26 @@ static void test_crowd_animation(Renderer *r, const Game *g, bool wildlife) {
     memcpy(scene, g, sizeof *scene);
     for (int track = 0; track < TRACK_COUNT; track++) {
         scene->selected = track;
+        // Only the selected circuit is resident; hide layers of that scene.
+        EXPECT(renderer_load_track(r, track), "animation scene loads");
+        TrackScene shown = r->scene;
         if (wildlife) {
-            r->crowds[track].count = 0;
-            r->water[track].count = 0;
-        } else r->wildlife[track].count = 0;
+            r->scene.crowd.tile_count = 0;
+            r->scene.water.count = 0;
+        } else r->scene.wildlife.tile_count = 0;
         game_start(scene);
         scene->screen = SCREEN_RACE;
         if (wildlife) {
-            const char *names[] = {"country", "beach", "winter"};
             char file[96]; size_t size = 0;
-            SDL_snprintf(file, sizeof file, "tracks/%s-wildlife.tcf", names[track]);
+            SDL_snprintf(file, sizeof file, "tracks/%s-wildlife.tcf", TRACK_INFO[track].id);
             unsigned char *data = asset_read(file, &size);
             EXPECT(data && size >= 80, "wildlife fixture loads");
             if (data) {
                 for (size_t offset = 8; offset + 72 <= size; offset += 72) {
                     float row[18]; memcpy(row, data + offset, sizeof row);
                     for (int j = 0; j < 18; j++) row[j] = SDL_SwapFloatLE(row[j]);
-                    if (row[14] != (track == 1 ? 3 : 0)) continue;
+                    // The first circuits frame a chosen species; later ones their first animal.
+                    if (track < 3 && row[14] != (track == 1 ? 3 : 0)) continue;
                     scene->cars[0].pos = scene->cars[0].prev = v3(row[10], row[11], row[12]-9);
                     scene->cars[0].yaw = scene->cars[0].speed = 0;
                     break;
@@ -228,8 +251,8 @@ static void test_crowd_animation(Renderer *r, const Game *g, bool wildlife) {
         if (track == 0 || wildlife) {
             // Captures show the complete habitat after isolated animation checks.
             if (wildlife) {
-                r->crowds[track] = saved.crowds[track];
-                r->water[track] = saved.water[track];
+                r->scene.crowd = shown.crowd;
+                r->scene.water = shown.water;
             }
             // Fixed camera and cars make these captures useful for motion review.
             for (int frame = 0; frame < 12; frame++) {
@@ -245,6 +268,7 @@ static void test_crowd_animation(Renderer *r, const Game *g, bool wildlife) {
         }
         printf("Track %d animation: %d changed pixels, %d changed shadow samples\n", track, changed,
                shadows);
+        r->scene = shown;
     }
 done:
     SDL_free(scene);
@@ -252,8 +276,7 @@ done:
     SDL_free(next);
     SDL_free(shadow_first);
     SDL_free(shadow_next);
-    *r = saved;
-    r->bound_vao = 0;
+    restore_renderer(r, &saved);
     renderer_draw(r, g, 0, r->alpha);
     EXPECT(glGetError() == GL_NO_ERROR, "crowd rendering has no GL errors");
 }
@@ -296,8 +319,7 @@ static void test_props_rendering(Renderer *r, const Game *g) {
         }
     }
     SDL_free(scene);
-    *r=saved;
-    r->bound_vao=0;
+    restore_renderer(r, &saved);
     renderer_draw(r,g,0,r->alpha);
 }
 
@@ -353,10 +375,11 @@ static void test_water_rendering(Renderer *r, const Game *g) {
         r->camera_ready = false;
         r->crowd_time = 1;
         // Isolate the liquid animation from the independently animated fans.
-        int wildlife_count = r->wildlife[track].count;
-        r->wildlife[track].count = 0;
-        int crowd_count = r->crowds[track].count;
-        r->crowds[track].count = 0;
+        EXPECT(renderer_load_track(r, track), "water scene loads");
+        int wildlife_count = r->scene.wildlife.tile_count;
+        r->scene.wildlife.tile_count = 0;
+        int crowd_count = r->scene.crowd.tile_count;
+        r->scene.crowd.tile_count = 0;
         renderer_draw(r, scene, 0, 1);
         glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
         glReadPixels(0, 0, r->width, r->height, GL_RGBA, GL_UNSIGNED_BYTE, first);
@@ -373,8 +396,8 @@ static void test_water_rendering(Renderer *r, const Game *g) {
         glBindFramebuffer(GL_FRAMEBUFFER, r->scene_fbo);
         glReadPixels(0, 0, r->width, r->height, GL_RGBA, GL_UNSIGNED_BYTE, first);
         EXPECT(memcmp(first,next,bytes) == 0, "paused water frame is stable");
-        r->crowds[track].count = crowd_count;
-        r->wildlife[track].count = wildlife_count;
+        r->scene.crowd.tile_count = crowd_count;
+        r->scene.wildlife.tile_count = wildlife_count;
         renderer_draw(r, scene, 0, 1);
         char path[2200];
         SDL_snprintf(path, sizeof path, "%swater-%s.bmp", pref_directory, t->id);
@@ -440,7 +463,7 @@ static void test_water_rendering(Renderer *r, const Game *g) {
     }
 done:
     SDL_free(scene); SDL_free(first); SDL_free(next);
-    *r = saved; r->bound_vao = 0;
+    restore_renderer(r, &saved);
     renderer_draw(r, g, 0, r->alpha);
 }
 
@@ -463,6 +486,27 @@ static void test_vegetation_rendering(Renderer *r, const Game *g) {
             car->pos = track_at(&scene->tracks[track], scene->tracks[track].length * .35f, 0, &direction);
             car->yaw = car->prev_yaw = atan2f(direction.x, direction.z);
             car_surface_pose(&scene->tracks[track], &car->pos, car->yaw, &car->pitch, &car->roll);
+            car->prev = car->pos;
+        } else if (track > 2 && renderer_load_track(r, track)) {
+            // Moors and lava fields leave the later grids bare: face the
+            // densest grove from the road, 20 m away.
+            const TiledMesh *trees = &r->scene.vegetation;
+            int dense = 0;
+            for (int i = 1; i < trees->tile_count; i++)
+                if (trees->tiles[i].count > trees->tiles[dense].count)
+                    dense = i;
+            const float *box = trees->tiles[dense].box;
+            Vec3 grove = v3((box[0] + box[3]) * .5f, 0, (box[2] + box[5]) * .5f);
+            const Track *t = &scene->tracks[track];
+            float best = 1e9f, s = 0;
+            for (int i = 0; i < t->count; i++) {
+                float d = fabsf(hypotf(t->points[i].p.x - grove.x, t->points[i].p.z - grove.z) - 20);
+                if (d < best) { best = d; s = t->points[i].s; }
+            }
+            Car *car = &scene->cars[0];
+            car->pos = track_at(t, s, 0, NULL);
+            car->yaw = car->prev_yaw = atan2f(grove.x - car->pos.x, grove.z - car->pos.z);
+            car_surface_pose(t, &car->pos, car->yaw, &car->pitch, &car->roll);
             car->prev = car->pos;
         }
         scene->screen = SCREEN_PAUSE;
@@ -506,7 +550,7 @@ static void test_vegetation_rendering(Renderer *r, const Game *g) {
     }
 done:
     SDL_free(scene); SDL_free(first); SDL_free(next);
-    *r = saved; r->bound_vao = 0;
+    restore_renderer(r, &saved);
     renderer_draw(r, g, 0, r->alpha);
 }
 
@@ -631,7 +675,7 @@ static void test_cloud_lighting(Renderer *r, const Game *g) {
     }
 done:
     SDL_free(scene); SDL_free(first); SDL_free(next);
-    *r = saved; r->bound_vao = 0;
+    restore_renderer(r, &saved);
     renderer_draw(r, g, 0, r->alpha);
 }
 
@@ -685,8 +729,7 @@ done:
     SDL_free(scene);
     SDL_free(first);
     SDL_free(next);
-    *r = saved;
-    r->bound_vao = 0;
+    restore_renderer(r, &saved);
     renderer_draw(r, g, 0, r->alpha);
 }
 
@@ -760,7 +803,11 @@ static void test_night_rendering(Renderer *r, const Game *g) {
                                       r->width / 2);
         float lit = scene_luma(night, r->width, r->height, px, py, 6);
         float unlit = scene_luma(dark, r->width, r->height, px, py, 6);
-        EXPECT(w > 0 && night_luma < day_luma * .45f, "night darkens the whole track");
+        // Black volcanic rock is dark by day already; there the lava's glow
+        // lights the night, which must still be dark and clearly darker.
+        EXPECT(w > 0 && (night_luma < day_luma * .45f ||
+                         (night_luma < 26 && night_luma < day_luma - 15)),
+               "night darkens the whole track");
         EXPECT(lit > unlit * 2 + 8, "headlights light the road ahead of the player");
         EXPECT(night_calls <= day_calls + CAR_COUNT + 2, "night lamps add one draw per car");
         EXPECT(glGetError() == GL_NO_ERROR, "night rendering has no GL errors");
@@ -785,17 +832,16 @@ static void test_night_rendering(Renderer *r, const Game *g) {
         scene->selected = track;
         game_start(scene);
         scene->screen = SCREEN_PAUSE;
-        scene->profile.arcade_night = !CHAMPIONSHIP_NIGHT[track];
+        scene->profile.arcade_night = !TRACK_INFO[track].night;
         renderer_draw(r, scene, 0, 1);
-        EXPECT((r->night > 0) == CHAMPIONSHIP_NIGHT[track], "Championship stage lighting");
+        EXPECT((r->night > 0) == TRACK_INFO[track].night, "Championship stage lighting");
     }
 done:
     SDL_free(scene);
     SDL_free(day);
     SDL_free(night);
     SDL_free(dark);
-    *r = saved;
-    r->bound_vao = 0;
+    restore_renderer(r, &saved);
     renderer_draw(r, g, 0, r->alpha);
 }
 
@@ -830,9 +876,7 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
     g->test_mode = false;
     g->profile.initials_set = false;
     SDL_strlcpy(g->profile.initials, "AAA", sizeof g->profile.initials);
-    g->profile.championship_completed = 0;
-    g->profile.championship_stages = 0;
-    memset(g->profile.championship_places, 0, sizeof g->profile.championship_places);
+    reset_championship(g);
     g->screen = SCREEN_MENU;
     game_set_mode(g, MODE_CHAMPIONSHIP);
     const MenuLayout *menu = &u->menu_layout;
@@ -858,7 +902,9 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
     g->profile.touch = false;
     capture_ui(u, g, r, "desktop-touch-disabled");
     g->profile.touch = saved_touch;
-    for (int stage = 0; stage < TRACK_COUNT; stage++) {
+    // The Rookie Cup's three stages, from its opener to the cup final.
+    const int stages = CUPS[0].count;
+    for (int stage = 0; stage < stages; stage++) {
         g->screen = SCREEN_RACE;
         g->cars[0].finished = true;
         g->cars[0].finish_time = 80;
@@ -887,10 +933,10 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
                "submitted Championship initials cannot reopen name entry");
         EXPECT(strcmp(g->profile.records[stage].history[0].initials, "ROB") == 0,
                "all Championship stages use the chosen initials");
-        capture_ui(u, g, r, stage == TRACK_COUNT - 1 ? "championship-complete" : "track-unlocked");
-        EXPECT(g->championship_celebration == (stage == TRACK_COUNT - 1),
+        capture_ui(u, g, r, stage == stages - 1 ? "championship-complete" : "track-unlocked");
+        EXPECT(g->championship_celebration == (stage == stages - 1),
                "only the final qualifying stage shows the celebration");
-        if (stage == TRACK_COUNT - 1) {
+        if (stage == stages - 1) {
             g->celebration_time = 1.5f;
             capture_ui(u, g, r, "championship-celebration");
             const SDL_Keycode keys[] = {SDLK_RETURN, SDLK_SPACE, SDLK_ESCAPE};
@@ -936,7 +982,7 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
             click_ui(u, g, r, results_x + 36 + 100, results_by);
             EXPECT(g->screen == SCREEN_MENU, "final results primary action returns to the menu");
         }
-        if (stage < TRACK_COUNT - 1) {
+        if (stage < stages - 1) {
             float available = u->height - u->safe_top - u->safe_bottom;
             float panel_h = fminf(638, available - 44);
             float x = u->safe_left + (u->width - u->safe_left - u->safe_right - 920) * .5f;
@@ -954,7 +1000,7 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
                               "championship-lost"};
     for (int rank = 1; rank <= 4; rank++) {
         EXPECT(game_reset_profile(g), "reset overall-result fixture");
-        for (int stage = 0; stage < TRACK_COUNT; stage++) {
+        for (int stage = 0; stage < CUPS[0].count; stage++) {
             game_start(g);
             g->screen = SCREEN_RACE;
             for (int i = 0; i < CAR_COUNT; i++) {
@@ -991,7 +1037,7 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
         game_results(g);
         if (g->initials_pending)
             EXPECT(game_submit_initials(g), "save eliminated player's record initials");
-        EXPECT(g->profile.championship_eliminated && game_next_track(g) == -1,
+        EXPECT(g->profile.championship_eliminated[0] && game_next_track(g) == -1,
                "a fifth place or DNF cannot advance");
         capture_ui(u, g, r, dnf ? "championship-eliminated-dnf" : "championship-eliminated");
         ui_size(u, 1600, 450, SDL_GL_GetCurrentWindow());
@@ -1009,7 +1055,7 @@ static void test_progression_ui(UI *u, Game *g, Renderer *r) {
         capture_ui(u, g, r, "championship-eliminated-menu");
         click_menu(u, g, r, &menu->start);
         EXPECT(g->screen == SCREEN_COUNTDOWN && g->selected == 0 &&
-                   !g->profile.championship_eliminated && g->profile.championship_stages == 0,
+                   !g->profile.championship_eliminated[0] && g->profile.championship_stages[0] == 0,
                "new championship button clears the eliminated run");
     }
     g->test_mode = true;
@@ -1098,11 +1144,12 @@ static void test_record_ui(UI *u, Game *g, Renderer *r) {
 static void test_save_failure_ui(UI *u, Game *g, Renderer *r) {
     char temp[2300];
     SDL_snprintf(temp, sizeof temp, "%sprofile.txt.tmp", pref_directory);
-    for (int stage = 1; stage < TRACK_COUNT; stage++) {
+    for (int stage = 1; stage < CUPS[0].count; stage++) {
         EXPECT(game_reset_profile(g), "reset save-failure fixture");
         g->test_mode = false;
         g->profile.championship_completed = stage;
-        g->profile.championship_stages = stage;
+        g->profile.championship_stages[0] = stage;
+        g->selected = 0;
         EXPECT(profile_save(&g->profile), "save starting stage");
         game_set_mode(g, MODE_CHAMPIONSHIP);
         game_start(g);
@@ -1215,7 +1262,10 @@ static void test_time_of_day_ui(UI *u, Game *g, Renderer *r) {
     click_menu(u, g, r, &u->menu_layout.times[0]);
     EXPECT(!g->profile.arcade_night && !game_night(g), "Arcade day choice applies");
     // Championship shows each stage's fixed time of day; the same spot is inert.
-    g->profile.championship_completed = g->profile.championship_stages = TRACK_COUNT - 1;
+    // The Master Cup final races at night.
+    g->profile.championship_completed = TRACK_COUNT - 1;
+    g->profile.championship_stages[CUP_COUNT - 1] = CUPS[CUP_COUNT - 1].count - 1;
+    g->selected = TRACK_COUNT - 1;
     game_set_mode(g, MODE_CHAMPIONSHIP);
     click_ui(u, g, r, night.x + night.w * .5f, night.y + night.h * .5f);
     EXPECT(g->selected == TRACK_COUNT - 1 && game_night(g) && !g->profile.arcade_night,
@@ -1339,9 +1389,7 @@ static void test_mobile_ui(UI *u, Game *g, Renderer *r) {
     float x = 120, w = 1120, bottom = 576;
     ui_clear_input(u);
     g->test_mode = true;
-    g->profile.championship_completed = 0;
-    g->profile.championship_stages = 0;
-    memset(g->profile.championship_places, 0, sizeof g->profile.championship_places);
+    reset_championship(g);
     g->screen = SCREEN_MENU;
     game_set_mode(g, MODE_CHAMPIONSHIP);
     capture_ui(u, g, r, "mobile-championship");
@@ -1514,9 +1562,7 @@ static void test_mobile_ui(UI *u, Game *g, Renderer *r) {
     EXPECT(g->screen == SCREEN_RESULTS, "mobile records return to results");
     click_ui(u, g, r, x + 80, bottom - 56);
     EXPECT(g->screen == SCREEN_COUNTDOWN, "mobile results replay the race");
-    g->profile.championship_completed = 0;
-    g->profile.championship_stages = 0;
-    memset(g->profile.championship_places, 0, sizeof g->profile.championship_places);
+    reset_championship(g);
     game_set_mode(g, MODE_CHAMPIONSHIP);
     game_start(g);
     g->test_mode = false;
@@ -1541,7 +1587,7 @@ static void test_mobile_ui(UI *u, Game *g, Renderer *r) {
     for (int i = 1; i < CAR_COUNT; i++)
         g->cars[i].dnf = true;
     game_results(g);
-    EXPECT(g->profile.championship_eliminated && game_championship_rank(g) == 1 &&
+    EXPECT(g->profile.championship_eliminated[0] && game_championship_rank(g) == 1 &&
                !g->championship_celebration,
            "mobile DNF ends the run even when the player leads overall");
     capture_ui(u, g, r, "mobile-championship-eliminated");
@@ -1550,7 +1596,7 @@ static void test_mobile_ui(UI *u, Game *g, Renderer *r) {
            "mobile elimination returns to the new championship menu");
     capture_ui(u, g, r, "mobile-championship-eliminated-menu");
     game_continue(g);
-    EXPECT(g->screen == SCREEN_COUNTDOWN && !g->profile.championship_eliminated,
+    EXPECT(g->screen == SCREEN_COUNTDOWN && !g->profile.championship_eliminated[0],
            "new mobile championship clears elimination");
     g->test_mode = true;
     g->screen = SCREEN_RESULTS;
@@ -1623,7 +1669,7 @@ static void test_ui_draw(UI *u, Game *g, Renderer *r) {
                "context recovery preserves diagnostics and clears held input");
         EXPECT(glIsProgram(r->shader) && glIsProgram(r->weather_shader) &&
                    glIsProgram(u->program) && glIsTexture(u->fonts[0].texture) &&
-                   glIsBuffer(r->car.vbo) && glIsBuffer(r->crowds[0].vbo) && r->crowds[0].count > 0,
+                   glIsBuffer(r->car.vbo) && glIsBuffer(r->scene.crowd.mesh.vbo) && r->scene.crowd.mesh.count > 0,
                "world and UI resources exist in the replacement context");
     }
     if (drawn_frames == 7)
@@ -1768,9 +1814,7 @@ static void test_ui_draw(UI *u, Game *g, Renderer *r) {
     }
     if (drawn_frames == 16) {
         EXPECT(g->screen == SCREEN_RESULTS, "Escape returns from records to race results");
-        g->profile.championship_completed = 0;
-        g->profile.championship_stages = 0;
-        memset(g->profile.championship_places, 0, sizeof g->profile.championship_places);
+        reset_championship(g);
         game_set_mode(g, MODE_CHAMPIONSHIP);
         game_start(g);
         g->screen = SCREEN_RACE;
@@ -1792,7 +1836,7 @@ static void test_ui_draw(UI *u, Game *g, Renderer *r) {
         for (int i = 0; i < 120; i++)
             game_tick(g, (Controls){0}, FIXED_DT, false);
         EXPECT(g->cars[2].progress > rival_progress && !g->championship_scored &&
-                   g->profile.championship_stages == 0,
+                   g->profile.championship_stages[0] == 0,
                "rivals keep racing on the results screen before the stage is saved");
         g->cars[2].finished = true;
         g->cars[2].finish_time = 85;
@@ -1801,7 +1845,7 @@ static void test_ui_draw(UI *u, Game *g, Renderer *r) {
         for (int i = 4; i < CAR_COUNT; i++)
             g->cars[i].dnf = true;
         game_tick(g, (Controls){0}, FIXED_DT, false);
-        EXPECT(g->championship_scored && g->profile.championship_stages == 1,
+        EXPECT(g->championship_scored && g->profile.championship_stages[0] == 1,
                "the overall standings are finalized once all rivals finish or retire");
         capture_ui(u, g, r, "championship-results-direct");
     }

@@ -294,6 +294,25 @@ SOUNDS = {
     "ambience-beach": (S("518/518637_6089496-hq.ogg"), chain(at(cut, 10, 72), at(highpass, 40), at(loop, 3), normalize), 3),
     # xkeril: early morning in the Swiss mountains, wind and a distant river.
     "ambience-winter": (S("757/757868_13504080-hq.ogg"), chain(at(cut, 40, 102), at(highpass, 40), at(loop, 3), normalize), 3),
+    # fran_marenco: soft wind in the Patagonian desert, a few birds and insects (Canyon).
+    "ambience-desert": (S("796/796193_3557494-hq.ogg"), chain(at(cut, 300, 362), at(highpass, 60), at(loop, 3), normalize), 3),
+    # cribbler: wind in the trees on a small wooded mountain, crows calling now and then (Autumn).
+    "ambience-forest": (S("734/734711_3728489-hq.ogg"), chain(at(cut, 1074, 1136), at(highpass, 50), at(loop, 3), normalize), 3),
+    # felix.blume: night in French Guiana's rainforest, frogs, toads and crickets (Jungle).
+    "ambience-jungle": (S("868/868734_1661766-hq.ogg"), chain(at(cut, 218, 280), at(highpass, 60), at(loop, 3), normalize), 3),
+    # tomasloos, Japan: a bird calling by a bamboo grove over a small stream (Sakura); the
+    # grove's own trickle is faint, so his steady stream under a bridge runs beneath it.
+    "ambience-garden": (lambda cache: (freesound("843/843520_1680683-hq.ogg", cache, False), freesound("843/843511_1680683-hq.ogg", cache, False)),
+                        lambda parts: normalize(loop(mix((highpass(cut(parts[0], 0, 62), 120), 0),
+                                                         (highpass(cut(parts[1], 71, 133), 60) * .12, 0)), 3)), 3),
+    # Kinoton: a harbour, water splashing at the pier, boats creaking, a distant horn (Harbor);
+    # the steep high-pass removes a faint 108 Hz hum.
+    "ambience-harbor": (S("561/561815_2247456-hq.ogg"), chain(at(cut, 90, 152), at(highpass, 150, 4), at(loop, 3), normalize), 3),
+    # Kinoton: skylarks singing over windy grassland in spring (Highland).
+    "ambience-moor": (S("635/635912_2247456-hq.ogg"), chain(at(cut, 108, 170), at(highpass, 50), at(loop, 3), normalize), 3),
+    # felix.blume: Mount Yasur at night from the crater rim, rumbling, puffing and spattering
+    # between eruptions (Volcano).
+    "ambience-volcano": (S("661/661147_1661766-hq.ogg"), chain(at(cut, 1067, 1127), at(highpass, 35), at(loop, 3), normalize), 3),
     # Pól: the rally countdown, three beeps and the start tone.
     "beep": (S(POL.format(385928)), chain(mono, at(cut, 0, .62), *ONE_SHOT), 5),
     "go": (S(POL.format(385928)), chain(mono, at(cut, 2.99, 4.0), at(fade, .002, .3), normalize), 5),

@@ -70,7 +70,7 @@ static bool load_railway(Track *t) {
     uint32_t v[7] = {0};
     bool valid = size >= 56 && !memcmp(data, "TCR1", 4);
     for (int i = 0; valid && i < 7; i++) v[i] = read_u32(data + 4 + i * 4);
-    valid = valid && v[0] <= RAIL_ALPINE && v[1] <= 1 && v[2] >= 8 && v[2] <= MAX_RAIL_POINTS &&
+    valid = valid && v[0] <= RAIL_FREIGHT && v[1] <= 1 && v[2] >= 8 && v[2] <= MAX_RAIL_POINTS &&
             v[3] >= 1 && v[3] <= MAX_RAIL_PASSES && v[4] <= MAX_RAIL_STOPS &&
             v[5] <= MAX_RAIL_ARMS && v[6] <= MAX_RAIL_LIGHTS &&
             size == 56 + (size_t)v[2] * 12 + (v[3] + v[4]) * 4 + (v[5] + v[6]) * 24;
@@ -83,7 +83,7 @@ static bool load_railway(Track *t) {
     for (uint32_t i = 0; valid && i < v[2]; i++, off += 12) {
         r->points[i] = v3(read_float(data + off), read_float(data + off + 4), read_float(data + off + 8));
         valid = isfinite(r->points[i].x) && isfinite(r->points[i].y) && isfinite(r->points[i].z) &&
-                fabsf(r->points[i].x) < 150 && fabsf(r->points[i].z) < 150;
+                fabsf(r->points[i].x) < -SURFACE_ORIGIN && fabsf(r->points[i].z) < -SURFACE_ORIGIN;
         r->s[i] = i ? r->s[i - 1] + vlen(vsub(r->points[i], r->points[i - 1])) : 0;
     }
     if (valid) {
@@ -130,10 +130,16 @@ static bool load_railway(Track *t) {
     return valid;
 }
 
+bool track_alloc_surface(Track *t, int triangles, int refs) {
+    SDL_free(t->surface);
+    SDL_free(t->surface_refs);
+    t->surface = SDL_calloc((size_t)triangles, sizeof *t->surface);
+    t->surface_refs = SDL_calloc((size_t)refs, sizeof *t->surface_refs);
+    t->surface_count = 0;
+    return t->surface && t->surface_refs;
+}
+
 static bool load_surface(Track *t, bool water) {
-    SurfaceTriangle *triangles = water ? t->water : t->surface;
-    uint32_t *cells = water ? t->water_cells : t->surface_cells;
-    uint16_t *refs = water ? t->water_refs : t->surface_refs;
     uint32_t limit = water ? MAX_WATER_TRIANGLES : MAX_SURFACE_TRIANGLES;
     size_t stride = water ? 120 : 36;
     char name[100];
@@ -157,11 +163,22 @@ static bool load_surface(Track *t, bool water) {
         SDL_free(data);
         return false;
     }
+    SurfaceTriangle *triangles;
+    if (water) {
+        SDL_free(t->water);
+        t->water = triangles = SDL_calloc(count, sizeof *t->water);
+    } else {
+        triangles = track_alloc_surface(t, (int)count, 1) ? t->surface : NULL;
+    }
+    if (!triangles) {
+        SDL_free(data);
+        return false;
+    }
     for (uint32_t i = 0; i < count; i++) {
         float v[9];
         for (int j = 0; j < 9; j++) {
             v[j] = read_float(data + 8 + i * stride + (water ? (j / 3) * 40 + (j % 3) * 4 : j * 4));
-            if (!isfinite(v[j]) || fabsf(v[j]) > (water ? 150 : 128)) {
+            if (!isfinite(v[j]) || fabsf(v[j]) > -SURFACE_ORIGIN) {
                 SDL_free(data);
                 return false;
             }
@@ -174,9 +191,11 @@ static bool load_surface(Track *t, bool water) {
         t->water_count = (int)count;
     else
         t->surface_count = (int)count;
+    uint32_t *cells = water ? t->water_cells : t->surface_cells;
     // Index triangles by their XZ bounds once, keeping tire queries local.
     // Ground queries also accept points within the seam tolerance of a triangle.
-    uint32_t cursor[SURFACE_GRID * SURFACE_GRID] = {0};
+    static uint32_t cursor[SURFACE_GRID * SURFACE_GRID];
+    memset(cursor, 0, sizeof cursor);
     float pad = water ? 0 : SURFACE_SEAM;
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t i = 0; i < count; i++) {
@@ -190,8 +209,10 @@ static bool load_surface(Track *t, bool water) {
                     int cell = z * SURFACE_GRID + x;
                     if (pass == 0)
                         cursor[cell]++;
+                    else if (water)
+                        t->water_refs[cursor[cell]++] = (uint16_t)i;
                     else
-                        refs[cursor[cell]++] = (uint16_t)i;
+                        t->surface_refs[cursor[cell]++] = i;
                 }
         }
         if (pass == 0) {
@@ -200,34 +221,68 @@ static bool load_surface(Track *t, bool water) {
                 cells[cell + 1] = cells[cell] + cursor[cell];
                 cursor[cell] = cells[cell];
             }
-            if (cells[SURFACE_GRID * SURFACE_GRID] > (water ? MAX_WATER_REFS : MAX_SURFACE_REFS))
+            uint32_t refs = cells[SURFACE_GRID * SURFACE_GRID];
+            if (refs > (water ? MAX_WATER_REFS : MAX_SURFACE_REFS))
                 return false;
+            if (water) {
+                SDL_free(t->water_refs);
+                t->water_refs = SDL_calloc(refs ? refs : 1, sizeof *t->water_refs);
+                if (!t->water_refs)
+                    return false;
+            } else {
+                SDL_free(t->surface_refs);
+                t->surface_refs = SDL_calloc(refs ? refs : 1, sizeof *t->surface_refs);
+                if (!t->surface_refs)
+                    return false;
+            }
+        }
+    }
+    if (!water) {
+        // The island's extent, for recovery off its edge and for tests.
+        t->extent[0] = t->extent[2] = 1e9f;
+        t->extent[1] = t->extent[3] = -1e9f;
+        for (uint32_t i = 0; i < count; i++) {
+            const Vec3 *v = &t->surface[i].a;
+            for (int k = 0; k < 3; k++) {
+                t->extent[0] = fminf(t->extent[0], v[k].x);
+                t->extent[1] = fmaxf(t->extent[1], v[k].x);
+                t->extent[2] = fminf(t->extent[2], v[k].z);
+                t->extent[3] = fmaxf(t->extent[3], v[k].z);
+            }
         }
     }
     return true;
 }
 
-bool game_load(Game *g) {
-    memset(g, 0, sizeof *g);
-    g->rng = 81291;
-    const char *ids[] = {"country", "beach", "winter"};
-    const char *names[] = {"Harvest Hills", "Sunshine Coast", "Alpine Rush"};
-    const char *sub[] = {"COUNTRY RUN", "BEACH ESCAPE", "WINTER CIRCUIT"};
-    const char *descs[] = {"Rolling hills. Red barns. Full throttle.",
-                           "Salt in the air. Sand in your tires.",
-                           "Fresh powder. Slippery turns. Big air."};
-    Color accents[] = {rgb(.86, .30, .13), rgb(.04, .49, .51), rgb(.30, .45, .69)};
-    Color skies[] = {rgb(.84, .87, .74), rgb(.63, .83, .85), rgb(.72, .81, .88)};
+void game_free(Game *g) {
     for (int k = 0; k < TRACK_COUNT; k++) {
         Track *t = &g->tracks[k];
-        t->id = ids[k];
-        t->name = names[k];
-        t->subtitle = sub[k];
-        t->description = descs[k];
-        t->accent = accents[k];
-        t->sky = skies[k];
+        SDL_free(t->surface);
+        SDL_free(t->surface_refs);
+        SDL_free(t->water);
+        SDL_free(t->water_refs);
+        t->surface = t->water = NULL;
+        t->surface_refs = NULL;
+        t->water_refs = NULL;
+    }
+}
+
+bool game_load(Game *g) {
+    game_free(g);
+    memset(g, 0, sizeof *g);
+    g->rng = 81291;
+    for (int k = 0; k < TRACK_COUNT; k++) {
+        Track *t = &g->tracks[k];
+        const TrackInfo *info = &TRACK_INFO[k];
+        t->info = info;
+        t->id = info->id;
+        t->name = info->name;
+        t->subtitle = info->subtitle;
+        t->description = info->description;
+        t->accent = info->accent;
+        t->sky = info->sky;
         char name[100];
-        SDL_snprintf(name, sizeof name, "tracks/%s.tcp", ids[k]);
+        SDL_snprintf(name, sizeof name, "tracks/%s.tcp", t->id);
         size_t size;
         unsigned char *d = asset_read(name, &size);
         if (!d || size < 20 || memcmp(d, "TCP1", 4)) {
@@ -296,6 +351,8 @@ bool game_load(Game *g) {
         track_place_boosts(t);
     }
     profile_load(&g->profile);
+    // Open on the most advanced cup the player has reached.
+    g->selected = CUPS[track_cup(SDL_min(g->profile.championship_completed, TRACK_COUNT - 1))].first;
     game_set_mode(g, MODE_CHAMPIONSHIP);
     g->unlocked_track = -1;
     g->screen = SCREEN_MENU;
@@ -317,7 +374,10 @@ static bool valid_initials(const char *s, bool legacy) {
            s[2] >= 'A' && s[2] <= 'Z';
 }
 
+// Profiles before version 8 hold the three original circuits.
+#define LEGACY_TRACKS 3
 static bool load_records(Profile *p, const char *data, int version) {
+    int tracks = version >= 8 ? TRACK_COUNT : LEGACY_TRACKS;
     int used = 0;
     int initials_set = 0;
     int fields = version >= 4
@@ -330,7 +390,7 @@ static bool load_records(Profile *p, const char *data, int version) {
     // Older profiles cannot distinguish the AAA placeholder from an explicit choice.
     p->initials_set = version >= 4 ? initials_set != 0 : strcmp(p->initials, "AAA") != 0;
     data += used;
-    for (int track = 0; track < TRACK_COUNT; track++) {
+    for (int track = 0; track < tracks; track++) {
         TrackRecords *table = &p->records[track];
         used = 0;
         if (sscanf(data, " %d %d %n", &table->top_count, &table->history_count, &used) != 2 ||
@@ -396,6 +456,76 @@ static void profile_defaults(Profile *p) {
                    .arcade_night = false,
                    .initials = "AAA"};
 }
+// Version 8 (ten circuits in three cups):
+//   TOYCARS 8 / settings / ten best times / ten medals / unlock progress
+//   CHAMPIONSHIP <cups>, then per cup: stages scored, best medal, eliminated
+//   one line of eight places per track / OPTIONS / RECORDS ...
+// Versions 1-7 describe the first three circuits, which form the Rookie Cup.
+static bool load_settings(Profile *p, const char **cursor) {
+    int c, level, a, t, s, m, used = 0;
+    if (sscanf(*cursor, " %d %d %d %d %d %d %n", &c, &level, &a, &t, &s, &m, &used) != 6 || !used ||
+        c < 0 || c >= 6 || level < 0 || level >= 3)
+        return false;
+    p->color = c;
+    p->difficulty = level;
+    p->auto_accel = !!a;
+    p->touch = !!t;
+    p->sound = !!s;
+    p->music = !!m;
+    *cursor += used;
+    return true;
+}
+
+static bool load_bests(Profile *p, const char **cursor, int tracks) {
+    for (int i = 0; i < tracks; i++) {
+        float best = 0;
+        int used = 0;
+        if (sscanf(*cursor, " %f %n", &best, &used) != 1 || !used || !isfinite(best) || best < 0)
+            return false;
+        p->best[i] = best;
+        *cursor += used;
+    }
+    for (int i = 0; i < tracks; i++) {
+        int medal = 0, used = 0;
+        if (sscanf(*cursor, " %d %n", &medal, &used) != 1 || !used)
+            return false;
+        p->medals[i] = (int)clampf((float)medal, 0, 3);
+        *cursor += used;
+    }
+    return true;
+}
+
+static bool load_places(Profile *p, const char **cursor, int tracks) {
+    for (int track = 0; track < tracks; track++) {
+        const CupInfo *cup = &CUPS[track_cup(track)];
+        unsigned seen = 0;
+        for (int i = 0; i < CAR_COUNT; i++) {
+            int place = 0, used = 0;
+            if (sscanf(*cursor, " %d %n", &place, &used) != 1 || !used || place < 0 ||
+                place > CAR_COUNT || (place && (seen & (1u << place))) ||
+                (track - cup->first >= p->championship_stages[track_cup(track)] && place))
+                return false;
+            if (place)
+                seen |= 1u << place;
+            p->championship_places[track][i] = place;
+            *cursor += used;
+        }
+    }
+    return true;
+}
+
+// A scored series must lie within the unlocked tracks: every raced stage, and
+// the next one after a qualifying finish, is already open.
+static bool valid_cup(const Profile *p, int c) {
+    int stages = p->championship_stages[c], first = CUPS[c].first, count = CUPS[c].count;
+    bool eliminated = p->championship_eliminated[c];
+    if (stages < 0 || stages > count || p->championship_medal[c] < 0 || p->championship_medal[c] > 3)
+        return false;
+    if (eliminated && (stages == 0 || stages == count))
+        return false;
+    return !stages || first + stages - (eliminated || stages == count ? 1 : 0) <= p->championship_completed;
+}
+
 void profile_load(Profile *p) {
     profile_defaults(p);
     char path[2048];
@@ -405,132 +535,138 @@ void profile_load(Profile *p) {
     char *d = SDL_LoadFile(path, &size);
     if (!d)
         return;
-    int offset = 0;
-    int version = 0, completed = 0, c, level, a, t, s, m, med0, med1, med2;
-    float b0, b1, b2;
-    int n = sscanf(d, "TOYCARS %d\n%d %d %d %d %d %d\n%f %f %f\n%d %d %d\n%d %n", &version,
-                   &c, &level, &a, &t, &s, &m, &b0, &b1, &b2, &med0, &med1, &med2, &completed, &offset);
-    bool valid = (version == 1 && n >= 13) ||
-                 ((version >= 2 && version <= 7) && n == 14 && completed >= 0 && completed <= TRACK_COUNT);
-    if (valid && c >= 0 && c < 6 && level >= 0 && level < 3 && isfinite(b0) && isfinite(b1) &&
-        isfinite(b2) && b0 >= 0 && b1 >= 0 && b2 >= 0) {
-        p->color = c;
-        p->difficulty = level;
-        p->auto_accel = !!a;
-        p->touch = !!t;
-        p->sound = !!s;
-        p->music = !!m;
-        p->best[0] = b0;
-        p->best[1] = b1;
-        p->best[2] = b2;
-        p->medals[0] = (int)clampf(med0, 0, 3);
-        p->medals[1] = (int)clampf(med1, 0, 3);
-        p->medals[2] = (int)clampf(med2, 0, 3);
-        if (version == 1) {
-            // Credit consecutive podiums earned before Championship existed.
-            completed = 0;
-            while (completed < TRACK_COUNT && p->medals[completed] > 0)
-                completed++;
-        }
-        p->championship_completed = completed;
-        if (version >= 5) {
-            int used = 0, eliminated = 0;
-            char *cursor = d + offset;
-            int fields = version >= 6
-                ? sscanf(cursor, " CHAMPIONSHIP %d %d %d %n", &p->championship_stages,
-                         &p->championship_medal, &eliminated, &used)
-                : sscanf(cursor, " CHAMPIONSHIP %d %d %n", &p->championship_stages,
-                         &p->championship_medal, &used);
-            p->championship_eliminated = eliminated == 1;
-            bool championship_valid = fields == (version >= 6 ? 3 : 2) && used &&
-                eliminated >= 0 && eliminated <= 1 &&
-                (!eliminated || (p->championship_stages > 0 &&
-                                 p->championship_stages < TRACK_COUNT)) &&
-                p->championship_stages >= 0 && p->championship_stages <= TRACK_COUNT &&
-                p->championship_stages <= completed + eliminated &&
-                p->championship_medal >= 0 && p->championship_medal <= 3;
-            cursor += used;
-            for (int stage = 0; championship_valid && stage < TRACK_COUNT; stage++) {
-                unsigned seen = 0;
-                for (int i = 0; i < CAR_COUNT; i++) {
-                    int place = 0;
-                    used = 0;
-                    if (sscanf(cursor, " %d %n", &place, &used) != 1 || !used ||
-                        place < 0 || place > CAR_COUNT || (place && (seen & (1u << place))) ||
-                        (stage >= p->championship_stages && place)) {
-                        championship_valid = false;
-                        break;
-                    }
-                    if (place)
-                        seen |= 1u << place;
-                    p->championship_places[stage][i] = place;
-                    cursor += used;
-                }
-            }
-            if (!championship_valid) {
-                profile_defaults(p);
-                SDL_free(d);
-                return;
-            }
-            offset = (int)(cursor - d);
-        }
-        if (version >= 7) {
-            int night = 0, used = 0;
-            if (sscanf(d + offset, " OPTIONS %d %n", &night, &used) != 1 || !used || night < 0 ||
-                night > 1) {
-                profile_defaults(p);
-                SDL_free(d);
-                return;
-            }
-            p->arcade_night = night == 1;
-            offset += used;
-        }
-        // Legacy saves retain unlocks and records; start a new scored Championship.
-        if (version < 3 || !offset || !load_records(p, d + offset, version))
-            migrate_records(p);
+    int version = 0, used = 0;
+    const char *cursor = d;
+    if (sscanf(cursor, "TOYCARS %d %n", &version, &used) != 1 || !used || version < 1 || version > 8) {
+        SDL_free(d);
+        return;
     }
+    cursor += used;
+    int tracks = version >= 8 ? TRACK_COUNT : LEGACY_TRACKS, completed = 0;
+    bool valid = load_settings(p, &cursor) && load_bests(p, &cursor, tracks);
+    if (valid && version >= 2) {
+        used = 0;
+        valid = sscanf(cursor, " %d %n", &completed, &used) == 1 && used && completed >= 0 &&
+                completed <= tracks;
+        cursor += used;
+    }
+    if (!valid) {
+        // A damaged header leaves the defaults; nothing else can be trusted.
+        profile_defaults(p);
+        SDL_free(d);
+        return;
+    }
+    if (version == 1) {
+        // Credit consecutive podiums earned before Championship existed.
+        completed = 0;
+        while (completed < LEGACY_TRACKS && p->medals[completed] > 0)
+            completed++;
+    }
+    bool legacy_complete = version < 8 && completed == LEGACY_TRACKS;
+    p->championship_completed = version < 8 ? SDL_min(completed, LEGACY_TRACKS - 1) : completed;
+    if (version >= 5) {
+        int cups = 1;
+        bool championship_valid = true;
+        if (version >= 8) {
+            used = 0;
+            championship_valid = sscanf(cursor, " CHAMPIONSHIP %d %n", &cups, &used) == 1 && used &&
+                                 cups == CUP_COUNT;
+            cursor += used;
+        }
+        for (int c = 0; championship_valid && c < cups; c++) {
+            int stages = 0, medal = 0, eliminated = 0;
+            used = 0;
+            int fields = version >= 8 ? sscanf(cursor, " %d %d %d %n", &stages, &medal, &eliminated, &used)
+                         : version >= 6
+                             ? sscanf(cursor, " CHAMPIONSHIP %d %d %d %n", &stages, &medal, &eliminated, &used)
+                             : sscanf(cursor, " CHAMPIONSHIP %d %d %n", &stages, &medal, &used);
+            championship_valid = fields == (version >= 6 ? 3 : 2) && used && eliminated >= 0 &&
+                                 eliminated <= 1;
+            p->championship_stages[c] = stages;
+            p->championship_medal[c] = medal;
+            p->championship_eliminated[c] = eliminated == 1;
+            cursor += used;
+        }
+        if (championship_valid && legacy_complete && p->championship_medal[0] > 0)
+            // An old completed series with a medal opens the Pro Cup.
+            p->championship_completed = LEGACY_TRACKS;
+        for (int c = 0; championship_valid && c < CUP_COUNT; c++)
+            championship_valid = valid_cup(p, c);
+        championship_valid = championship_valid && load_places(p, &cursor, tracks);
+        if (!championship_valid) {
+            profile_defaults(p);
+            SDL_free(d);
+            return;
+        }
+    }
+    if (version >= 7) {
+        int night = 0;
+        used = 0;
+        if (sscanf(cursor, " OPTIONS %d %n", &night, &used) != 1 || !used || night < 0 || night > 1) {
+            profile_defaults(p);
+            SDL_free(d);
+            return;
+        }
+        p->arcade_night = night == 1;
+        cursor += used;
+    }
+    // Legacy saves retain unlocks and records; start a new scored Championship.
+    if (version < 3 || !load_records(p, cursor, version))
+        migrate_records(p);
     SDL_free(d);
 }
 bool profile_save(const Profile *p) {
-    char path[2048], temp[2060], data[32768];
+    char path[2048], temp[2060];
     if (!profile_path(path, sizeof path))
         return false;
     SDL_snprintf(temp, sizeof temp, "%s.tmp", path);
-    int len =
-        SDL_snprintf(data, sizeof data, "TOYCARS 7\n%d %d %d %d %d %d\n%.3f %.3f %.3f\n%d %d %d\n%d\n",
-                     p->color, p->difficulty, p->auto_accel, p->touch, p->sound, p->music,
-                     p->best[0], p->best[1], p->best[2], p->medals[0], p->medals[1], p->medals[2],
-                     p->championship_completed);
-    len += SDL_snprintf(data + len, sizeof data - len, "CHAMPIONSHIP %d %d %d\n",
-                        p->championship_stages, p->championship_medal,
-                        p->championship_eliminated);
-    for (int stage = 0; stage < TRACK_COUNT; stage++)
+    // Ten tracks of forty records each need about 26 KB.
+    size_t capacity = 98304;
+    char *data = SDL_malloc(capacity);
+    if (!data)
+        return false;
+    int len = SDL_snprintf(data, capacity, "TOYCARS 8\n%d %d %d %d %d %d\n", p->color, p->difficulty,
+                           p->auto_accel, p->touch, p->sound, p->music);
+    for (int i = 0; i < TRACK_COUNT; i++)
+        len += SDL_snprintf(data + len, capacity - len, "%.3f%c", p->best[i], i == TRACK_COUNT - 1 ? '\n' : ' ');
+    for (int i = 0; i < TRACK_COUNT; i++)
+        len += SDL_snprintf(data + len, capacity - len, "%d%c", p->medals[i], i == TRACK_COUNT - 1 ? '\n' : ' ');
+    len += SDL_snprintf(data + len, capacity - len, "%d\nCHAMPIONSHIP %d\n", p->championship_completed,
+                        CUP_COUNT);
+    for (int c = 0; c < CUP_COUNT; c++)
+        len += SDL_snprintf(data + len, capacity - len, "%d %d %d\n", p->championship_stages[c],
+                            p->championship_medal[c], p->championship_eliminated[c]);
+    for (int track = 0; track < TRACK_COUNT; track++)
         for (int i = 0; i < CAR_COUNT; i++)
-            len += SDL_snprintf(data + len, sizeof data - len, "%d%c",
-                p->championship_places[stage][i], i == CAR_COUNT - 1 ? '\n' : ' ');
-    len += SDL_snprintf(data + len, sizeof data - len, "OPTIONS %d\n", p->arcade_night);
-    len += SDL_snprintf(data + len, sizeof data - len, "RECORDS %u %s %d\n",
+            len += SDL_snprintf(data + len, capacity - len, "%d%c",
+                p->championship_places[track][i], i == CAR_COUNT - 1 ? '\n' : ' ');
+    len += SDL_snprintf(data + len, capacity - len, "OPTIONS %d\n", p->arcade_night);
+    len += SDL_snprintf(data + len, capacity - len, "RECORDS %u %s %d\n",
                         p->record_serial, p->initials, p->initials_set);
     for (int track = 0; track < TRACK_COUNT; track++) {
         const TrackRecords *table = &p->records[track];
-        len += SDL_snprintf(data + len, sizeof data - len, "%d %d\n",
+        len += SDL_snprintf(data + len, capacity - len, "%d %d\n",
                             table->top_count, table->history_count);
         for (int list = 0; list < 2; list++) {
             const RaceRecord *entries = list ? table->history : table->top;
             int count = list ? table->history_count : table->top_count;
             for (int i = 0; i < count; i++) {
                 const RaceRecord *e = &entries[i];
-                int wrote = SDL_snprintf(data + len, sizeof data - len,
+                int wrote = SDL_snprintf(data + len, capacity - len,
                     "%u %s %.3f %.3f %.3f %lld %d %d %d %d\n", e->id, e->initials,
                     e->time, e->best_lap, e->improvement, e->date, e->difficulty, e->mode,
                     e->rank, e->record);
-                if (wrote < 0 || (size_t)wrote >= sizeof data - len)
+                if (wrote < 0 || (size_t)wrote >= capacity - len) {
+                    SDL_free(data);
                     return false;
+                }
                 len += wrote;
             }
         }
     }
-    if (SDL_SaveFile(temp, data, (size_t)len)) {
+    bool saved = SDL_SaveFile(temp, data, (size_t)len);
+    SDL_free(data);
+    if (saved) {
         if (rename(temp, path) == 0)
             return true;
         SDL_Log("Cannot replace profile: %s", path);

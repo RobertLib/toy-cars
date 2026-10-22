@@ -99,7 +99,8 @@ static void mobile_menu(UI *u, Game *g, Renderer *r) {
     r->hero_frame = .40f;
     menu_backdrop(u, b.x + lw + 140, cards_y);
     mode_switch(u, g, (Rect){b.x, b.y, 430, 64}, 28);
-    live_badge(u, g, b.x + b.w, b.y + 10, 19);
+    // The cups take the place of the broadcast badge on phones.
+    cup_tabs(u, g, b.x + 452, b.y, 64, 19);
     char name[48], text[128];
     upper(name, sizeof name, t->name);
     float big = 74, width = text_width(u, 1, big, name) + big * .3f;
@@ -108,16 +109,19 @@ static void mobile_menu(UI *u, Game *g, Renderer *r) {
     float y = b.y + 64 + 26;
     headline(u, big, b.x - big * .05f, y - big * .3f, WHITE, name);
     y += big * .7f + 16;
+    int c = game_cup(g);
+    const CupInfo *cup = &CUPS[c];
     if (!open) {
-        SDL_snprintf(text, sizeof text, "LOCKED  /  CLEAR %s FIRST",
-                     g->tracks[g->selected - 1].name);
+        if (g->selected == cup->first)
+            SDL_snprintf(text, sizeof text, "LOCKED  /  WIN A %s MEDAL", CUPS[c - 1].name);
+        else
+            SDL_snprintf(text, sizeof text, "LOCKED  /  CLEAR %s FIRST", g->tracks[g->selected - 1].name);
         upper(text, sizeof text, text);
     } else if (championship) {
-        bool fresh =
-            g->profile.championship_eliminated || g->profile.championship_stages == TRACK_COUNT;
+        bool fresh = game_cup_fresh(g, c);
         SDL_snprintf(text, sizeof text, "P%d OVERALL   /   %d PTS   /   STAGE %d OF %d",
                      fresh ? 1 : game_championship_rank(g),
-                     fresh ? 0 : game_championship_points(g, 0), g->selected + 1, TRACK_COUNT);
+                     fresh ? 0 : game_championship_points(g, 0), g->selected - cup->first + 1, cup->count);
     } else {
         char best[32] = "--:--";
         if (g->profile.best[g->selected] > 0)
@@ -129,10 +133,10 @@ static void mobile_menu(UI *u, Game *g, Renderer *r) {
     label(u, 0, 24, b.x, y, tint(t->accent, .45f), text);
     const char *detail = !open ? "Unlock it in Championship."
                          : !championship ? t->description
-                         : g->profile.championship_eliminated ? "Eliminated last time. Go again!"
-                         : g->profile.championship_stages == TRACK_COUNT
-                             ? "Series complete. Go again!"
-                         : g->profile.championship_stages == TRACK_COUNT - 1
+                         : g->profile.championship_eliminated[c] ? "Eliminated last time. Go again!"
+                         : g->profile.championship_stages[c] == cup->count
+                             ? "Cup complete. Go again!"
+                         : g->profile.championship_stages[c] == cup->count - 1
                              ? "Final stage. Overall top 3 wins a medal."
                              : "Finish top 4 to advance.";
     label(u, 0, 22, b.x, y + 36, alpha(WHITE, .78f), detail);
@@ -344,16 +348,17 @@ static void mobile_results(UI *u, Game *g) {
     rect(u, (Rect){0, 0, u->width, u->height}, alpha(NIGHT, .9f));
     bool championship = g->mode == MODE_CHAMPIONSHIP;
     bool completed = game_championship_finished(g);
-    bool eliminated = championship && g->profile.championship_eliminated;
+    const CupInfo *cup = &CUPS[game_cup(g)];
+    bool eliminated = championship && g->profile.championship_eliminated[game_cup(g)];
     int settled = 0;
     for (int i = 0; i < CAR_COUNT; i++)
         settled += g->cars[i].finished || g->cars[i].dnf;
     bool overall = championship && settled == CAR_COUNT;
     bool waiting = championship && !g->championship_scored && !g->test_mode;
-    const char *heading = eliminated       ? "Championship lost."
+    const char *heading = eliminated       ? "Cup lost."
                         : championship  ? completed
-                                               ? (game_championship_rank(g) <= 3 ? "Championship won!"
-                                                                                 : "Championship lost.")
+                                               ? (game_championship_rank(g) <= 3 ? "Cup won!"
+                                                                                 : "Cup lost.")
                                                : "Stage results"
                         : g->cars[0].dnf ? "Out of fuel."
                                          : "Race complete";
@@ -361,10 +366,11 @@ static void mobile_results(UI *u, Game *g) {
     char text[128];
     if (eliminated)
         SDL_snprintf(text, sizeof text, "Eliminated in stage %d / %s",
-                     g->profile.championship_stages,
+                     g->profile.championship_stages[game_cup(g)],
                      g->cars[0].dnf ? "Did not finish" : "Top 4 finish required");
     else if (championship)
-        SDL_snprintf(text, sizeof text, "Stage %d / 3   /   %s", g->selected + 1,
+        SDL_snprintf(text, sizeof text, "%s stage %d / %d   /   %s", cup->name,
+                     g->selected - cup->first + 1, cup->count,
                      waiting ? "Waiting for rivals to finish" : "All points counted");
     else
         SDL_snprintf(text, sizeof text, "%s   /   Two laps", g->tracks[g->selected].name);

@@ -16,11 +16,28 @@ typedef struct {
     GLuint vao, vbo;
     int count;
 } Mesh;
+// A large static batch sorted into ground tiles, so that draws skip the tiles
+// outside the camera or shadow frustum. Each tile is a contiguous vertex range.
+typedef struct {
+    int first, count;
+    float box[6]; // Minimum x, y, z and maximum x, y, z, including animation reach
+} MeshTile;
+typedef struct {
+    Mesh mesh;
+    MeshTile *tiles;
+    int tile_count;
+} TiledMesh;
+// The meshes of the circuit being shown; only one circuit is resident at a time.
+typedef struct {
+    int track; // -1 before the first load
+    TiledMesh scene, vegetation, crowd, wildlife;
+    Mesh water;
+} TrackScene;
 #define BLOOM_LEVELS 5
 typedef struct {
     GLuint water_shader, spray_shader, spray_vao, spray_vbo;
     GLuint opaque_fbo, opaque_texture, opaque_depth;
-    Mesh water[TRACK_COUNT];
+    TrackScene scene;
     GLuint shader, depth_shader, post_shader, weather_shader, empty_vao;
     GLuint shadow_fbo, shadow_texture, scene_fbo, scene_texture, scene_depth;
     // Post-processing: half-resolution occlusion and its blur, a bloom pyramid
@@ -35,16 +52,16 @@ typedef struct {
     // The scene is floating point where the GPU can render to it, so that lamps
     // and glints can exceed white; GL_RGBA8 otherwise.
     GLenum scene_format;
-    Vec3 horizon, zenith;
+    Vec3 horizon, zenith, ember;
     float overcast, fog_far, fade, vignette, speed_blur;
     int viewport[4];
-    Mesh wildlife[TRACK_COUNT], vegetation[TRACK_COUNT];
-    Mesh tracks[3], crowds[3], car, fuel, plane, cube;
+    Mesh car, fuel, plane, cube;
     Mesh cone, tire, fence, lamps;
     Mesh boosts[TRACK_COUNT];
     Mesh helicopter, helicopter_rotor, helicopter_tail_rotor;
     Mesh rail_models[RAIL_MODEL_COUNT];
     Mat4 view, projection, vp, light_vp;
+    float frustum[6][4]; // Planes of the frustum being drawn, for tile culling
     Vec3 eye, target, cam_pos;
     float camera_yaw;
     float crowd_time;
@@ -70,6 +87,8 @@ typedef struct {
 } Renderer;
 GLuint render_program(const char *vs, const char *fs);
 bool renderer_init(Renderer *r);
+/* Loads the circuit's meshes unless they are already resident. */
+bool renderer_load_track(Renderer *r, int track);
 void renderer_resize(Renderer *r, int w, int h);
 void renderer_draw(Renderer *r, const Game *g, float frame_dt, float alpha);
 // Grades the drawn scene onto the default framebuffer; renderer_draw ends with it.

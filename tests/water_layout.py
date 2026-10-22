@@ -14,6 +14,10 @@ from mathutils.bvhtree import BVHTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from hydrology import Watershed
+from themes import THEMES
+import os
+# TOYCARS_TRACKS=canyon,volcano checks only those scenes.
+THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
 
 
 def cross(a,b,c):
@@ -33,16 +37,23 @@ def hull_area(points):
 
 # Deliberately read authored route metadata and exported meshes, rather than
 # deriving expected positions from a track index or accepting disconnected pools.
-for theme, name in enumerate(('country', 'beach', 'winter')):
+# Meanders of the first circuits; later rivers wind at least as much as Beach's.
+SINUOSITY = {'country': 1.20, 'beach': 1.10, 'winter': 1.12}
+for T in THEMES:
+    theme, name = T.index, T.key
+    def outside(x, z, limit):
+        return (math.hypot(x/128, z/126) if T.legacy else T.island(x, z)) > limit
     bpy.ops.wm.open_mainfile(filepath=str(ROOT / 'art' / (name + '.blend')))
     water = next(o for o in bpy.context.scene.objects if o.get('water'))
     raw = list(water['water_route'])
     route = [raw[i:i+3] for i in range(0,len(raw),3)]
-    assert len(route) > 40
+    # A vent beside the crater's lava lake is no stream: only the lake is checked.
+    stream = not T.lava
+    assert not stream or len(route) > 40, (name, 'short stream')
     assert all(b[1] <= a[1]+1e-6 for a,b in zip(route,route[1:])), (name, 'uphill flow')
     distance=sum(math.hypot(b[0]-a[0],b[2]-a[2]) for a,b in zip(route,route[1:]))
     chord=math.hypot(route[-1][0]-route[0][0],route[-1][2]-route[0][2])
-    assert distance/chord>(1.20,1.10,1.12)[theme], (name,'channel reverted to a straight drain')
+    assert not stream or distance/chord>SINUOSITY.get(name,1.10), (name,'channel reverted to a straight drain')
     water.data.calc_loop_triangles()
     water_bvh = BVHTree.FromPolygons(
         [v.co for v in water.data.vertices],
@@ -56,13 +67,13 @@ for theme, name in enumerate(('country', 'beach', 'winter')):
         dx,dz=b[0]-a[0],b[2]-a[2];length=math.hypot(dx,dz)
         widths.append(sum(water_at(p[0]-dz/length*j*.15,p[2]+dx/length*j*.15) is not None
                           for j in range(-24,25))*.15)
-    assert max(widths)>min(widths)*1.4, (name,'constant-width water ribbon',widths)
+    assert not stream or max(widths)>min(widths)*1.4, (name,'constant-width water ribbon',widths)
     # Check every metre of the actual channel after its concealed spring head.
     for p in route[4:]:
-        if math.hypot(p[0]/128,p[2]/126)>.99:continue
+        if outside(p[0],p[2],.99):continue
         y=water_at(p[0],p[2])
         assert y is not None, (name,'disconnected channel',p)
-        expected=max(Watershed.SEA_LEVEL,p[1]) if theme==1 else p[1]
+        expected=max(Watershed.SEA_LEVEL,p[1]) if T.sea else p[1]
         assert abs(y-expected)<.13, (name,'channel departs from drainage profile',p,y)
     data=(ROOT/'assets/tracks'/(name+'.tcp')).read_bytes()
     n,=struct.unpack_from('<I',data,4)
@@ -76,7 +87,7 @@ for theme, name in enumerate(('country', 'beach', 'winter')):
         center=sum((obj.matrix_world@v.co for v in obj.data.vertices),Vector())/len(obj.data.vertices)
         if (y:=water_at(center.x,-center.y)) is not None:
             assert center.z<y-.015 or center.z>y+3, (name,'raised curb across watercourse')
-    if theme==0:
+    if T.water.get('lake'):
         level=water['water_lake_level']
         # Identify standing water from the exported current, not an X cutoff:
         # the new winding inlet overlaps the pond's bounding box.
@@ -91,12 +102,14 @@ for theme, name in enumerate(('country', 'beach', 'winter')):
             if all(abs(v[7])+abs(v[8])<1e-6 for v in (a,b,c)):
                 area+=abs((b[0]-a[0])*(c[2]-a[2])-(b[2]-a[2])*(c[0]-a[0]))*.5
         envelope=hull_area([(v.x,v.y) for v in pond_vertices])
-        assert area/envelope<.84, ('pond lost its inlets and sediment promontories',area/envelope)
+        if name=='country':
+            assert area/envelope<.84, ('pond lost its inlets and sediment promontories',area/envelope)
         assert all(math.hypot(v.x-p[0],-v.y-p[2])>p[5] or p[1]>level+.1
                    for v in pond_vertices[::10] for p in path), 'pond must not flood the road'
     else:
-        assert math.hypot(route[-1][0]/128,route[-1][2]/126)>=1, 'stream must leave the map'
-    print(f'{name}: sinuosity {distance/chord:.2f}, width {min(widths):.2f}–{max(widths):.2f}, '
+        assert outside(route[-1][0],route[-1][2],1) or T.sea, (name,'stream must leave the map')
+    print(f'{name}: sinuosity {distance/chord:.2f}, '
+          + (f'width {min(widths):.2f}–{max(widths):.2f}, ' if widths else 'lava vent, ') +
           f'continuous downhill channel, wet road stations {wet}, '
           f"outlet={water['water_destination']}",flush=True)
 print('Watershed geometry PASSED',flush=True)

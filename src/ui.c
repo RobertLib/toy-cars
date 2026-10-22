@@ -676,9 +676,23 @@ static void sky_icon(UI *u, float x, float y, float s, bool night, Color c) {
 static const char *start_label(const Game *g) {
     if (g->mode == MODE_ARCADE)
         return "RACE NOW";
-    if (g->profile.championship_eliminated || g->profile.championship_stages == TRACK_COUNT)
-        return "NEW CHAMPIONSHIP";
-    return g->profile.championship_stages ? "RACE NEXT STAGE" : "START CHAMPIONSHIP";
+    int cup = game_cup(g);
+    static char label[40];
+    if (game_cup_fresh(g, cup) && g->profile.championship_stages[cup])
+        return "RACE THE CUP AGAIN";
+    if (!game_cup_fresh(g, cup) && g->profile.championship_stages[cup])
+        return "RACE NEXT STAGE";
+    SDL_snprintf(label, sizeof label, "START %s", CUPS[cup].name);
+    return label;
+}
+// Why a track is still locked: the stage before it, or the previous cup's medal.
+static void lock_reason(int track, char *out, size_t size, bool brief) {
+    int cup = track_cup(track);
+    if (track == CUPS[cup].first && cup > 0)
+        SDL_snprintf(out, size, brief ? "%s MEDAL TO UNLOCK" : "WIN A %s MEDAL TO UNLOCK",
+                     CUPS[cup - 1].name);
+    else
+        SDL_snprintf(out, size, "CLEAR STAGE %d TO UNLOCK", track - CUPS[cup].first);
 }
 // Darken the side of the broadcast that carries the menu, plus the header and the cards.
 static void menu_backdrop(UI *u, float panel, float cards_y) {
@@ -814,12 +828,23 @@ static void player_tag(UI *u, Game *g, Renderer *r, float left, float top, float
 }
 static void track_cards(UI *u, Game *g, Rect area, float name_size, float info_size) {
     bool championship = g->mode == MODE_CHAMPIONSHIP;
-    bool fresh =
-        g->profile.championship_eliminated || g->profile.championship_stages == TRACK_COUNT;
-    float gap = area.h * .14f, cw = (area.w - gap * (TRACK_COUNT - 1)) / TRACK_COUNT;
-    for (int i = 0; i < TRACK_COUNT; i++) {
+    const CupInfo *cup = &CUPS[game_cup(g)];
+    bool fresh = game_cup_fresh(g, game_cup(g));
+    float gap = area.h * .14f, cw = (area.w - gap * (cup->count - 1)) / cup->count;
+    for (int k = 0; k < TRACK_COUNT; k++)
+        u->menu_layout.cards[k] = (Rect){0};
+    // Every card of the row shares one subtitle size, fitted to the widest.
+    float widest = 1;
+    for (int k = 0; k < cup->count; k++) {
+        char text[80];
+        SDL_snprintf(text, sizeof text, "%02d  /  %s", cup->first + k + 1,
+                     TRACK_INFO[cup->first + k].subtitle);
+        widest = fmaxf(widest, text_width(u, 0, info_size, text));
+    }
+    for (int k = 0; k < cup->count; k++) {
+        int i = cup->first + k;
         Track *tr = &g->tracks[i];
-        Rect card = {area.x + i * (cw + gap), area.y, cw, area.h};
+        Rect card = {area.x + k * (cw + gap), area.y, cw, area.h};
         bool selected = i == g->selected, open = game_track_unlocked(&g->profile, i);
         bool hover = inside(card, u->mx, u->my);
         Color accent = tint(tr->accent, .38f);
@@ -837,31 +862,39 @@ static void track_cards(UI *u, Game *g, Rect area, float name_size, float info_s
         float fade = open ? 1 : .55f, pad = inset * .6f + card.h * .07f + inset * 1.2f;
         float y1 = card.y + card.h * .14f, y2 = card.y + card.h * .33f, y3 = card.y + card.h * .67f;
         float name_x = slant_left(card, y2 + name_size * .65f) + pad;
-        float name_w = text_width(u, 1, name_size, name);
-        SDL_snprintf(text, sizeof text, "0%d  /  %s", i + 1, tr->subtitle);
-        label(u, 0, info_size, slant_left(card, y1 + info_size * .6f) + pad, y1,
-              alpha(accent, fade), text);
+        // Four cards share the row in the Master Cup: the layout outline keeps
+        // its place on the right and long names shrink to fit beside it.
+        float room = card.x + card.w - lean * .5f - inset;
+        float reserve = fminf(card.h * .9f, card.w * .26f);
+        float size = fminf(name_size, name_size * (room - reserve - inset - name_x) /
+                                          fmaxf(1, text_width(u, 1, name_size, name)));
+        float name_w = text_width(u, 1, size, name);
+        SDL_snprintf(text, sizeof text, "%02d  /  %s", i + 1, tr->subtitle);
+        float info_x = slant_left(card, y1 + info_size * .6f) + pad;
+        float info = fminf(info_size, info_size * (room - reserve - inset - info_x) / widest);
+        label(u, 0, info, info_x, y1 + (info_size - info) * .6f, alpha(accent, fade), text);
+        float info_end = info_x + text_width(u, 0, info, text);
         Color white = alpha(WHITE, open ? 1 : .6f);
         if (selected && open)
-            headline(u, name_size, name_x, y2, white, name);
+            headline(u, size, name_x, y2 + (name_size - size) * .6f, white, name);
         else
-            italic(u, 1, name_size, name_x, y2, white, name);
+            italic(u, 1, size, name_x, y2 + (name_size - size) * .6f, white, name);
         float sx = slant_left(card, y3 + info_size * .6f) + pad;
         // Text ends here at most; the layout outline fills the room that remains.
-        float room = card.x + card.w - lean * .5f - inset, end = name_x + name_w;
+        float end = fmaxf(name_x + name_w, info_end);
         Color muted = alpha(WHITE, open ? .72f : .55f);
         if (!open) {
             lock_icon(u, sx, y3 + info_size * .12f, info_size * .95f, muted);
-            SDL_snprintf(text, sizeof text, "CLEAR STAGE %d TO UNLOCK", i);
+            lock_reason(i, text, sizeof text, true);
             float tx = sx + info_size * 1.4f;
-            if (tx + text_width(u, 0, info_size, text) > room - card.h * .7f)
+            if (tx + text_width(u, 0, info_size, text) > room - card.h * .5f)
                 SDL_strlcpy(text, "LOCKED", sizeof text);
             label(u, 0, info_size, tx, y3, muted, text);
             end = fmaxf(end, tx + text_width(u, 0, info_size, text));
         } else if (championship) {
-            bool scored = !fresh && i < g->profile.championship_stages;
-            SDL_snprintf(text, sizeof text, "STAGE %d  /  %s", i + 1,
-                         scored ? "SCORED" : CHAMPIONSHIP_NIGHT[i] ? "NIGHT RACE" : "DAY RACE");
+            bool scored = !fresh && k < g->profile.championship_stages[game_cup(g)];
+            SDL_snprintf(text, sizeof text, "STAGE %d  /  %s", k + 1,
+                         scored ? "SCORED" : TRACK_INFO[i].night ? "NIGHT RACE" : "DAY RACE");
             label(u, 0, info_size, sx, y3, muted, text);
             end = fmaxf(end, sx + text_width(u, 0, info_size, text));
         } else {
@@ -872,7 +905,7 @@ static void track_cards(UI *u, Game *g, Rect area, float name_size, float info_s
             label(u, 0, info_size, sx, y3, muted, text);
             end = fmaxf(end, sx + text_width(u, 0, info_size, text));
             int medal = g->profile.medals[i];
-            if (medal > 0) {
+            if (medal > 0 && end + info_size * 5 < room) {
                 float mx = end + info_size * 1.2f;
                 circle(u, mx, y3 + info_size * .66f, info_size * .36f,
                        tint(medal_color(medal), .3f));
@@ -880,8 +913,8 @@ static void track_cards(UI *u, Game *g, Rect area, float name_size, float info_s
                 end = mx + info_size * .7f + text_width(u, 0, info_size, medal_name(medal));
             }
         }
-        float map_w = fminf(card.h * .9f, room - end - inset);
-        if (map_w > card.h * .45f)
+        float map_w = fminf(card.h * .9f, fmaxf(reserve, room - end - inset));
+        if (map_w > card.h * .45f && room - map_w > end)
             map(u, tr, (Rect){room - map_w, card.y + inset, map_w, card.h - inset * 2},
                 selected ? accent : alpha(WHITE, .32f), card.h * .03f, g, false);
         u->menu_layout.cards[i] = card;
@@ -890,16 +923,44 @@ static void track_cards(UI *u, Game *g, Rect area, float name_size, float info_s
         }
     }
 }
+// The three cups above the cards: name, best medal, or a lock until reached.
+static void cup_tabs(UI *u, Game *g, float x, float y, float h, float size) {
+    for (int c = 0; c < CUP_COUNT; c++) {
+        bool active = game_cup(g) == c, open = game_track_unlocked(&g->profile, CUPS[c].first);
+        int medal = g->profile.championship_medal[c];
+        float w = text_width(u, 0, size, CUPS[c].name) + h * LEAN * 2 + size * 2.2f +
+                  (medal || !open ? size * 1.5f : 0);
+        Rect b = {x, y, w, h};
+        bool hover = inside(b, u->mx, u->my);
+        slant(u, b, active ? WHITE : alpha(WHITE, hover ? .22f : .10f));
+        Color fg = active ? INK : alpha(WHITE, open ? .9f : .55f);
+        float tx = x + h * LEAN + size * 1.1f;
+        if (!open) {
+            lock_icon(u, tx, y + h * .5f - size * .45f, size * .85f, fg);
+            tx += size * 1.5f;
+        } else if (medal) {
+            circle(u, tx + size * .4f, y + h * .5f, size * .38f, tint(medal_color(medal), .2f));
+            tx += size * 1.5f;
+        }
+        label(u, 0, size, tx, y + h * .5f - size * .62f, fg, CUPS[c].name);
+        u->menu_layout.cups[c] = b;
+        if (hit(u, b) && !active) {
+            game_select_cup(g, c);
+            ui_clear_input(u);
+        }
+        x += w + 8;
+    }
+}
 // Big stat readouts under the title: overall standing, or a track's personal best.
 static void menu_stats(UI *u, Game *g, float x, float y, float value_size, float label_size) {
     char values[3][32], names[3][24];
     bool open = game_track_unlocked(&g->profile, g->selected);
     if (g->mode == MODE_CHAMPIONSHIP) {
-        int stage = g->profile.championship_stages;
-        bool fresh = g->profile.championship_eliminated || stage == TRACK_COUNT;
+        int cup = game_cup(g), stage = g->profile.championship_stages[cup];
+        bool fresh = game_cup_fresh(g, cup);
         SDL_snprintf(values[0], 32, "P%d", fresh ? 1 : game_championship_rank(g));
         SDL_snprintf(values[1], 32, "%d", fresh ? 0 : game_championship_points(g, 0));
-        SDL_snprintf(values[2], 32, "%d/%d", fresh ? 1 : stage + 1, TRACK_COUNT);
+        SDL_snprintf(values[2], 32, "%d/%d", fresh ? 1 : stage + 1, CUPS[cup].count);
         SDL_strlcpy(names[0], "OVERALL", 24);
         SDL_strlcpy(names[1], "POINTS", 24);
         SDL_strlcpy(names[2], "STAGE", 24);
@@ -919,7 +980,11 @@ static void menu_stats(UI *u, Game *g, float x, float y, float value_size, float
         lock_icon(u, x, y + value_size * .05f, value_size * .9f, WHITE);
         headline(u, value_size, x + value_size * 1.2f, y - value_size * .3f, WHITE, "LOCKED");
         char s[80];
-        SDL_snprintf(s, sizeof s, "CLEAR %s IN CHAMPIONSHIP", g->tracks[g->selected - 1].name);
+        int cup = game_cup(g);
+        if (g->selected == CUPS[cup].first)
+            SDL_snprintf(s, sizeof s, "WIN A %s MEDAL IN CHAMPIONSHIP", CUPS[cup - 1].name);
+        else
+            SDL_snprintf(s, sizeof s, "CLEAR %s IN CHAMPIONSHIP", g->tracks[g->selected - 1].name);
         upper(s, sizeof s, s);
         label(u, 0, label_size, x + value_size * 1.2f, y + value_size * .85f, alpha(WHITE, .6f), s);
         return;
@@ -998,11 +1063,12 @@ static void menu(UI *u, Game *g, Renderer *r) {
     live_badge(u, g, right, y + 4, 14);
     y += tight ? 56 : compact ? 66 : 84;
     char s[128], name[48];
+    const CupInfo *cup = &CUPS[game_cup(g)];
     if (championship)
-        SDL_snprintf(s, sizeof s, "STAGE %d OF %d  /  %s", g->selected + 1, TRACK_COUNT,
-                     t->subtitle);
+        SDL_snprintf(s, sizeof s, "%s  /  STAGE %d OF %d  /  %s", cup->name, g->selected - cup->first + 1,
+                     cup->count, t->subtitle);
     else
-        SDL_snprintf(s, sizeof s, "ARCADE  /  %s", t->subtitle);
+        SDL_snprintf(s, sizeof s, "ARCADE  /  %s  /  %s", cup->name, t->subtitle);
     Color accent = tint(t->accent, .42f);
     slant(u, (Rect){m, y + 2, 30, 14}, accent);
     label(u, 0, 15, m + 40, y - 2, accent, s);
@@ -1020,16 +1086,23 @@ static void menu(UI *u, Game *g, Renderer *r) {
     menu_stats(u, g, m, y, value, tight ? 12 : 13);
     y += value * 1.6f + (tight ? 10 : 22);
     if (!tight) {
-        const char *rules =
-            !unlocked ? "Single races are open on tracks you have reached in Championship."
-            : !championship ? "Single races for medals and records. Pick day or night."
-            : g->profile.championship_eliminated
-                ? "Eliminated last time. A new run starts at stage 1."
-            : g->profile.championship_stages == TRACK_COUNT
-                ? "Series complete. A new run starts at stage 1."
-            : CHAMPIONSHIP_NIGHT[TRACK_COUNT - 1]
-                ? "Finish top 4 to advance. Night final: overall top 3 wins a medal."
-                : "Finish top 4 to advance. Final: overall top 3 wins a medal.";
+        int c = game_cup(g);
+        char rules[128];
+        if (!unlocked)
+            SDL_strlcpy(rules, "Single races are open on tracks you have reached in Championship.", sizeof rules);
+        else if (!championship)
+            SDL_strlcpy(rules, "Single races for medals and records. Pick day or night.", sizeof rules);
+        else if (g->profile.championship_eliminated[c])
+            SDL_strlcpy(rules, "Eliminated last time. A new run starts at stage 1.", sizeof rules);
+        else if (g->profile.championship_stages[c] == cup->count)
+            SDL_strlcpy(rules, "Cup complete. A new run starts at stage 1.", sizeof rules);
+        else if (c + 1 < CUP_COUNT)
+            SDL_snprintf(rules, sizeof rules, "Finish top 4 to advance. %s: overall top 3 wins a medal and the %s.",
+                         TRACK_INFO[cup->first + cup->count - 1].night ? "Night final" : "Final",
+                         CUPS[c + 1].name);
+        else
+            SDL_snprintf(rules, sizeof rules, "Finish top 4 to advance. %s: overall top 3 wins a medal.",
+                         TRACK_INFO[cup->first + cup->count - 1].night ? "Night final" : "Final");
         label(u, 0, 15, m, y, alpha(WHITE, .6f), rules);
         y += compact ? 30 : 38;
     }
@@ -1067,21 +1140,21 @@ static void menu(UI *u, Game *g, Renderer *r) {
         if (unlocked)
             keycap(u, &kx, y, "ENTER", "RACE");
         keycap(u, &kx, y, "TAB", "MODE");
-        keycap(u, &kx, y, "1-3", "TRACK");
+        keycap(u, &kx, y, "< >", "TRACK");
+        keycap(u, &kx, y, "C", "CUP");
         if (!championship)
             keycap(u, &kx, y, "N", "DAY / NIGHT");
     }
     // Track facts and the time of day, over the broadcast above the cards.
     float chip_h = tight ? 38 : 44, chip_y = cards_y - chip_h - (tight ? 34 : 42);
-    SDL_snprintf(s, sizeof s, "%.0f M LAP    /    %.0f M CLIMB    /    3 JUMPS", t->length,
-                 t->elevation);
+    SDL_snprintf(s, sizeof s, "%.0f M LAP    /    %.0f M CLIMB    /    %d JUMPS", t->length,
+                 t->elevation, t->ramp_count);
     float facts_w = text_width(u, 0, 14, s) + 64;
     Rect facts = {right - facts_w, chip_y, facts_w, chip_h};
     slant(u, facts, alpha(NIGHT, .62f));
     center_label(u, 0, 14, facts.x + facts.w * .5f, chip_y + chip_h * .5f - 9, WHITE, s);
     time_switch(u, g, (Rect){facts.x - 252, chip_y, 240, chip_h}, tight ? 18 : 20);
-    caps(u, m, cards_y - 30, alpha(WHITE, .8f),
-         championship ? "YOUR CHAMPIONSHIP ROUTE" : "PICK YOUR TRACK");
+    cup_tabs(u, g, m, cards_y - 40, 30, 14);
     SDL_snprintf(s, sizeof s, "%d / %d TRACKS UNLOCKED",
                  g->profile.championship_completed < TRACK_COUNT
                      ? g->profile.championship_completed + 1
@@ -1532,9 +1605,10 @@ static void hud(UI *u, Game *g, Renderer *r) {
         center_label(u, 1, 23, w * .5f, y, WHITE, t->name);
         format_time(s, sizeof s, g->time);
         center_label(u, 0, 27, w * .5f, y + 36, WHITE, s);
-        SDL_snprintf(s, sizeof s, "STAGE %d / %d  |  RACE P%d  |  %d PTS LIVE%s", g->selected + 1,
-                     TRACK_COUNT, g->rank, game_championship_points(g, 0),
-                     g->selected < TRACK_COUNT - 1 ? "  |  TOP 4 ADVANCE" : "");
+        const CupInfo *cup = &CUPS[game_cup(g)];
+        SDL_snprintf(s, sizeof s, "STAGE %d / %d  |  RACE P%d  |  %d PTS LIVE%s",
+                     g->selected - cup->first + 1, cup->count, g->rank, game_championship_points(g, 0),
+                     g->selected < cup->first + cup->count - 1 ? "  |  TOP 4 ADVANCE" : "");
         center_label(u, 0, 13, w * .5f, y + 73, WHITE, g->mode == MODE_CHAMPIONSHIP ? s : "ARCADE");
         float fx = w - 329 - u->safe_right;
         rounded(u, (Rect){fx, y, 226, 91}, 14, rgba(.08, .13, .16, .82f));
@@ -1757,23 +1831,35 @@ static void championship_celebration(UI *u, Game *g) {
     float title_y = y + 240 * s;
     float message_y = title_y + 96 * s;
     float story_y = message_y + 54 * s;
-    italic_center(u, 68 * s, (Rect){x, title_y, w, 82 * s}, cream, "CHAMPIONSHIP WON!", true);
+    int c = game_cup(g);
+    const CupInfo *cup = &CUPS[c];
     char message[128];
+    SDL_snprintf(message, sizeof message, "%s WON!", cup->name);
+    italic_center(u, 68 * s, (Rect){x, title_y, w, 82 * s}, cream, message, true);
     SDL_snprintf(message, sizeof message, "P%d OVERALL / %s MEDAL / %d POINTS", rank,
                  medal_name(medal), game_championship_points(g, 0));
     center_label(u, 1, 30 * s, cx, message_y, gold, message);
-    center_label(u, 0, 17 * s, cx, story_y, muted,
-                 "A podium across the whole championship. You earned it!");
+    if (c + 1 < CUP_COUNT)
+        SDL_snprintf(message, sizeof message, "A podium across the whole cup. The %s is open!",
+                     CUPS[c + 1].name);
+    else
+        SDL_strlcpy(message, "A podium across the hardest cup. You are a ToyCars master!",
+                    sizeof message);
+    center_label(u, 0, 17 * s, cx, story_y, muted, message);
     float cards_y = story_y + 55 * s;
-    for (int i = 0; i < TRACK_COUNT; i++) {
-        float card_x = x + 42 + i * 316;
-        skew(u, (Rect){card_x, cards_y, 304, 114 * s}, 16, rgb(.10f, .125f, .15f));
+    // Three or four cards share the width.
+    float card_w = (w - 84 - 12 * (cup->count - 1)) / cup->count;
+    for (int k = 0; k < cup->count; k++) {
+        int i = cup->first + k;
+        float card_x = x + 42 + k * (card_w + 12);
+        skew(u, (Rect){card_x, cards_y, card_w, 114 * s}, 16, rgb(.10f, .125f, .15f));
         map(u, &g->tracks[i], (Rect){card_x + 18, cards_y + 30 * s, 67, 54 * s}, gold, 2.4f, NULL,
             false);
         label(u, 0, 16 * s, card_x + 102, cards_y + 14 * s, muted, "STAGE CLEARED");
         char name[48];
         upper(name, sizeof name, g->tracks[i].name);
-        italic(u, 1, 27 * s, card_x + 102, cards_y + 40 * s, cream, name);
+        float name_size = fminf(27 * s, 27 * s * (card_w - 118) / fmaxf(1, text_width(u, 1, 27 * s, name)));
+        italic(u, 1, name_size, card_x + 102, cards_y + 40 * s + (27 * s - name_size) * .6f, cream, name);
         line(u, card_x + 104, cards_y + 88 * s, card_x + 109, cards_y + 93 * s, 2, gold);
         line(u, card_x + 109, cards_y + 93 * s, card_x + 118, cards_y + 82 * s, 2, gold);
         label(u, 0, 14 * s, card_x + 128, cards_y + 80 * s, gold, "POINTS COUNTED");
@@ -1812,7 +1898,8 @@ static void results(UI *u, Game *g) {
                                               : "What a little ride.";
     bool championship = g->mode == MODE_CHAMPIONSHIP;
     bool completed = game_championship_finished(g);
-    bool eliminated = championship && g->profile.championship_eliminated;
+    const CupInfo *cup = &CUPS[game_cup(g)];
+    bool eliminated = championship && g->profile.championship_eliminated[game_cup(g)];
     int settled = 0;
     for (int i = 0; i < CAR_COUNT; i++)
         settled += g->cars[i].finished || g->cars[i].dnf;
@@ -1820,10 +1907,10 @@ static void results(UI *u, Game *g) {
     bool overall_standings = championship && !pending;
     int overall = game_championship_rank(g);
     if (championship)
-        title = eliminated ? "Championship lost."
-                : completed ? (overall <= 3 ? "Championship won!" : "Championship lost.")
+        title = eliminated ? "Cup lost."
+                : completed ? (overall <= 3 ? "Cup won!" : "Cup lost.")
                 : pending ? "Stage results"
-                          : "Championship standings";
+                          : "Cup standings";
     char heading[48];
     upper(heading, sizeof heading, title);
     headline(u, 58, m - 3, y + 66, WHITE, heading);
@@ -1831,21 +1918,22 @@ static void results(UI *u, Game *g) {
         char progress[160];
         if (eliminated)
             SDL_snprintf(progress, sizeof progress,
-                         "Eliminated in stage %d / %s Start a new championship.",
-                         g->profile.championship_stages,
+                         "%s: eliminated in stage %d / %s Start the cup again.", cup->name,
+                         g->profile.championship_stages[game_cup(g)],
                          c->dnf ? "Did not finish." : "A top 4 finish was required.");
         else if (completed)
-            SDL_snprintf(progress, sizeof progress, "Overall P%d / %d points / %s%s", overall,
-                         game_championship_points(g, 0),
+            SDL_snprintf(progress, sizeof progress, "%s: overall P%d / %d points / %s%s", cup->name,
+                         overall, game_championship_points(g, 0),
                          overall <= 3 ? medal_name(4 - overall)
-                                      : "No medal. Try a new championship.",
+                                      : "No medal. Try the cup again.",
                          overall <= 3 ? " MEDAL" : "");
         else if (g->test_mode)
             SDL_strlcpy(progress, "Demo race / Championship progress is not saved.",
                         sizeof progress);
         else
-            SDL_snprintf(progress, sizeof progress, "Stage %d / %d: %s / %s", g->selected + 1,
-                         TRACK_COUNT, c->dnf ? "DNF, 0 points" : "Race complete",
+            SDL_snprintf(progress, sizeof progress, "%s stage %d / %d: %s / %s", cup->name,
+                         g->selected - cup->first + 1, cup->count,
+                         c->dnf ? "DNF, 0 points" : "Race complete",
                          g->championship_scored ? "Points saved. Continue to the next stage."
                                                 : "Waiting for rivals to finish.");
         label(u, 0, 17, m, y + 143, alpha(WHITE, .62f), progress);

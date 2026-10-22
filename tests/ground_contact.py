@@ -5,12 +5,18 @@ blender -b --python-exit-code 1 --python tests/ground_contact.py
 from pathlib import Path
 import math
 import struct
+import sys
 
 import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from themes import THEMES
+import os
+# TOYCARS_TRACKS=canyon,volcano checks only those scenes.
+THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
 
 
 def surface(obj):
@@ -20,7 +26,8 @@ def surface(obj):
         [p.vertices[:] for p in obj.data.loop_triangles], all_triangles=True)
 
 
-for name in ("country", "beach", "winter"):
+for T in THEMES:
+    name = T.key
     bpy.ops.wm.open_mainfile(filepath=str(ROOT / "art" / (name + ".blend")))
     island = surface(bpy.data.objects["Sculpted island"])
     road = bpy.data.objects["Elevated ribbon road"]
@@ -55,7 +62,9 @@ for name in ("country", "beach", "winter"):
     road_bvh = surface(road)
     posts = [o for o in bpy.context.scene.objects
              if o.name.startswith(('Sign post', 'Reflector post'))]
-    assert len([o for o in posts if o.name.startswith('Sign post')]) == 6
+    # The first circuits have six direction boards; later ones one per 170 m or so.
+    boards = len([o for o in posts if o.name.startswith('Sign post')])
+    assert boards == 6 if T.legacy else boards >= 6, (name, "direction boards", boards)
     for obj in posts:
         base = obj.matrix_world.translation.copy()
         base.z = min((obj.matrix_world @ v.co).z for v in obj.data.vertices)

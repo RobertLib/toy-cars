@@ -11,3 +11,4 @@ platform/android/app/.cxx/
 platform/android/app/build/
 platform/android/build/
 dist/
+__pycache__/

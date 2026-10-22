@@ -44,8 +44,8 @@ static void weather_tick(Game *g, float dt) {
     w->remaining -= dt;
     if (w->remaining <= 0) {
         if (w->kind == WEATHER_CLEAR) {
-            w->kind = g->selected == 2 ? WEATHER_SNOW : WEATHER_RAIN;
-            if (weather_random(w) < .35f)
+            w->kind = TRACK_INFO[g->selected].precipitation;
+            if (weather_random(w) < TRACK_INFO[g->selected].wind_share)
                 w->kind = WEATHER_WIND;
             w->duration = 22 + 12 * weather_random(w);
             w->strength = .65f + .35f * weather_random(w);
@@ -469,22 +469,42 @@ bool game_track_unlocked(const Profile *p, int track) {
     return track >= 0 && track < TRACK_COUNT && track <= p->championship_completed;
 }
 
+int game_cup(const Game *g) {
+    return track_cup(g->selected);
+}
+
+int game_cup_stage(const Game *g, int cup) {
+    return g->profile.championship_stages[cup];
+}
+
+// A series that ended, by elimination or after its final, starts again at stage 1.
+bool game_cup_fresh(const Game *g, int cup) {
+    return g->profile.championship_eliminated[cup] ||
+           g->profile.championship_stages[cup] == CUPS[cup].count;
+}
+
+// Championship shows the stage a cup's series continues with; Arcade the cup's
+// first track, unless a track of that cup is already selected.
+void game_select_cup(Game *g, int cup) {
+    cup = (int)clampf((float)cup, 0, CUP_COUNT - 1);
+    if (g->mode == MODE_CHAMPIONSHIP)
+        g->selected = CUPS[cup].first + (game_cup_fresh(g, cup) ? 0 : g->profile.championship_stages[cup]);
+    else if (track_cup(g->selected) != cup)
+        g->selected = CUPS[cup].first;
+}
+
 void game_set_mode(Game *g, RaceMode mode) {
     g->mode = mode;
     if (mode == MODE_CHAMPIONSHIP)
-        g->selected = !g->profile.championship_eliminated &&
-                              g->profile.championship_stages < TRACK_COUNT
-                          ? g->profile.championship_stages : 0;
+        game_select_cup(g, game_cup(g));
 }
 
-// Each Championship stage has a fixed time of day: the final runs under the moon.
-const bool CHAMPIONSHIP_NIGHT[TRACK_COUNT] = {false, false, true};
-
-// Arcade races use the player's choice; menus preview the selected race.
+// Each Championship stage has a fixed time of day; Arcade races use the
+// player's choice, and menus preview the selected race.
 bool game_night(const Game *g) {
     if (g->force_night)
         return true;
-    return g->mode == MODE_CHAMPIONSHIP ? CHAMPIONSHIP_NIGHT[g->selected]
+    return g->mode == MODE_CHAMPIONSHIP ? TRACK_INFO[g->selected].night
                                         : g->profile.arcade_night;
 }
 
@@ -495,6 +515,7 @@ const char *game_player_name(const Game *g) {
 bool game_reset_profile(Game *g) {
     if (!profile_reset(&g->profile))
         return false;
+    g->selected = 0;
     game_set_mode(g, MODE_CHAMPIONSHIP);
     g->unlocked_track = -1;
     g->championship_advanced = false;
@@ -515,10 +536,11 @@ bool game_reset_profile(Game *g) {
     return true;
 }
 
-static int championship_place(const Game *g, int stage, int driver) {
-    if (stage < g->profile.championship_stages)
-        return g->profile.championship_places[stage][driver];
-    if (stage != g->selected || g->championship_scored ||
+static int championship_place(const Game *g, int track, int driver) {
+    int cup = track_cup(track);
+    if (track - CUPS[cup].first < g->profile.championship_stages[cup])
+        return g->profile.championship_places[track][driver];
+    if (track != g->selected || g->championship_scored ||
         (g->screen != SCREEN_RACE && g->screen != SCREEN_RESULTS && g->screen != SCREEN_PAUSE))
         return 0;
     if (g->cars[driver].dnf)
@@ -535,10 +557,12 @@ static int championship_points_for_place(int place) {
     return place >= 0 && place <= CAR_COUNT ? points[place] : 0;
 }
 
+// Standings cover the selected track's cup.
 int game_championship_points(const Game *g, int driver) {
+    const CupInfo *cup = &CUPS[game_cup(g)];
     int points = 0;
-    for (int stage = 0; stage < TRACK_COUNT; stage++)
-        points += championship_points_for_place(championship_place(g, stage, driver));
+    for (int track = cup->first; track < cup->first + cup->count; track++)
+        points += championship_points_for_place(championship_place(g, track, driver));
     return points;
 }
 
@@ -547,11 +571,12 @@ bool game_championship_precedes(const Game *g, int a, int b) {
     if (pa != pb)
         return pa > pb;
     // Count back wins, then second places, etc.; exact ties keep driver order.
+    const CupInfo *cup = &CUPS[game_cup(g)];
     for (int place = 1; place <= CAR_COUNT; place++) {
         int ca = 0, cb = 0;
-        for (int stage = 0; stage < TRACK_COUNT; stage++) {
-            ca += championship_place(g, stage, a) == place;
-            cb += championship_place(g, stage, b) == place;
+        for (int track = cup->first; track < cup->first + cup->count; track++) {
+            ca += championship_place(g, track, a) == place;
+            cb += championship_place(g, track, b) == place;
         }
         if (ca != cb)
             return ca > cb;
@@ -567,15 +592,14 @@ int game_championship_rank(const Game *g) {
 }
 
 bool game_championship_finished(const Game *g) {
-    return g->mode == MODE_CHAMPIONSHIP && g->championship_scored &&
-           (g->profile.championship_eliminated || g->profile.championship_stages == TRACK_COUNT);
+    return g->mode == MODE_CHAMPIONSHIP && g->championship_scored && game_cup_fresh(g, game_cup(g));
 }
 
 int game_next_track(const Game *g) {
     if (g->mode == MODE_CHAMPIONSHIP) {
-        int next = g->selected + 1;
-        return g->championship_scored && !g->profile.championship_eliminated &&
-                       next < TRACK_COUNT ? next : -1;
+        int cup = game_cup(g), next = g->selected + 1;
+        return g->championship_scored && !g->profile.championship_eliminated[cup] &&
+                       next < CUPS[cup].first + CUPS[cup].count ? next : -1;
     }
     for (int step = 1; step < TRACK_COUNT; step++) {
         int next = (g->selected + step) % TRACK_COUNT;
@@ -592,12 +616,15 @@ void game_start(Game *g) {
         (!g->test_mode && !game_track_unlocked(&g->profile, g->selected)))
         return;
     if (g->mode == MODE_CHAMPIONSHIP && !g->test_mode) {
-        if (g->profile.championship_eliminated || g->profile.championship_stages == TRACK_COUNT) {
-            g->profile.championship_stages = 0;
-            g->profile.championship_eliminated = false;
-            memset(g->profile.championship_places, 0, sizeof g->profile.championship_places);
+        int cup = game_cup(g);
+        if (game_cup_fresh(g, cup)) {
+            g->profile.championship_stages[cup] = 0;
+            g->profile.championship_eliminated[cup] = false;
+            for (int k = 0; k < CUPS[cup].count; k++)
+                memset(g->profile.championship_places[CUPS[cup].first + k], 0,
+                       sizeof g->profile.championship_places[0]);
         }
-        g->selected = g->profile.championship_stages;
+        g->selected = CUPS[cup].first + g->profile.championship_stages[cup];
     }
     g->screen = SCREEN_COUNTDOWN;
     g->result_id = 0;
@@ -699,7 +726,7 @@ void game_reset_car(Game *g, int index) {
 
 // Maximum lateral acceleration in game meters/s^2, shared by tires and AI.
 static float corner_grip(int track) {
-    return track == 2 ? 20.f : track == 1 ? 24.f : 28.f;
+    return TRACK_INFO[track].corner_grip;
 }
 
 // Rivals adapt to the player's race distance so neither side drives out of
@@ -727,7 +754,8 @@ void game_ai(const Game *g, int index, Controls *out) {
     float near = 1000;
     for (int j = 0; !c->finished && j < t->can_count; j++) {
         float d = wrap(t->points[(int)t->cans[j].index].s - c->last_s, t->length);
-        float remaining = t->length * RACE_LAPS - c->progress;
+        // Fuel use per metre falls on circuits longer than the first ones.
+        float remaining = (t->length * RACE_LAPS - c->progress) * fminf(1, 1100 / t->length);
         if (d < near && d < 60 && c->can_cooldown[j] <= 0 &&
             c->fuel < fminf(60, remaining * .12f + 5)) {
             near = d;
@@ -805,7 +833,7 @@ void game_ai(const Game *g, int index, Controls *out) {
     if (band < 0) {
         pace *= 1 + band * ease[difficulty];
     } else {
-        float limit = g->selected == 2 ? 1.f : commit[difficulty];
+        float limit = TRACK_INFO[g->selected].slippery ? 1.f : commit[difficulty];
         pace += fmaxf(0, limit - pace) * band;
         power += band * push[difficulty];
     }
@@ -932,7 +960,14 @@ static void particle(Game *g, Vec3 p, Vec3 vel, float life, float size, Color co
     Particle *q = &g->particles[g->particle_cursor++ % MAX_PARTICLES];
     *q = (Particle){p, vel, life, life, size, color, PARTICLE_DUST};
 }
-static bool wheel_spray(Game *g, const Car *c, float dt) {
+// Rivals still racing after the player finishes retire at this race time.
+static float race_time_limit(const Track *t) {
+    return fmaxf(220, t->length * RACE_LAPS * .1f);
+}
+
+// Returns whether any tire is in the water and, through lava, whether that
+// liquid is lava, which only reports its contact, without spray.
+static bool wheel_spray(Game *g, const Car *c, float dt, bool *lava) {
     if (!c->grounded) return false;
     const Track *t = &g->tracks[g->selected];
     Vec3 forward = v3(sinf(c->yaw), 0, cosf(c->yaw));
@@ -948,6 +983,10 @@ static bool wheel_spray(Game *g, const Car *c, float dt) {
         float ground = track_height(t, wheel, NULL);
         if (level < ground + .025f || c->pos.y > level + .45f) continue;
         wet = true;
+        if (t->info->lava && level > LAVA_ABOVE) {
+            *lava = true;
+            continue;
+        }
         if (speed < 1 || random01(g) >= dt * fminf(65, speed * 3)) continue;
         wheel.y = level + .045f;
         float spread = (1.3f + speed * .12f) * (.6f + random01(g));
@@ -1016,7 +1055,7 @@ static void update_lap(Game *g, int index, float previous_progress, float dt) {
 }
 
 static void car_handling(Car *c, int track, Controls in, float off, float dt) {
-    float grip = track == 2 ? 5.8f : track == 1 ? 7.4f : 9.2f;
+    float grip = TRACK_INFO[track].grip;
     float lateral_limit = corner_grip(track);
     if (in.drift) {
         grip *= .43f;
@@ -1446,13 +1485,19 @@ race_progress:
         game_reset_car(g, index);
     Vec3 forward = v3(sinf(c->yaw), 0, cosf(c->yaw));
     float side = c->velocity.x * forward.z - c->velocity.z * forward.x;
-    float dust_rate = (off > .4f || fabsf(side) > 2) ? 24.f : g->selected == 0 ? 5.f : 12.f;
-    bool wet = wheel_spray(g, c, dt);
+    float dust_rate = (off > .4f || fabsf(side) > 2) ? 24.f : t->info->dust_rate;
+    bool lava = false;
+    bool wet = wheel_spray(g, c, dt, &lava);
+    if (lava) {
+        // Lava is never a shortcut: the car is recovered at its last legal place.
+        game_reset_car(g, index);
+        if (index == 0)
+            toast(g, "TOO HOT! BACK ON TRACK", 2);
+        return;
+    }
     c->wet = wet;
     if (!wet && c->grounded && c->speed > 6 && random01(g) < dt * dust_rate) {
-        Color color = g->selected == 2   ? rgb(.91, .95, .96)
-                      : g->selected == 1 ? rgb(.80, .70, .48)
-                                         : rgb(.58, .57, .38);
+        Color color = t->info->dust;
         particle(
             g, vadd(c->pos, vmul(forward, -1.2f)),
             vadd(vmul(forward, -1.4f), v3((random01(g) - .5f) * 2, .8f, (random01(g) - .5f) * 2)),
@@ -1522,7 +1567,8 @@ void game_continue(Game *g) {
 void game_leave_results(Game *g) {
     if (game_save_warning(g))
         return;
-    for (int step = 0; step < 120 * 240 && g->screen == SCREEN_RESULTS &&
+    int limit = (int)(120 * (race_time_limit(&g->tracks[g->selected]) + 20));
+    for (int step = 0; step < limit && g->screen == SCREEN_RESULTS &&
                        g->mode == MODE_CHAMPIONSHIP && !g->championship_scored && !g->test_mode;
          step++)
         game_tick(g, (Controls){0}, FIXED_DT, false);
@@ -1607,38 +1653,44 @@ static void record_finish(Game *g) {
         table->history[i] = table->history[i - 1];
     table->history[0] = entry;
     g->result_id = entry.id;
-    // Ask on the opening Championship track, then reuse the initials for later stages.
-    g->initials_pending = g->mode == MODE_ARCADE || g->selected == 0;
+    // Ask on a cup's opening stage, then reuse the initials for later stages.
+    g->initials_pending = g->mode == MODE_ARCADE || g->selected == CUPS[game_cup(g)].first;
     g->initials_cursor = 0;
     SDL_strlcpy(g->initials, p->initials, sizeof g->initials);
 }
 
 static void championship_score(Game *g) {
+    int cup = game_cup(g);
+    const CupInfo *info = &CUPS[cup];
+    Profile *p = &g->profile;
     if (g->mode != MODE_CHAMPIONSHIP || g->test_mode || g->championship_scored ||
-        g->selected != g->profile.championship_stages)
+        g->selected != info->first + p->championship_stages[cup])
         return;
     for (int i = 0; i < CAR_COUNT; i++)
         if (!g->cars[i].finished && !g->cars[i].dnf)
             return;
     for (int i = 0; i < CAR_COUNT; i++)
-        g->profile.championship_places[g->selected][i] = championship_place(g, g->selected, i);
-    g->profile.championship_stages++;
-    int place = g->profile.championship_places[g->selected][0];
-    g->profile.championship_eliminated = g->profile.championship_stages < TRACK_COUNT &&
-                                       (place == 0 || place > 4);
+        p->championship_places[g->selected][i] = championship_place(g, g->selected, i);
+    p->championship_stages[cup]++;
+    int place = p->championship_places[g->selected][0];
+    p->championship_eliminated[cup] = p->championship_stages[cup] < info->count && (place == 0 || place > 4);
     g->championship_scored = true;
-    g->championship_advanced = !g->profile.championship_eliminated;
-    if (g->championship_advanced &&
-        g->profile.championship_stages > g->profile.championship_completed) {
-        g->profile.championship_completed = g->profile.championship_stages;
-        if (g->profile.championship_completed < TRACK_COUNT)
-            g->unlocked_track = g->profile.championship_completed;
+    g->championship_advanced = !p->championship_eliminated[cup];
+    int next = info->first + p->championship_stages[cup];
+    if (g->championship_advanced && p->championship_stages[cup] < info->count && next > p->championship_completed) {
+        p->championship_completed = next;
+        g->unlocked_track = next;
     }
     if (game_championship_finished(g)) {
         int rank = game_championship_rank(g);
-        int medal = !g->profile.championship_eliminated && rank <= 3 ? 4 - rank : 0;
-        if (medal > g->profile.championship_medal)
-            g->profile.championship_medal = medal;
+        int medal = !p->championship_eliminated[cup] && rank <= 3 ? 4 - rank : 0;
+        if (medal > p->championship_medal[cup])
+            p->championship_medal[cup] = medal;
+        // A cup medal opens the next cup.
+        if (medal > 0 && cup + 1 < CUP_COUNT && CUPS[cup + 1].first > p->championship_completed) {
+            p->championship_completed = CUPS[cup + 1].first;
+            g->unlocked_track = CUPS[cup + 1].first;
+        }
         g->championship_celebration = medal > 0;
         g->celebration_time = 0;
         game_sound(g, medal > 0 ? SOUND_CELEBRATION : SOUND_FINISH, 0, 1, g->cars[0].pos);
@@ -1892,11 +1944,8 @@ static bool chatter_pick(Game *g, int index) {
     }
     // Race progress stays frozen off-road, so one excursion gets one line.
     if (me && c->offroad && quip_fresh(c, TOPIC(TOPIC_OFFROAD, 0), 250)) {
-        static const char *lines[TRACK_COUNT][4] = {
-            {"GRASS IS NOT A ROAD!", "MOWING THE LAWN, BRB", "COWS DRIVE HERE, NOT ME", NULL},
-            {"SAND IN EVERYTHING!", "BEACH DAY? NOT NOW!", "SANDCASTLE SPEEDRUN", NULL},
-            {"SNOWBANK SURFING!", "BRRR, FRESH POWDER!", "SNOW ANGEL MODE", NULL}};
-        return quip_say(c, index, TOPIC(TOPIC_OFFROAD, 0), lines[g->selected], "");
+        const char *lines[4] = {t->info->offroad[0], t->info->offroad[1], t->info->offroad[2], NULL};
+        return quip_say(c, index, TOPIC(TOPIC_OFFROAD, 0), lines, "");
     }
     for (int j = 0; me && j < t->boost_count; j++) {
         float ahead = wrap(t->boosts[j] - c->last_s, t->length);
@@ -1950,11 +1999,10 @@ static bool chatter_pick(Game *g, int index) {
     float spell = w->duration - w->remaining;
     if (me && w->kind != WEATHER_CLEAR && spell > 2 && spell < 9 &&
         quip_fresh(c, TOPIC(TOPIC_WEATHER, w->kind), 300)) {
-        static const char *lines[][3] = {
-            [WEATHER_RAIN] = {"RAIN! WIPERS ON", "SPLISH SPLASH, HERE WE GO", NULL},
-            [WEATHER_SNOW] = {"SNOW! EXTRA SLIDEY", "SNOWFLAKES ON MY HOOD!", NULL},
-            [WEATHER_WIND] = {"WINDY! HOLD ON TO YOUR HAT", "THE WIND WANTS TO RACE TOO", NULL}};
-        return quip_say(c, index, TOPIC(TOPIC_WEATHER, w->kind), lines[w->kind], "");
+        static const char *wind[] = {"WINDY! HOLD ON TO YOUR HAT", "THE WIND WANTS TO RACE TOO", NULL};
+        const char *climate[] = {t->info->weather[0], t->info->weather[1], NULL};
+        return quip_say(c, index, TOPIC(TOPIC_WEATHER, w->kind),
+                        w->kind == WEATHER_WIND ? wind : climate, "");
     }
     if (me && g->rank == 1 && gap > 120 && quip_fresh(c, TOPIC(TOPIC_CLEAR, 0), t->length * .8f)) {
         static const char *lines[] = {"OPEN ROAD. ALL MINE!", "NOBODY AHEAD. JUST VIBES",
@@ -2054,7 +2102,7 @@ void game_tick(Game *g, Controls controls, float dt, bool autopilot) {
             Controls ai;
             game_ai(g, i, &ai);
             update_car(g, i, ai, dt);
-            if (g->time > 220 && !g->cars[i].finished)
+            if (g->time > race_time_limit(&g->tracks[g->selected]) && !g->cars[i].finished)
                 g->cars[i].dnf = true;
         }
         rail_tick(g, dt);
@@ -2258,7 +2306,8 @@ static void test_finish_rollout(Game *g) {
     bool continuous = true;
     // More than a whole cooldown lap: crossing the line again cannot award
     // new laps, change results, or return either car to its finish position.
-    for (int step = 0; step < 120 * 140; step++) {
+    int cooldown = 120 * (int)fmaxf(140, track->length / 9 + 10);
+    for (int step = 0; step < cooldown; step++) {
         Vec3 previous[2] = {g->cars[0].pos, g->cars[1].pos};
         game_tick(g, (Controls){.reset = true, .throttle = 1, .steer = 1}, FIXED_DT, false);
         for (int i = 0; i < 2; i++) {
@@ -2493,8 +2542,17 @@ static Car test_corner(int track, float speed, Controls controls, float dt) {
 }
 
 static void test_cornering(void) {
+    // Visit circuits from the grippiest to the slipperiest surface.
+    int order[TRACK_COUNT];
+    for (int i = 0; i < TRACK_COUNT; i++) {
+        int j = i;
+        for (; j > 0 && corner_grip(order[j - 1]) < corner_grip(i); j--)
+            order[j] = order[j - 1];
+        order[j] = i;
+    }
     float previous_turn = 10;
-    for (int track = 0; track < TRACK_COUNT; track++) {
+    for (int rank = 0; rank < TRACK_COUNT; rank++) {
+        int track = order[rank];
         for (int sign = -1; sign <= 1; sign += 2) {
             Controls turn = {.steer = sign, .throttle = 1};
             Car fast = test_corner(track, 33, turn, FIXED_DT);
@@ -2601,16 +2659,24 @@ static void test_offroad_motion(Game *g) {
                     Vec3 origin = car->pos;
                     Vec3 forward = v3(sinf(car->yaw), 0, cosf(car->yaw));
                     // Free-motion fixtures need actual ground clear of every road,
-                    // not a position beyond the island or across another branch.
+                    // not a position beyond the island or across another branch,
+                    // and no steeper than a parked car can hold (the banks between
+                    // the levels of a mountain road are steeper).
                     bool clear_ground = true;
+                    Vec3 across = v3(forward.z, 0, -forward.x);
                     for (int probe = 0; probe <= 4; probe++) {
                         Vec3 q = vadd(origin, vmul(forward, probe));
                         int n = -1;
                         Vec3 center;
                         track_nearest(track, q, &n, &center, NULL);
-                        if (track_height(track, q, NULL) == NO_SURFACE_HEIGHT ||
+                        float h = track_height(track, q, NULL);
+                        if (h == NO_SURFACE_HEIGHT ||
                             hypotf(q.x-center.x,q.z-center.z) < track->points[n].half + 1)
                             clear_ground = false;
+                        for (int k = 0; k < 2 && clear_ground; k++) {
+                            float side_h = track_height(track, vadd(q, k ? forward : across), NULL);
+                            clear_ground = side_h != NO_SURFACE_HEIGHT && fabsf(side_h - h) < .45f;
+                        }
                     }
                     if (!clear_ground) continue;
                     if (moving)
@@ -2646,23 +2712,55 @@ static void test_offroad_motion(Game *g) {
     printf("%s off-road motion: %d scenarios\n", track->id, samples);
 }
 
+// Two level lines 6 m apart, clear of roads and water, as near the island's
+// north edge as the scenery allows (the first circuits: meadow at z 108, 114).
+static bool test_terrain_line(const Track *t, float *x, float *z) {
+    for (float inset = 18; inset < t->extent[3] - t->extent[2] - 30; inset += 6)
+        for (float dx = 0; dx < t->extent[1]; dx += 3)
+            for (int sign = -1; sign <= 1; sign += 2) {
+                float px = dx * sign, pz = t->extent[3] - inset, previous = NO_SURFACE_HEIGHT;
+                bool clear = true;
+                for (float along = -2; along <= 24 && clear; along += 2) {
+                    Vec3 q = v3(px, 0, pz + along), center;
+                    int n = -1;
+                    track_nearest(t, q, &n, &center, NULL);
+                    float level;
+                    q.y = track_height(t, q, NULL);
+                    clear = q.y != NO_SURFACE_HEIGHT &&
+                            hypotf(q.x - center.x, q.z - center.z) > t->points[n].half + 8 &&
+                            !(track_water(t, q, &level) && level > q.y - .5f) &&
+                            (previous == NO_SURFACE_HEIGHT || fabsf(q.y - previous) < .3f);
+                    previous = q.y;
+                }
+                if (clear) {
+                    *x = px;
+                    *z = pz;
+                    return true;
+                }
+            }
+    return false;
+}
+
 static void test_offroad_recovery(Game *g) {
     const Track *track = &g->tracks[g->selected];
     Car *car = &g->cars[0];
-    float terrain_speed = 0;
-    for (int z = 108; z <= 114; z += 6) {
+    float terrain_speed = 0, x0 = 0, z0 = 0;
+    bool open = test_terrain_line(track, &x0, &z0);
+    CHECK(open, "the island has open terrain away from its roads");
+    for (int dz = 0; open && dz <= 6; dz += 6) {
+        float z = z0 + dz;
         game_start(g);
         g->screen = SCREEN_RACE;
         for (int i = 1; i < CAR_COUNT; i++)
             g->cars[i].dnf = true;
-        car->pos = v3(0, 0, z);
+        car->pos = v3(x0, 0, z);
         car->yaw = 0;
         car_surface_pose(track, &car->pos, car->yaw, &car->pitch, &car->roll);
         for (int step = 0; step < 240; step++)
             game_tick(g, (Controls){.throttle = 1}, FIXED_DT, false);
-        CHECK(car->speed > 4 && car->pos.z > z + 6 && fabsf(car->pos.x) < .001f,
+        CHECK(car->speed > 4 && car->pos.z > z + 6 && fabsf(car->pos.x - x0) < .001f,
               "a stopped car accelerates freely even far from the road");
-        if (z == 108)
+        if (dz == 0)
             terrain_speed = car->speed;
         else
             CHECK(fabsf(car->speed - terrain_speed) < .001f,
@@ -2681,7 +2779,8 @@ static void test_offroad_recovery(Game *g) {
                 test_place_player(g, track->length * .3f, 0, false);
                 car->checkpoints = 1;
                 car->fuel = 42;
-                car->pos = axis ? v3(sign * 127.8f, 0, 0) : v3(0, 0, sign * 125.8f);
+                car->pos = axis ? v3(track->extent[sign > 0 ? 1 : 0] - sign * .2f, 0, 0)
+                                : v3(0, 0, track->extent[sign > 0 ? 3 : 2] - sign * .2f);
                 car->yaw = axis ? sign * PI * .5f : sign < 0 ? PI : 0;
                 car_surface_pose(track, &car->pos, car->yaw, &car->pitch, &car->roll);
                 CHECK(fabsf(car->pos.y - track_height(track, car->pos, NULL)) < 1,
@@ -2930,6 +3029,10 @@ static void test_surface_contact(Game *g) {
     int below_road = 0;
     for (int i = 10; i < t->count; i += 19) {
         for (int side = -1; side <= 1; side += 2) {
+            // Railings line every raised deck: the ground beside one is out of reach.
+            Vec3 beside = track_at(t, t->points[i].s, side * (t->points[i].half + 3), NULL);
+            if (track_height(t, beside, NULL) < t->points[i].p.y - 1)
+                continue;
             test_place_player(g, t->points[i].s, 0, false);
             car->pos = track_at(t, car->progress, side * (t->points[i].half + 3), NULL);
             car->yaw += PI * .5f;
@@ -3212,8 +3315,9 @@ static void test_rollover_recovery(Game *g) {
 
 static void test_rollovers(void) {
     Track *t = calloc(1, sizeof *t);
-    CHECK(t != NULL, "rollover fixture allocation");
-    if (!t) return;
+    CHECK(t != NULL && track_alloc_surface(t, 2, SURFACE_GRID * SURFACE_GRID * 2),
+          "rollover fixture allocation");
+    if (!t || !t->surface) { free(t); return; }
     t->surface[0] = (SurfaceTriangle){v3(-100,0,-100),v3(100,0,-100),v3(100,0,100)};
     t->surface[1] = (SurfaceTriangle){v3(-100,0,-100),v3(100,0,100),v3(-100,0,100)};
     t->surface_count = 2;
@@ -3274,6 +3378,8 @@ static void test_rollovers(void) {
         tipped |= bank.body_rotation.m[5] < 0;
     }
     CHECK(tipped, "gravity overturns a car on a bank beyond its support footprint");
+    SDL_free(t->surface);
+    SDL_free(t->surface_refs);
     free(t);
 }
 
@@ -3346,7 +3452,8 @@ static void test_bridge_crossings(Game *g) {
     int crossings = 0;
     for (int i = 0; i < t->count; i++) {
         Vec3 a = t->points[i].p, d = vsub(t->points[(i + 1) % t->count].p, a);
-        for (int j = i + 3; j < t->count; j++) {
+        // The closing segment shares the lap's first point with segment 0.
+        for (int j = i + 3; j < t->count - (i == 0); j++) {
             Vec3 b = t->points[j].p, e = vsub(t->points[(j + 1) % t->count].p, b);
             float det = d.x * e.z - d.z * e.x;
             if (fabsf(det) < .00001f) continue;
@@ -3356,6 +3463,8 @@ static void test_bridge_crossings(Game *g) {
             if (u <= 0 || u >= 1 || v <= 0 || v >= 1) continue;
             crossings++;
             Vec3 positions[] = {vadd(a, vmul(d, u)), vadd(b, vmul(e, v))};
+            printf("%s crossing %d: stations %.0f and %.0f, headroom %.1f m\n", t->id, crossings,
+                   t->points[i].s, t->points[j].s, fabsf(positions[0].y - positions[1].y));
             CHECK(fabsf(positions[0].y - positions[1].y) > 5,
                   "crossing decks leave headroom for cars below the bridge");
             for (int level = 0; level < 2; level++) {
@@ -3395,15 +3504,17 @@ static void test_bridge_crossings(Game *g) {
             }
         }
     }
-    CHECK(crossings == (g->selected == 2 ? 2 : 3),
-          "each circuit has its own authored bridge crossings");
+    CHECK(crossings == t->info->crossings, "each circuit has its own authored bridge crossings");
 }
 
 static void test_surface_slopes(void) {
     Track *t = calloc(1, sizeof *t);
-    CHECK(t != NULL, "surface fixture allocation");
-    if (!t)
+    CHECK(t != NULL && track_alloc_surface(t, 4, SURFACE_GRID * SURFACE_GRID * 4),
+          "surface fixture allocation");
+    if (!t || !t->surface) {
+        free(t);
         return;
+    }
     // A raised road over a sloped hillside. Known planes are independent of
     // the authored tracks and expose accidental extension of road collision.
     Vec3 a = v3(-40, -9, -40), b = v3(40, -2.6f, -40);
@@ -3442,6 +3553,8 @@ static void test_surface_slopes(void) {
                   "the car rests at the hillside height");
         }
     }
+    SDL_free(t->surface);
+    SDL_free(t->surface_refs);
     free(t);
 }
 
@@ -3510,7 +3623,8 @@ static void test_ai_pace_and_range(Game *g) {
         for (int i = 1; i < CAR_COUNT; i++)
             g->cars[i].dnf = true;
         float minimum_fuel = 100;
-        for (int step = 0; step < 120 * 180 && g->screen != SCREEN_RESULTS; step++) {
+        int limit = (int)(120 * race_time_limit(&g->tracks[g->selected]));
+        for (int step = 0; step < limit && g->screen != SCREEN_RESULTS; step++) {
             game_tick(g, (Controls){0}, FIXED_DT, true);
             minimum_fuel = fminf(minimum_fuel, g->cars[0].fuel);
 
@@ -3527,7 +3641,7 @@ static void test_ai_pace_and_range(Game *g) {
     // Alpine Rush's first ramp starts above its steep approach. The chassis
     // release on that step can cost either driver a few seconds, so only
     // bound the difference there until the ramp is re-exported.
-    float margin = g->selected == 2 ? 1.08f : 1.f;
+    float margin = !strcmp(g->tracks[g->selected].id, "winter") ? 1.08f : 1.f;
     CHECK(times[2] < times[1] * margin, "hard AI is faster than normal AI within the same tire limits");
 
     g->profile.difficulty = 1;
@@ -3535,9 +3649,10 @@ static void test_ai_pace_and_range(Game *g) {
     g->screen = SCREEN_RACE;
     for (int i = 1; i < CAR_COUNT; i++)
         g->cars[i].dnf = true;
+    float limit = race_time_limit(&g->tracks[g->selected]);
     for (int j = 0; j < g->tracks[g->selected].can_count; j++)
-        g->cars[0].can_cooldown[j] = 220;
-    for (int step = 0; step < 120 * 180 && g->screen != SCREEN_RESULTS; step++)
+        g->cars[0].can_cooldown[j] = limit;
+    for (int step = 0; step < 120 * limit && g->screen != SCREEN_RESULTS; step++)
         game_tick(g, (Controls){0}, FIXED_DT, true);
     CHECK(g->cars[0].collected == 0 && g->cars[0].dnf && !g->cars[0].finished,
           "skipping all fuel stops cannot complete a race");
@@ -3591,7 +3706,8 @@ static void test_weather(Game *g) {
         Weather *w = &g->weather;
         smooth &= isfinite(w->intensity) && w->intensity >= 0 && w->intensity <= 1 &&
                   fabsf(w->intensity - previous) < .004f && isfinite(vlen(w->wind));
-        climate &= g->selected == 2 ? w->kind != WEATHER_RAIN : w->kind != WEATHER_SNOW;
+        climate &= w->kind == WEATHER_CLEAR || w->kind == WEATHER_WIND ||
+                   (int)w->kind == TRACK_INFO[g->selected].precipitation;
         seen_wind |= w->kind == WEATHER_WIND && w->intensity > .5f;
         seen_precipitation |= (w->kind == WEATHER_RAIN || w->kind == WEATHER_SNOW) &&
                               w->intensity > .5f;
@@ -3618,16 +3734,22 @@ static void test_weather(Game *g) {
           "retry clears old precipitation and wind motion");
 }
 
+static void test_lava(Game *g);
 static void test_water(Game *g) {
-    for (int k = 0; k < TRACK_COUNT; k++) {
-        g->selected = k;
+    {
+        int k = g->selected;
         game_start(g);
         const Track *t = &g->tracks[k];
         CHECK(t->water_count > 100, "each environment has authored water");
+        if (t->info->lava) {
+            test_lava(g);
+            game_start(g);
+        }
         // A crossing may now be carried over water by a bridge. Exercise spray
         // on a shallow bank with submerged tires, independently of route topology.
+        // Around a lava island this is the sea's beach.
         Car *c = &g->cars[0];
-        bool shallow = false;
+        bool shallow = false, lava = false;
         for (int i = 0; i < t->water_count && !shallow; i++) {
             SurfaceTriangle f = t->water[i];
             Vec3 p = vmul(vadd(vadd(f.a, f.b), f.c), 1.f / 3);
@@ -3643,7 +3765,8 @@ static void test_water(Game *g) {
                     float level;
                     float ground = track_height(t, q, NULL);
                     if (track_water(t, q, &level) && level > ground + .08f &&
-                        level < ground + .55f && fabsf(ground-c->pos.y) < .3f)
+                        level < ground + .55f && fabsf(ground-c->pos.y) < .3f &&
+                        !(t->info->lava && level > LAVA_ABOVE))
                         wet_wheels++;
                 }
                 float level;
@@ -3651,15 +3774,16 @@ static void test_water(Game *g) {
                           level > c->pos.y + .04f && level < c->pos.y + .6f;
             }
         }
-        CHECK(shallow, "each landscape has shallow water for the wheel spray fixture");
-        if (!shallow) continue;
+        // The lava island's sea lies below its edge: lava is all a car can reach.
+        CHECK(shallow || t->info->lava, "each landscape has shallow water for the wheel spray fixture");
+        if (!shallow) return;
         c->velocity = v3(sinf(c->yaw) * 20, 0, cosf(c->yaw) * 20);
         c->speed = 20;
         float level = 0;
         CHECK(track_water(t, c->pos, &level) && level > c->pos.y + .03f &&
                   level < c->pos.y + .65f, "ford is shallow water over the actual road");
         CHECK(!track_water(t, t->points[0].p, NULL), "start grid stays dry");
-        for (int step = 0; step < 60; step++) wheel_spray(g, c, FIXED_DT);
+        for (int step = 0; step < 60; step++) wheel_spray(g, c, FIXED_DT, &lava);
         int drops = 0, rings = 0;
         for (int i = 0; i < MAX_PARTICLES; i++) {
             const Particle *p = &g->particles[i];
@@ -3672,18 +3796,18 @@ static void test_water(Game *g) {
                       "spray follows the local sloping waterline at each wheel");
             }
         }
-        CHECK(drops > 20 && rings > 0, "moving wheels create spray and expanding ripples");
+        CHECK(drops > 20 && rings > 0 && !lava, "moving wheels create spray and expanding ripples");
         int cursor = g->particle_cursor;
         c->grounded = false;
-        CHECK(!wheel_spray(g, c, 1) && g->particle_cursor == cursor,
+        CHECK(!wheel_spray(g, c, 1, &lava) && g->particle_cursor == cursor,
               "jumping over water produces no spray");
         c->grounded = true;
         c->velocity = v3(0,0,0);
-        CHECK(wheel_spray(g, c, 1) && g->particle_cursor == cursor,
+        CHECK(wheel_spray(g, c, 1, &lava) && g->particle_cursor == cursor,
               "stationary wheels stay wet without spraying");
         c->pos = t->points[0].p;
         c->velocity = v3(0,0,20);
-        CHECK(!wheel_spray(g, c, 1) && g->particle_cursor == cursor,
+        CHECK(!wheel_spray(g, c, 1, &lava) && g->particle_cursor == cursor,
               "dry road does not create water particles");
         Particle before = g->particles[0];
         g->screen = SCREEN_PAUSE;
@@ -3697,8 +3821,8 @@ static void test_water(Game *g) {
 }
 
 static void test_boosts(Game *g) {
-    for (int k = 0; k < TRACK_COUNT; k++) {
-        g->selected = k;
+    {
+        int k = g->selected;
         game_start(g);
         const Track *t = &g->tracks[k];
         CHECK(t->boost_count == MAX_BOOSTS, "three boost pads on every track");
@@ -3824,7 +3948,7 @@ static float test_train_overlap(const Game *g) {
 static void test_railway(Game *g) {
     const Track *t = &g->tracks[g->selected];
     const Railway *r = &t->rail;
-    CHECK(r->count > 0 && (int)r->kind == g->selected, "every circuit has its own crossing");
+    CHECK(r->count > 0 && r->kind == t->info->rail, "every circuit has its own crossing");
     CHECK(r->stop_s < r->road_s && r->road_s < r->clear_s && r->clear_s - r->stop_s < 30,
           "the stop line lies just before the crossing");
     CHECK(r->arm_count == 2 && r->light_count == 2, "two barriers and two flashing signals");
@@ -3921,7 +4045,13 @@ static void test_railway(Game *g) {
     car_surface_pose(t, &player->pos, player->yaw, &player->pitch, &player->roll);
     bool rail_hit = false;
     for (int step = 0; step < 120 * 2; step++) {
-        game_tick(g, (Controls){.throttle = 1}, FIXED_DT, false);
+        // Follow the approach, which may bend, at full throttle into the arm.
+        Controls drive;
+        game_ai(g, 0, &drive);
+        drive.throttle = 1;
+        drive.brake = 0;
+        drive.drift = false;
+        game_tick(g, drive, FIXED_DT, false);
         for (int i = 0; i < g->sound_count; i++)
             rail_hit |= g->sounds[i].kind == SOUND_RAIL_HIT;
         g->sound_count = 0;
@@ -3960,7 +4090,42 @@ static void test_railway(Game *g) {
     g->force_train = 0;
 }
 
-int game_tests(void) {
+// A car whose tires reach the lava is recovered onto the road it left.
+static void test_lava(Game *g) {
+    const Track *t = &g->tracks[g->selected];
+    Car *c = &g->cars[0];
+    bool found = false;
+    for (int i = 0; i < t->water_count && !found; i++) {
+        SurfaceTriangle f = t->water[i];
+        Vec3 p = vmul(vadd(vadd(f.a, f.b), f.c), 1.f / 3);
+        float level, ground = track_height(t, p, NULL);
+        if (!track_water(t, p, &level) || level < LAVA_ABOVE || level < ground + .1f)
+            continue;
+        game_start(g);
+        g->screen = SCREEN_RACE;
+        for (int k = 1; k < CAR_COUNT; k++)
+            g->cars[k].dnf = true;
+        test_place_player(g, t->points[20].s, 0, false);
+        float legal = c->progress;
+        c->pos = p;
+        c->offroad = true;
+        car_surface_pose(t, &c->pos, c->yaw, &c->pitch, &c->roll);
+        // The crater's shore is steep: use a spot where the seated car sits in the melt.
+        if (c->pos.y > level + .3f)
+            continue;
+        c->velocity = v3(0, 0, 3);
+        c->speed = 3;
+        update_car(g, 0, (Controls){0}, FIXED_DT);
+        Vec3 road = track_at(t, legal, 0, NULL);
+        CHECK(hypotf(c->pos.x - road.x, c->pos.z - road.z) < .01f && c->speed == 0,
+              "lava recovers the car at its last legal road position");
+        CHECK(!strcmp(g->toast, "TOO HOT! BACK ON TRACK"), "the player is told why");
+        found = true;
+    }
+    CHECK(found, "a car can reach the lava");
+}
+
+int game_tests(int only) {
     Game *g = calloc(1, sizeof *g);
     if (!g || !game_load(g)) {
         fprintf(stderr, "Cannot load test assets\n");
@@ -3968,20 +4133,27 @@ int game_tests(void) {
         return 1;
     }
     g->test_mode = true;
-    test_boosts(g);
-    test_water(g);
-    test_surface_slopes();
-    test_rollovers();
-    test_cornering();
-    for (int k = 0; k < 3; k++) {
+    if (only <= 0) {
+        test_surface_slopes();
+        test_rollovers();
+        test_cornering();
+    }
+    for (int k = 0; k < TRACK_COUNT; k++) {
+        if (only >= 0 && k != only)
+            continue;
         g->selected = k;
+        test_boosts(g);
+        test_water(g);
         test_weather(g);
         Track *t = &g->tracks[k];
         CHECK(t->length > 900, "long track");
+        // Each circuit in Championship order is longer than the one before.
+        if (k > 0)
+            CHECK(t->length > g->tracks[k - 1].length || k < 3, "later circuits grow longer");
         test_bridge_crossings(g);
         test_guardrails(g);
         CHECK(t->elevation > 6, "genuine elevation");
-        CHECK(t->ramp_count == 3, "three ramps");
+        CHECK(t->ramp_count >= 3, "at least three ramps");
         for (int i = 0; i < t->count; i += 13) {
             int idx = -1;
             float lane;
@@ -3990,13 +4162,16 @@ int game_tests(void) {
             CHECK(vlen(vsub(cp, t->points[i].p)) < .01f, "track projection round trip");
             CHECK(fabsf(s - t->points[i].s) < .01f, "track distance round trip");
         }
+        // One late can on the racing line can leave a single race well fuelled;
+        // across the three difficulties the tank must still run down.
+        float leftover = 0;
         for (int difficulty = 0; difficulty < 3; difficulty++) {
             g->profile.difficulty = difficulty;
             g->profile.best[k] = 1000;
             g->profile.medals[k] = 0;
             game_start(g);
             int steps = 0;
-            while (g->screen != SCREEN_RESULTS && steps++ < 120 * 220) {
+            while (g->screen != SCREEN_RESULTS && steps++ < 120 * race_time_limit(t)) {
                 game_tick(g, (Controls){0}, FIXED_DT, true);
 
             }
@@ -4007,7 +4182,8 @@ int game_tests(void) {
             CHECK(g->profile.best[k] == 1000 && g->profile.medals[k] == 0,
                   "demo finishes preserve records for subsequent settings saves");
             CHECK(g->cars[0].collected >= 2, "fuel pickup route works");
-            CHECK(g->cars[0].fuel < 60, "races no longer end with a nearly full tank");
+            CHECK(g->cars[0].fuel < 80, "races no longer end with a nearly full tank");
+            leftover += g->cars[0].fuel / 3;
             CHECK(g->cars[0].jumps >= 3, "physical jumps work");
             CHECK(isfinite(g->cars[0].pos.x), "finite simulation");
             int rivals = 0;
@@ -4032,6 +4208,7 @@ int game_tests(void) {
                       "rivals stay close instead of falling a lap behind");
             }
         }
+        CHECK(leftover < 55, "on average races end with less than 55% fuel left");
         test_fuel_pickups(g);
         test_ai_pace_and_range(g);
         test_ai_rubber_band(g);
@@ -4056,6 +4233,8 @@ int game_tests(void) {
         test_edge_rollovers(g);
         test_railway(g);
     }
+    if (only > 0)
+        goto done;
     g->selected = 0;
     game_start(g);
     g->screen = SCREEN_RACE;
@@ -4086,7 +4265,9 @@ int game_tests(void) {
     for (int i = 0; i < 120; i++)
         game_tick(g, (Controls){.throttle = 1}, FIXED_DT, false);
     CHECK(g->cars[0].speed > 1, "a stopped car can accelerate off the road");
+done:
     printf("Simulation tests: %s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+    game_free(g);
     free(g);
     return failures ? 1 : 0;
 }

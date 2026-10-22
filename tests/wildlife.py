@@ -6,12 +6,20 @@ from collections import Counter
 from pathlib import Path
 import math
 import struct
+import sys
 import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 ROOT = Path(__file__).resolve().parents[1]
-for theme, name in enumerate(('country', 'beach', 'winter')):
+sys.path.insert(0, str(ROOT/'tools'))
+from themes import THEMES
+import os
+# TOYCARS_TRACKS=canyon,volcano checks only those scenes.
+THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
+
+for T in THEMES:
+    theme, name = T.index, T.key
     bpy.ops.wm.open_mainfile(filepath=str(ROOT/'art'/(name+'.blend')))
     island=bpy.data.objects['Sculpted island']
     ground=BVHTree.FromPolygons([island.matrix_world@v.co for v in island.data.vertices],
@@ -41,8 +49,10 @@ for theme, name in enumerate(('country', 'beach', 'winter')):
             p=obj.matrix_world@v.co
             assert struct.pack('<3f',p.x,p.z,-p.y) in positions
     counts=Counter(o['wildlife_species'] for o in animals.values())
-    assert counts==[Counter(deer=5,hare=5,goose=6,snake=3,bird=9),
-                    Counter(snake=4,bird=16),Counter(deer=4,hare=6,bird=7)][theme],counts
+    expected=([Counter(deer=5,hare=5,goose=6,snake=3,bird=9),
+               Counter(snake=4,bird=16),Counter(deer=4,hare=6,bird=7)][theme]
+              if T.legacy else Counter(T.wildlife))
+    assert counts==expected,(name,counts)
     for obj in animals.values():
         x,y,z,_=obj['wildlife_origin'];kind,_,sx,sz=obj['wildlife_motion']
         for step in range(120):

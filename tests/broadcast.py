@@ -1,22 +1,32 @@
 """Validate generated broadcast crews and their road clearance in Blender."""
 from pathlib import Path
 import struct
+import sys
 import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 root = Path(__file__).resolve().parents[1]
-for name in ('country', 'beach', 'winter'):
+sys.path.insert(0, str(root/'tools'))
+from themes import THEMES
+import os
+# TOYCARS_TRACKS=canyon,volcano checks only those scenes.
+THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
+import biomes
+
+for T in THEMES:
+    name = T.key
     bpy.ops.wm.open_mainfile(filepath=str(root/'art'/f'{name}.blend'))
     objs = [o for o in bpy.context.scene.objects if 'broadcast_station' in o]
-    assert {o['broadcast_station'] for o in objs} == {12,70,205,355,500}
+    raw = (root/'assets'/'tracks'/f'{name}.tcp').read_bytes()
+    count, = struct.unpack_from('<I',raw,4)
+    path = [struct.unpack_from('<7f',raw,20+i*28) for i in range(count)]
+    stations = T.broadcast if T.legacy else biomes.broadcast_sites(T, path)
+    assert {o['broadcast_station'] for o in objs} == set(stations), (name, 'broadcast stations')
     for prefix, count in [('TV Camera operator jacket',5), ('TV Reporter jacket',1),
                           ('TV Sound engineer jacket',1), ('TV Vision technician jacket',1),
                           ('TV OB van',1), ('TV satellite dish',1), ('TV lens glass',5)]:
         assert sum(o.name.startswith(prefix) for o in objs) == count, (name,prefix)
-    raw = (root/'assets'/'tracks'/f'{name}.tcp').read_bytes()
-    count, = struct.unpack_from('<I',raw,4)
-    path = [struct.unpack_from('<7f',raw,20+i*28) for i in range(count)]
     island = bpy.data.objects['Sculpted island']
     bvh = BVHTree.FromPolygons([island.matrix_world@v.co for v in island.data.vertices],
                                [p.vertices[:] for p in island.data.polygons])

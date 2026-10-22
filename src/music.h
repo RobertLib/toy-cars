@@ -5,7 +5,8 @@
 #include <stddef.h>
 
 #define MUSIC_RATE 44100
-#define MUSIC_SONGS 6 // Two race songs for each of the three environments
+#define MUSIC_SONGS 6  // Race songs, each with a faster final-lap version
+#define MUSIC_TRACKS 10 // Circuits; each alternates between two of the songs
 #define MUSIC_DECKS 3
 #define MUSIC_BLOCK 1024
 
@@ -55,7 +56,7 @@ typedef struct {
     MusicLoader load;
     MusicContext context;
     float block[MUSIC_BLOCK * 2], volume, cutoff, low[2][2];
-    int program, song, song_track, visits[3];
+    int program, song, song_track, visits[MUSIC_TRACKS];
     MusicFinish finish;
     bool initialized;
 } Music;
@@ -67,5 +68,7 @@ void music_render(Music *m, float *stereo, int frames);
 /* The cue leading the mix, or -1 while music is silent between cues. */
 int music_playing(const Music *m);
 const MusicCue *music_cue(int cue);
+/* The race song a circuit plays on a given visit; visits alternate two songs. */
+int music_track_song(int track, int visit);
 
 #endif

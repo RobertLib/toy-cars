@@ -2,12 +2,18 @@
 import math
 from pathlib import Path
 import struct
+import sys
 
 import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from themes import THEMES
+import os
+# TOYCARS_TRACKS=canyon,volcano checks only those scenes.
+THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
 
 
 def track_position(points, length, distance, lane):
@@ -22,7 +28,8 @@ def track_position(points, length, distance, lane):
     return Vector((center.x, -center.z, center.y))
 
 
-for name in ("country", "beach", "winter"):
+for T in THEMES:
+    name = T.key
     bpy.ops.wm.open_mainfile(filepath=str(ROOT / "art" / (name + ".blend")))
     data = (ROOT / "assets" / "tracks" / (name + ".tcp")).read_bytes()
     count, _, _, length = struct.unpack_from("<IIIf", data, 4)
@@ -36,9 +43,9 @@ for name in ("country", "beach", "winter"):
     wide = [i for i,p in enumerate(points) if abs(p[5] - 2 * base) < .001]
     assert wide and wide == list(range(wide[0], wide[-1] + 1)), (
         name, "four-lane road must be one continuous constant-width section")
-    # Alpine switchbacks have a compact passing straight; the other layouts
-    # retain their longer, faster four-lane sectors.
-    minimum_wide = 40 if name == "winter" else 65
+    # Alpine switchbacks, the forest and the hairpin comb have a compact
+    # passing straight; the other layouts have longer, faster four-lane sectors.
+    minimum_wide = T.passing - 4
     assert points[wide[-1]][6] - points[wide[0]][6] > minimum_wide, (
         name, "four-lane section is too short")
     assert sum(abs(p[5] - base) < .001 for p in points) > count * .6, (
@@ -56,7 +63,7 @@ for name in ("country", "beach", "winter"):
     checkers = [o for o in markings if o.name.startswith("Finish road checker")]
     assert len(grids) == 8 and len(checkers) == 24, (name, "missing start markings")
     dividers = [o for o in markings if o.name.startswith("Extra lane divider")]
-    assert len(dividers) >= (8 if name == "winter" else 16), (name, "missing four-lane markings")
+    assert len(dividers) >= (8 if T.passing < 65 else 16), (name, "missing four-lane markings")
     assert len([o for o in markings if o.name.startswith("Tire marks")]) == 4, (
         name, "missing permanent tire marks")
     samples = 0

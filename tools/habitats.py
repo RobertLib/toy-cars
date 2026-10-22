@@ -8,7 +8,9 @@ import bmesh
 import random
 
 
-def build(api, theme, path, ground, water, obstacles):
+def build(api, T, path, ground, water, obstacles):
+    theme = T.index
+    C = T.colors
     bpy, Vector = api['bpy'], api['Vector']
     ico, beam, mesh, mat = (api[k] for k in ('ico', 'beam', 'mesh', 'mat'))
     # Direct mesh construction avoids a scene-wide dependency update for each
@@ -45,27 +47,30 @@ def build(api, theme, path, ground, water, obstacles):
                        min(p[2] for p in corners), max(p[2] for p in corners)))
 
     def clear(x, z, radius):
-        return ((x / 116)**2 + (z / 114)**2 < 1 and
+        return (T.within(x, z, 116, 114) and
                 all(math.hypot(x-p[0], z-p[2]) > p[5]+radius+2 for p in path) and
                 all(x+radius < a or x-radius > b or z+radius < c or z-radius > d
                     for a, b, c, d in bounds))
 
-    foliage = mat('Habitat foliage '+str(theme), [(.29,.43,.16), (.43,.50,.25), (.17,.30,.25)][theme])
-    dry = mat('Habitat dry stems '+str(theme), [(.64,.53,.27), (.70,.63,.39), (.42,.35,.27)][theme])
-    flower = mat('Habitat flowers '+str(theme), [(.77,.69,.86), (.91,.78,.48), (.76,.84,.82)][theme])
+    foliage = mat('Habitat foliage '+str(theme), C['foliage'])
+    dry = mat('Habitat dry stems '+str(theme), C['dry'])
+    flower = mat('Habitat flowers '+str(theme), C['flower'])
     bark = mat('Weathered fallen wood', (.35,.29,.22))
-    stone = mat('Habitat stone '+str(theme), [(.47,.49,.37), (.64,.57,.43), (.46,.54,.57)][theme])
+    stone = mat('Habitat stone '+str(theme), C['stone'])
     dressing_start = set(bpy.context.scene.objects)
     # Irregular patches leave open spaces and preserve sight lines at corners.
     patches = 0
-    for _ in range(1800):
-        x, z = rng.uniform(-108,108), rng.uniform(-106,106)
+    for _ in range(1800 if T.legacy else 9000):
+        x, z = rng.uniform(-T.sx(108),T.sx(108)), rng.uniform(-T.sz(106),T.sz(106))
         if not clear(x,z,1.6) or water(x,z)[0] > -2.5:
             continue
         if math.sin(x*.12+z*.09)*math.cos(z*.16) < .12:
             continue
         y = ground(x,z)
-        if patches % 11 == 0:
+        if not T.legacy:
+            api['biomes'].patch(T, patches, x, y, z, rng, ground, dict(ico=ico, beam=beam, mesh=mesh, mat=mat,
+                                foliage=foliage, dry=dry, flower=flower, bark=bark, stone=stone))
+        elif patches % 11 == 0:
             end = (x+2.3, ground(x+2.3,z+.8)+.22, z+.8)
             beam('Driftwood' if theme == 1 else 'Fallen branch', (x,y+.22,z), end, .22, bark, 7)
             beam('Broken branch', (x+1,y+.3,z+.35), (x+1.3,y+.8,z+1.2), .09,bark,5)
@@ -88,7 +93,7 @@ def build(api, theme, path, ground, water, obstacles):
             if patches%4 == 0:
                 ico('Hedgerow shrub' if theme == 0 else 'Coastal scrub',(x,y+.55,z),(1.1,.85,.9),foliage,2)
         patches += 1
-        if patches == 115:
+        if patches == T.patches:
             break
 
     bpy.context.view_layer.update()
@@ -106,19 +111,26 @@ def build(api, theme, path, ground, water, obstacles):
     snake=mat('Snake olive scales',(.32,.36,.16))
     hare=mat('Hare coat '+str(theme),(.49,.42,.30) if theme != 2 else (.88,.92,.92))
     wing=mat('Bird wing tips',(.23,.27,.29))
-    plumage=mat('Bird plumage '+str(theme),[(.25,.29,.26),(.90,.91,.86),(.16,.20,.22)][theme])
-    wanted=([0]*5+[1]*5+[2]*6+[3]*3+[4]*9 if theme == 0 else
-            [3]*4+[4]*16 if theme == 1 else [0]*4+[1]*6+[4]*7)
+    plumage=mat('Bird plumage '+str(theme),[(.25,.29,.26),(.90,.91,.86),(.16,.20,.22)][theme] if T.legacy else C.get('plumage',(.22,.24,.24)))
+    names=['deer','hare','goose','snake','bird']
+    if T.legacy:
+        wanted=([0]*5+[1]*5+[2]*6+[3]*3+[4]*9 if theme == 0 else
+                [3]*4+[4]*16 if theme == 1 else [0]*4+[1]*6+[4]*7)
+        wanted=[(k,names[k]) for k in wanted]
+    else:
+        species_table=api['biomes'].SPECIES
+        wanted=[(species_table[n]['kind'],n) for n in T.wildlife]
     occupied=[]; counts={}
-    for number,species in enumerate(wanted):
+    for number,(species,label) in enumerate(wanted):
         flying=species == 4
         found=False
         for _ in range(16000):
-            x,z=rng.uniform(-108,108),rng.uniform(-106,106)
-            if flying and (x/98)**2+(z/96)**2>1:continue
+            x,z=rng.uniform(-T.sx(108),T.sx(108)),rng.uniform(-T.sz(106),T.sz(106))
+            if flying and not T.within(x,z,98,96):continue
             if not flying and (not clear(x,z,3.0) or water(x,z)[0]>-3.2):
                 continue
-            if species == 2 and water(x,z)[0] < -16:
+            near_water = species == 2 if T.legacy else species_table[label].get('water', False)
+            if near_water and water(x,z)[0] < -16:
                 continue
             if any(math.hypot(x-a,z-b)<6 for a,b in occupied):
                 continue
@@ -132,7 +144,7 @@ def build(api, theme, path, ground, water, obstacles):
             found=True
             break
         if not found:
-            raise RuntimeError(('No safe wildlife habitat',theme,species))
+            raise RuntimeError(('No safe wildlife habitat',theme,label))
         if flying:
             # Entire flight circle clears the highest terrain below it.
             y=max(ground(x+math.cos(a)*12,z+math.sin(a)*12) for a in range(64))+12+number%4
@@ -146,7 +158,11 @@ def build(api, theme, path, ground, water, obstacles):
         def rod(label,a,b,r,material,part=0):
             obj=beam(label,(x+a[0],y+a[1],z+a[2]),(x+b[0],y+b[1],z+b[2]),r,material,6)
             obj['wildlife_part']=part
-        if species == 0:
+        pivot=0.
+        if not T.legacy:
+            pivot=api['biomes'].animal(T,label,number,dict(ell=ell,rod=rod,mesh=mesh,mat=mat,x=x,y=y,z=z,
+                                                           black=black,orange=orange,wing=wing,dry=dry,pale=pale))
+        elif species == 0:
             ell('Deer body',(0,1.18,0),(.40,.50,.83),fur)
             rod('Deer neck',(0,1.28,.5),(0,1.95,.78),.23,fur,3)
             ell('Deer head',(0,1.99,.96),(.24,.25,.40),fur,3)
@@ -197,9 +213,9 @@ def build(api, theme, path, ground, water, obstacles):
                 obj['wildlife_part']=1 if side<0 else 2
             ell('Bird tail',(0,0,-.43),(.19,.05,.22),wing)
         for obj in set(bpy.context.scene.objects)-start:
-            obj['wildlife_origin']=(x,y,z,0.0)
+            obj['wildlife_origin']=(x,y,z,pivot)
             obj['wildlife_motion']=(species,obj['wildlife_part'],sx,sz)
             obj['wildlife_id']=number
-            obj['wildlife_species']=['deer','hare','goose','snake','bird'][species]
-        counts[species]=counts.get(species,0)+1
+            obj['wildlife_species']=label
+        counts[species if T.legacy else label]=counts.get(species if T.legacy else label,0)+1
     print('HABITAT',theme,patches,'patches; wildlife',counts,flush=True)

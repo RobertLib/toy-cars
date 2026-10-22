@@ -42,6 +42,22 @@ static const MusicCue cues[MUSIC_CUES] = {
     {"music/finish-good-loop.ogg", "Race Finish Good (Loop)", -12.56f, true},
     {"music/finish-bad-loop.ogg", "Race Finish Bad (Loop)", -11.34f, true}};
 
+// The two songs each circuit alternates between, in Championship order. Moods
+// follow the setting: harp and tambourine for the farm and the cherry blossom,
+// saxophone for the coast and the harbour, Eurobeat for the volcano.
+static const int TRACK_SONGS[MUSIC_TRACKS][2] = {
+    {0, 1}, {2, 3}, {4, 5}, // Harvest Hills, Sunshine Coast, Alpine Rush
+    {3, 4}, {0, 5}, {1, 4}, // Canyon Dash, Maple Woods, Jungle Ruins
+    {0, 2}, {5, 3}, {1, 2}, // Sakura Hills, Harbor Lights, Highland Loch
+    {4, 5},                 // Volcano Peak
+};
+
+int music_track_song(int track, int visit) {
+    if (track < 0 || track >= MUSIC_TRACKS)
+        track = 0;
+    return TRACK_SONGS[track][visit % 2];
+}
+
 const MusicCue *music_cue(int cue) {
     return cue >= 0 && cue < MUSIC_CUES ? &cues[cue] : NULL;
 }
@@ -180,14 +196,14 @@ void music_destroy(Music *m) {
 void music_context(Music *m, MusicContext c) {
     if (!m->initialized)
         return;
-    if (c.track < 0 || c.track > 2)
+    if (c.track < 0 || c.track >= MUSIC_TRACKS)
         c.track = 0;
     MusicScene was = m->context.scene;
     // Each new race alternates the environment's two songs; restarting from pause keeps it.
     bool racing = c.scene == MUSIC_COUNTDOWN || c.scene == MUSIC_RACE;
     bool start = c.scene == MUSIC_COUNTDOWN && was != MUSIC_COUNTDOWN && was != MUSIC_PAUSE;
     if (racing && (start || c.track != m->song_track)) {
-        m->song = c.track * 2 + m->visits[c.track]++ % 2;
+        m->song = music_track_song(c.track, m->visits[c.track]++);
         m->song_track = c.track;
     }
     // The result is kept for the screen. It only improves, to a celebration, once a

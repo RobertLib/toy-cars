@@ -21,7 +21,8 @@ typedef struct {
 #endif
 // Shared by the color and shadow passes so limbs and their shadows agree.
 // TCA1: world origin/yaw, pose, body part, scale and width.
-// TCF1: world origin/yaw, species, body part and the verified ground slopes.
+// TCF1: world origin, the animal's size relative to a deer (0 for a deer), species,
+// body part and the verified ground slopes; the size scales the grazing nod's pivot.
 // Wildlife follows a bounded circle; phase easing gives ground animals pauses.
 #define CROWD_GLSL                                                                                \
     "layout(location=4) in vec4 aOrigin;layout(location=5) in vec4 aMotion;"                         \
@@ -44,7 +45,7 @@ typedef struct {
     "if(kind>.5 && kind<1.5)p.y+=.32*pow(max(0.,sin(t*5.)),2.)*activity;"                        \
     "if(part>2.5 && kind<.5){float graze=1.45*(.5+.5*sin(t*.6))*(1.-activity*.5);"                 \
     "float c=cos(graze),s=sin(graze);mat3 nod=mat3(1.,0.,0.,0.,c,s,0.,-s,c);"                   \
-    "vec3 pivot=vec3(0.,1.28,.5);p=pivot+nod*(p-pivot);n=nod*n;}"                                \
+    "vec3 pivot=vec3(0.,1.28,.5)*(1.+aOrigin.w);p=pivot+nod*(p-pivot);n=nod*n;}"                \
     "mat3 heading=turnY(-a);p=heading*p;n=heading*n;"                                            \
     "p.xz+=radius*vec2(cos(a),sin(a));"                                                         \
     "if(bird)p.y+=.6*sin(t*.7);else{p.y+=dot(p.xz,aMotion.zw);"                                  \
@@ -87,21 +88,24 @@ typedef struct {
     "p.xz+=bend*y*y/h;n.y-=dot(bend*(2.*y/h),n.xz);n=normalize(n);}"
 // Glossy draws tell body paint (1), glazing (2), aluminum (3) and rubber (4)
 // apart by the exported colors of those materials in tools/build_assets.py.
-// Asphalt (5) is the circuit's road color or one of its darker tire marks.
-static const char *world_vs =
+// Asphalt (5) is the circuit's road color or one of its darker tire marks;
+// lamps and windows that light up at night (6) use the lantern color in biomes.py.
+static const char *world_vs[] = {
     GLSL "layout(location=0) in vec3 aPos;layout(location=1) in vec3 aNormal;layout(location=2) in "
          "vec3 aColor;layout(location=3) in float aPaint;\n"
          "uniform mat4 uModel,uVP,uLight;uniform vec3 uPaint,uRoad;out float vGround,vMaterial;"
          "out vec3 vPos,vNormal,vColor;out vec4 vShadow;\n"
-         CROWD_GLSL VEGETATION_GLSL
+         CROWD_GLSL,
+    VEGETATION_GLSL
          "void main(){vec3 pos=aPos,normal=aNormal;animateCrowd(pos,normal);animateVegetation(pos,normal);vec4 "
          "p=uModel*vec4(pos,1.);vPos=p.xyz;vNormal=mat3(uModel)*normal;vColor=mix(aColor,uPaint,"
          "clamp(aPaint,0.,1.));vGround=max(0.,-aPaint);"
          "float worn=dot(aColor,uRoad)/dot(uRoad,uRoad);"
          "vMaterial=aPaint>.5?1.:distance(aColor,vec3(.075,.18,.22))<.01?2.:"
          "distance(aColor,vec3(.60,.66,.65))<.01?3.:distance(aColor,vec3(.055,.065,.073))<.01?4.:"
+         "distance(aColor,vec3(.98,.80,.40))<.004?6.:"
          "worn>.6&&worn<1.01&&distance(aColor,uRoad*worn)<.004&&aPaint==0.?5.:0.;"
-         "vShadow=uLight*p;gl_Position=uVP*p;}";
+         "vShadow=uLight*p;gl_Position=uVP*p;}"};
 // One world-space cloud layer for terrain, props and water reflections. Project
 // along the sun direction onto a plane 110 m above the track, including elevation.
 // Integrated weather drift avoids jumps when wind changes; no extra render pass.
@@ -120,9 +124,10 @@ static const char *world_vs =
 // paint. The horizon is the former flat fog color; the sun or moon glows in
 // the shadow light's direction.
 #define SKY_GLSL \
-    "uniform vec3 uHorizon,uZenith;uniform float uOvercast,uNight;" \
+    "uniform vec3 uHorizon,uZenith,uEmber;uniform float uOvercast,uNight;" \
     "vec3 skyColor(vec3 d){d=normalize(d);vec3 sun=normalize(vec3(-.6,1.,.45));" \
     "float s=max(0.,dot(d,sun));vec3 c=mix(uHorizon,uZenith,pow(clamp(d.y,0.,1.),.6));" \
+    "c+=uEmber*uNight*1.2*(1.-smoothstep(-.1,.4,d.y));" \
     "vec3 glow=mix(vec3(1.,.84,.58),vec3(.45,.52,.72),uNight)*(1.-.75*uOvercast)*mix(1.,.3,uNight);" \
     "return c+glow*(pow(s,4.)*.12+pow(s,60.)*.4);}" \
     "vec3 fogColor(vec3 d){return skyColor(vec3(d.x,max(d.y,0.)*.4,d.z));}"
@@ -153,11 +158,37 @@ static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     // Nine bilinear depth comparisons blend into a smooth 4x4-texel penumbra.
     "for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++)"
     "s+=texture(uShadow,vec3(p.xy+vec2(x,y)/2048.,p.z-bias));return s/9.;}\n",
+    // Ground surfaces, from the paint id the terrain exports: meadow (1), sand
+    // (2), snow (3), red desert sand (4), leaf litter (5), jungle floor (6),
+    // garden lawn with petals (7), paving slabs (8), heath (9), volcanic ash (10).
+    "vec3 groundTone(vec3 base,float kind){float tone=terrainNoise(vPos.xz*.13);"
+    "float fine=1.-smoothstep(.12,.65,length(fwidth(vPos.xz)));"
+    "float detail=(terrainNoise(vPos.xz*3.5)-.5)*fine;"
+    "if(kind<1.5||(kind>6.5&&kind<7.5)){base*=.86+.22*tone+.10*detail;"
+    "base=mix(base,base*vec3(1.13,.94,.74),smoothstep(.52,.8,tone)*.4);"
+    "if(kind>6.5){float petal=smoothstep(.83,.9,terrainNoise(vPos.xz*2.1+3.))*fine;"
+    "base=mix(base,vec3(.97,.74,.82),petal*.6);}return base;}"
+    "if(kind>4.5&&kind<5.5){base*=.84+.22*tone+.10*detail;"
+    "float leaf=smoothstep(.56,.78,terrainNoise(vPos.xz*1.6+11.));"
+    "vec3 fall=mix(vec3(.78,.28,.07),vec3(.93,.62,.15),terrainNoise(vPos.xz*.8+4.));"
+    "return mix(base,fall,leaf*.5*(.4+.6*fine));}"
+    "if(kind>5.5&&kind<6.5){base*=.80+.26*tone+.12*detail;"
+    "return mix(base,base*vec3(.72,.92,.66),smoothstep(.4,.72,terrainNoise(vPos.xz*.35+5.))*.55);}"
+    "if(kind>7.5&&kind<8.5){vec2 c=fract(vPos.xz*.25);"
+    "float joint=(1.-smoothstep(0.,.022,min(min(c.x,1.-c.x),min(c.y,1.-c.y))))*fine;"
+    "return base*(.92+.08*tone+.05*detail)*(1.-.24*joint);}"
+    "if(kind>8.5&&kind<9.5){base*=.85+.2*tone+.1*detail;"
+    "base=mix(base,vec3(.44,.28,.42),smoothstep(.56,.76,terrainNoise(vPos.xz*.19+2.))*.6);"
+    "return mix(base,vec3(.52,.42,.25),smoothstep(.62,.82,terrainNoise(vPos.xz*.33+9.))*.45);}"
+    "if(kind>9.5){float grain=(terrainNoise(vPos.xz*6.1)-.5)*fine;"
+    "return base*(.78+.34*tone+.12*detail+.14*grain);}"
+    "float ripple=sin(vPos.x*.9+vPos.z*.43+tone*5.);"
+    "return base*(.93+.09*tone+.04*detail+.018*ripple);}\n",
     "void main(){vec3 n=normalize(vNormal);if(!gl_FrontFacing)n=-n;vec3 "
     "light=normalize(vec3(-.6,1.,.45));float diff=max(0.,dot(n,light));float sh=shadow(n);float "
     // Cool skylight in the shade against a warm sun gives the forms their depth.
     "hemi=n.y*.5+.5;vec3 ambient=mix(vec3(.30,.35,.42),vec3(.58,.65,.74),hemi);"
-    "ambient=mix(ambient,mix(vec3(.045,.06,.10),vec3(.12,.16,.26),hemi),uNight);"
+    "ambient=mix(ambient,mix(vec3(.045,.06,.10),vec3(.12,.16,.26),hemi)+uEmber*mix(1.,.6,hemi),uNight);"
     "vec3 base=vColor,glow=vec3(0.);if(uBoost){vec2 p=vColor.rg;"
     "float phase=(p.y+abs(p.x)*.7-uBoostTime*1.35)/2.;"
     "float stripe=abs(fract(phase)-.5);float aa=max(fwidth(phase),.008);"
@@ -166,14 +197,9 @@ static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "float ends=smoothstep(0.,.3,p.y)*(1.-smoothstep(5.7,6.,p.y));"
     "base=mix(vec3(.19,.23,.22),vec3(.36,.56,.48),arrow*inset*ends);"
     "glow=vec3(.20,.62,.50)*arrow*inset*ends;"
-    "}if(vGround>.5){float tone=terrainNoise(vPos.xz*.13);"
-    "float detail=(terrainNoise(vPos.xz*3.5)-.5)*(1.-smoothstep(.12,.65,length(fwidth(vPos.xz))));"
-    "if(vGround<1.5){base*=.86+.22*tone+.10*detail;"
-    "base=mix(base,base*vec3(1.13,.94,.74),smoothstep(.52,.8,tone)*.4);}"
-    "else{float ripple=sin(vPos.x*.9+vPos.z*.43+tone*5.);"
-    "base*=.93+.09*tone+.04*detail+.018*ripple;} }"
+    "}if(vGround>.5)base=groundTone(base,vGround);"
     // Asphalt: broad worn patches and an aggregate grain that fades out with distance.
-    "if(vMaterial>4.5){float grain=(terrainNoise(vPos.xz*7.3)-.5)*"
+    "if(vMaterial>4.5&&vMaterial<5.5){float grain=(terrainNoise(vPos.xz*7.3)-.5)*"
     "(1.-smoothstep(.06,.4,length(fwidth(vPos.xz))));"
     "base*=.93+.13*terrainNoise(vPos.xz*.21+7.)+.10*grain;}float "
     "cloud=cloudShade(vPos);float sun=(1.-.8*uOvercast)*(1.-.82*cloud);"
@@ -181,7 +207,9 @@ static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     // The moon shares the sun's direction and shadow map, with a cool, dim light.
     "vec3 sunColor=mix(vec3(.58,.47,.33),vec3(.12,.15,.23),uNight);"
     "vec3 col=base*(skyAmbient*(1.-.05*uOvercast)+sunColor*diff*sh*sun);"
-    "if(uNight>0.)col+=(base*carLamps(n)+glow)*uNight;vec3 V=normalize(uEye-vPos),"
+    "if(uNight>0.)col+=(base*carLamps(n)+glow)*uNight;"
+    // Lanterns, torches and lit windows (6) glow after dark.
+    "if(vMaterial>5.5)col+=base*2.2*uNight;vec3 V=normalize(uEye-vPos),"
     "halfV=normalize(light+V);float "
     "spec=pow(max(0.,dot(n,halfV)),48.)*.12*sh*sun*(1.-.75*uNight);col+=spec;"
     // Clear-coated die-cast paint, glazing and aluminum mirror the sky above and
@@ -204,7 +232,7 @@ static const char *depth_fs = GLSL "void main(){}";
 // Positions wrap in world space; moving the chase camera never drags the weather.
 static const char *weather_vs = GLSL
     "uniform mat4 uVP;uniform vec3 uCenter,uRight,uUp,uDrift,uWind;"
-    "uniform float uTime,uIntensity,uNight;uniform int uKind,uTrack;"
+    "uniform float uTime,uIntensity,uNight;uniform int uKind;uniform vec3 uFlakes,uGustA,uGustB;"
     "out vec2 vUV;out vec4 vTint;"
     "float hash(float n){return fract(sin(n*127.1+311.7)*43758.5453);}"
     "void main(){float id=float(gl_InstanceID),a=hash(id+1.),b=hash(id+93.),c=hash(id+217.);"
@@ -222,9 +250,8 @@ static const char *weather_vs = GLSL
     "vec3 axis=rain?vec3(-uWind.x,fall,-uWind.z)*.022:uUp*size;"
     "if(wind)axis=uRight*size*sin(uTime*3.+a*40.)+uUp*size;"
     "p+=uRight*vUV.x*size+axis*vUV.y;"
-    "vec3 tint=rain?vec3(.68,.81,.94):vec3(.95,.98,1.);"
-    "if(wind && uTrack==0)tint=mix(vec3(.64,.31,.08),vec3(.9,.66,.24),b);"
-    "if(wind && uTrack==1)tint=vec3(.89,.80,.59);"
+    "vec3 tint=rain?vec3(.68,.81,.94):uFlakes;"
+    "if(wind)tint=mix(uGustA,uGustB,b);"
     "vTint=vec4(tint*mix(1.,.38,uNight),uIntensity*edge*(rain?.48:wind?.6:.82));gl_Position=uVP*vec4(p,1.);}";
 static const char *weather_fs = GLSL
     "in vec2 vUV;in vec4 vTint;out vec4 frag;uniform int uKind;"
@@ -245,7 +272,7 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "uniform sampler2D uOpaque,uDepth;uniform sampler2DShadow uShadow;uniform mat4 uVP,uLight;"
     "uniform vec3 uEye;uniform vec2 uResolution,uDepthParams;"
     "uniform vec4 uViewport,uWakes[8];uniform float uTime;"
-    "uniform int uTrack;"
+    "uniform vec3 uWaterTint,uWaterExtinction;uniform float uLavaAbove;"
     "float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
     "float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);"
     "return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),"
@@ -280,14 +307,21 @@ static const char *water_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "vec2 uv=gl_FragCoord.xy/uResolution;float waterD=distanceAt(gl_FragCoord.z);"
     "float depth=max(0.,distanceAt(texture(uDepth,uv).r)-waterD);"
     "float shore=1.-smoothstep(.025,.24,depth);"
+    // Lava: a glowing melt under a drifting black crust that cracks open along
+    // the flow. It is brighter than white, so the bloom carries its heat.
+    "if(vPos.y>uLavaAbove){vec2 lq=vPos.xz-flow*uTime*.35;float n=noise(lq*.28)*.55+noise(lq*1.1+t*.04)*.3+noise(lq*3.7-t*.09)*.15;"
+    "float crust=smoothstep(.42,.70,n),vein=1.-smoothstep(.0,.08,abs(n-.42));"
+    "vec3 melt=mix(vec3(4.2,1.25,.16),vec3(1.9,.32,.04),smoothstep(.2,.42,n));"
+    "vec3 col=mix(melt,vec3(.075,.055,.05),crust*.92)+vec3(2.6,.7,.1)*vein*crust;"
+    "col*=1.-.35*shore;float fog=smoothstep(85.,190.,length(uEye-vPos));"
+    "col=mix(col,fogColor(-V),fog*.7);frag=vec4(col,smoothstep(0.,.04,depth));return;}"
     "vec2 refrUV=safeUV(uv+grad*.025*min(depth,2.));"
     "if(distanceAt(texture(uDepth,refrUV).r)<waterD)refrUV=uv;"
     "vec3 bed=texture(uOpaque,refrUV).rgb;"
     // Extinction follows the light path through the water, not just vertical
     // depth. Shallows reveal the bed; a pond gains body instead of a milky film.
     "float thickness=min(depth,8.);"
-    "vec3 tint=uTrack==1?vec3(.055,.24,.22):uTrack==2?vec3(.055,.13,.16):vec3(.065,.16,.135);"
-    "vec3 extinction=uTrack==1?vec3(.95,.38,.3):vec3(1.45,.85,.65);"
+    "vec3 tint=uWaterTint,extinction=uWaterExtinction;"
     "vec3 absorption=exp(-extinction*thickness);"
     "vec3 transmitted=bed*absorption+tint*mix(1.,.22,uNight)*(1.-absorption);"
     "vec2 cq=q+vec2(noise(q*.7+t*.13),noise(q*.6-t*.11))*1.8;"
@@ -524,11 +558,12 @@ static const char *fxaa_fs = GLSL
     "if(horzSpan)p.y+=offset*lengthSign;else p.x+=offset*lengthSign;"
     "frag=vec4(texture(uImage,p).rgb,1.);}";
 
-static GLuint render_program_sources(const char *vs, const char *const *fs, int fs_count) {
+static GLuint render_program_parts(const char *const *vs, int vs_count, const char *const *fs,
+                                   int fs_count) {
     GLuint shaders[2] = {glCreateShader(GL_VERTEX_SHADER), glCreateShader(GL_FRAGMENT_SHADER)};
     char log[4096];
     for (int i = 0; i < 2; i++) {
-        glShaderSource(shaders[i], i ? fs_count : 1, i ? fs : &vs, NULL);
+        glShaderSource(shaders[i], i ? fs_count : vs_count, i ? fs : vs, NULL);
         glCompileShader(shaders[i]);
         GLint ok;
         glGetShaderiv(shaders[i], GL_COMPILE_STATUS, &ok);
@@ -555,6 +590,9 @@ static GLuint render_program_sources(const char *vs, const char *const *fs, int 
         return 0;
     }
     return p;
+}
+static GLuint render_program_sources(const char *vs, const char *const *fs, int fs_count) {
+    return render_program_parts(&vs, 1, fs, fs_count);
 }
 GLuint render_program(const char *vs, const char *fs) {
     return render_program_sources(vs, &fs, 1);
@@ -584,13 +622,16 @@ static Mesh mesh_upload_layout(const void *data, int count, bool crowd) {
 static Mesh mesh_upload(const Vertex *data, int count) {
     return mesh_upload_layout(data, count, false);
 }
-static bool mesh_load(Mesh *m, const char *path) {
+// Reads and validates a TCM1, TCA1, TCF1 or TCV1 file. Returns the file (to be
+// released with SDL_free) and its vertex data; *floats is 10 or 18 per vertex.
+static unsigned char *mesh_read(const char *path, uint32_t *vertex_count, size_t *floats_out,
+                                bool *animated, bool *wildlife_out) {
     size_t size;
     unsigned char *d = asset_read(path, &size);
     if (!d || size < 8 || (memcmp(d, "TCM1", 4) && memcmp(d, "TCA1", 4) && memcmp(d, "TCF1", 4) && memcmp(d, "TCV1", 4))) {
         SDL_Log("Cannot load mesh %s", path);
         SDL_free(d);
-        return false;
+        return NULL;
     }
     uint32_t count;
     bool wildlife = !memcmp(d, "TCF1", 4);
@@ -599,23 +640,23 @@ static bool mesh_load(Mesh *m, const char *path) {
     size_t floats = crowd ? 18 : 10;
     memcpy(&count, d + 4, 4);
     count = SDL_Swap32LE(count);
-    if (count > 5000000 || count % 3 || size != 8 + (size_t)count * floats * sizeof(float)) {
+    if (count > 8000000 || count % 3 || size != 8 + (size_t)count * floats * sizeof(float)) {
         SDL_free(d);
-        return false;
+        return NULL;
     }
-    Vertex *data = (Vertex *)(void *)(d + 8);
+    unsigned char *data = d + 8;
     // The format is explicitly little endian, including IEEE754 components.
     for (size_t i = 0; i < (size_t)count * floats; i++) {
         uint32_t bits;
-        memcpy(&bits, (unsigned char *)data + i * 4, 4);
+        memcpy(&bits, data + i * 4, 4);
         bits = SDL_Swap32LE(bits);
         float f;
         memcpy(&f, &bits, 4);
         if (!isfinite(f)) {
             SDL_free(d);
-            return false;
+            return NULL;
         }
-        memcpy((unsigned char *)data + i * 4, &bits, 4);
+        memcpy(data + i * 4, &bits, 4);
     }
     if (crowd) {
         const float *values = (const float *)(const void *)data;
@@ -626,23 +667,109 @@ static bool mesh_load(Mesh *m, const char *path) {
                     (v[15] != 0 && v[15] != 1) || v[16] != 0 || v[17] != 0) {
                     SDL_Log("Invalid vegetation data: %s", path);
                     SDL_free(d);
-                    return false;
+                    return NULL;
                 }
                 continue;
             }
             if (v[14] < 0 || v[14] > 4 || floorf(v[14]) != v[14] || v[15] < 0 ||
                 v[15] > 3 || floorf(v[15]) != v[15] ||
-                (wildlife ? (fabsf(v[16]) > .21f || fabsf(v[17]) > .21f) :
+                (wildlife ? (fabsf(v[16]) > .21f || fabsf(v[17]) > .21f || v[13] < -.8f || v[13] > 1.5f) :
                  (v[16] < .5f || v[16] > 2 || v[17] < .5f || v[17] > 2))) {
                 SDL_Log("Invalid animation data: %s", path);
                 SDL_free(d);
-                return false;
+                return NULL;
             }
         }
     }
-    *m = mesh_upload_layout(data, (int)count, crowd);
+    *vertex_count = count;
+    *floats_out = floats;
+    *animated = crowd;
+    if (wildlife_out)
+        *wildlife_out = wildlife;
+    return d;
+}
+static bool mesh_load(Mesh *m, const char *path) {
+    uint32_t count;
+    size_t floats;
+    bool crowd;
+    unsigned char *d = mesh_read(path, &count, &floats, &crowd, NULL);
+    if (!d)
+        return false;
+    *m = mesh_upload_layout(d + 8, (int)count, crowd);
     SDL_free(d);
     return true;
+}
+#define TILE_SIZE 40.f
+#define TILE_GRID 13 // Tiles across the widest island, about 520 m
+// Sorts whole triangles into ground tiles by their centre and records each
+// tile's bounds. Animated vertices sway, walk or fly up to reach metres.
+static bool tiled_load(TiledMesh *t, const char *path) {
+    uint32_t count;
+    size_t floats;
+    bool animated, wildlife;
+    unsigned char *d = mesh_read(path, &count, &floats, &animated, &wildlife);
+    if (!d)
+        return false;
+    const float *v = (const float *)(const void *)(d + 8);
+    size_t stride = floats * sizeof(float), triangle = stride * 3;
+    uint32_t triangles = count / 3;
+    int *tile_of = SDL_malloc(sizeof(int) * (triangles ? triangles : 1));
+    int counts[TILE_GRID * TILE_GRID] = {0};
+    unsigned char *sorted = SDL_malloc(triangle * (triangles ? triangles : 1));
+    if (!tile_of || !sorted) {
+        SDL_free(tile_of);
+        SDL_free(sorted);
+        SDL_free(d);
+        return false;
+    }
+    float origin = -TILE_SIZE * TILE_GRID * .5f;
+    for (uint32_t i = 0; i < triangles; i++) {
+        const float *a = v + i * 3 * floats, *b = a + floats, *c = b + floats;
+        float x = (a[0] + b[0] + c[0]) / 3, z = (a[2] + b[2] + c[2]) / 3;
+        int tx = (int)clampf(floorf((x - origin) / TILE_SIZE), 0, TILE_GRID - 1);
+        int tz = (int)clampf(floorf((z - origin) / TILE_SIZE), 0, TILE_GRID - 1);
+        tile_of[i] = tz * TILE_GRID + tx;
+        counts[tile_of[i]]++;
+    }
+    int start[TILE_GRID * TILE_GRID], used = 0;
+    for (int k = 0; k < TILE_GRID * TILE_GRID; k++) {
+        start[k] = used;
+        used += counts[k];
+    }
+    int cursor[TILE_GRID * TILE_GRID];
+    memcpy(cursor, start, sizeof cursor);
+    for (uint32_t i = 0; i < triangles; i++)
+        memcpy(sorted + (size_t)cursor[tile_of[i]]++ * triangle, (const unsigned char *)v + i * triangle,
+               triangle);
+    int filled = 0;
+    for (int k = 0; k < TILE_GRID * TILE_GRID; k++)
+        filled += counts[k] > 0;
+    t->tiles = SDL_calloc(filled ? (size_t)filled : 1, sizeof *t->tiles);
+    t->tile_count = 0;
+    // Birds circle 12 m about their origin; ground animals and trees move less.
+    float reach = wildlife ? 13.5f : animated ? 2.f : .1f;
+    for (int k = 0; k < TILE_GRID * TILE_GRID && t->tiles; k++) {
+        if (!counts[k])
+            continue;
+        MeshTile *tile = &t->tiles[t->tile_count++];
+        tile->first = start[k] * 3;
+        tile->count = counts[k] * 3;
+        for (int j = 0; j < 3; j++) {
+            tile->box[j] = 1e9f;
+            tile->box[j + 3] = -1e9f;
+        }
+        const float *p = (const float *)(const void *)(sorted + (size_t)start[k] * triangle);
+        for (int n = 0; n < counts[k] * 3; n++, p += floats)
+            for (int j = 0; j < 3; j++) {
+                tile->box[j] = fminf(tile->box[j], p[j] - reach);
+                tile->box[j + 3] = fmaxf(tile->box[j + 3], p[j] + reach);
+            }
+    }
+    t->mesh = mesh_upload_layout(sorted, (int)count, animated);
+    SDL_free(tile_of);
+    SDL_free(sorted);
+    SDL_free(d);
+    return t->tiles != NULL;
 }
 static void uniform_matrix(GLuint p, const char *name, Mat4 m) {
     glUniformMatrix4fv(glGetUniformLocation(p, name), 1, GL_FALSE, m.m);
@@ -662,6 +789,61 @@ static void draw_mesh(Renderer *r, Mesh mesh, Mat4 model, Color paint, bool dept
     glDrawArrays(GL_TRIANGLES, 0, mesh.count);
     r->draw_calls++;
     r->triangles += mesh.count / 3;
+}
+// Planes a x + b y + c z + d >= 0 of a view-projection frustum.
+static void set_frustum(Renderer *r, Mat4 vp) {
+    const float *m = vp.m;
+    for (int i = 0; i < 6; i++) {
+        int axis = i / 2;
+        float sign = i % 2 ? -1 : 1;
+        float len = 0;
+        for (int j = 0; j < 4; j++) {
+            r->frustum[i][j] = m[j * 4 + 3] + sign * m[j * 4 + axis];
+            if (j < 3)
+                len += r->frustum[i][j] * r->frustum[i][j];
+        }
+        len = sqrtf(fmaxf(len, 1e-12f));
+        for (int j = 0; j < 4; j++)
+            r->frustum[i][j] /= len;
+    }
+}
+static bool box_visible(const Renderer *r, const float *box) {
+    for (int i = 0; i < 6; i++) {
+        const float *f = r->frustum[i];
+        float x = f[0] > 0 ? box[3] : box[0], y = f[1] > 0 ? box[4] : box[1], z = f[2] > 0 ? box[5] : box[2];
+        if (f[0] * x + f[1] * y + f[2] * z + f[3] < 0)
+            return false;
+    }
+    return true;
+}
+// Draws the tiles inside the current frustum, joining neighbouring ranges.
+static void draw_tiled(Renderer *r, const TiledMesh *t, Color paint, bool depth) {
+    if (!t->mesh.vao)
+        return;
+    GLuint p = depth ? r->depth_shader : r->shader;
+    uniform_matrix(p, "uModel", identity());
+    if (!depth)
+        glUniform3f(glGetUniformLocation(p, "uPaint"), paint.r, paint.g, paint.b);
+    if (r->bound_vao != t->mesh.vao) {
+        glBindVertexArray(t->mesh.vao);
+        r->bound_vao = t->mesh.vao;
+    }
+    int first = -1, count = 0;
+    for (int i = 0; i <= t->tile_count; i++) {
+        const MeshTile *tile = i < t->tile_count ? &t->tiles[i] : NULL;
+        bool visible = tile && box_visible(r, tile->box);
+        if (visible && first >= 0 && first + count == tile->first) {
+            count += tile->count;
+            continue;
+        }
+        if (count) {
+            glDrawArrays(GL_TRIANGLES, first, count);
+            r->draw_calls++;
+            r->triangles += count / 3;
+        }
+        first = visible ? tile->first : -1;
+        count = visible ? tile->count : 0;
+    }
 }
 // Reflective finish for the vehicles that follow; zero restores matte scenery.
 static void set_gloss(const Renderer *r, bool depth, float amount) {
@@ -841,11 +1023,51 @@ static void target_storage(GLuint texture, GLenum format, int w, int h) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
+static void mesh_delete(Mesh *m);
+static void tiled_delete(TiledMesh *t) {
+    mesh_delete(&t->mesh);
+    SDL_free(t->tiles);
+    *t = (TiledMesh){0};
+}
+static void scene_delete(TrackScene *s) {
+    tiled_delete(&s->scene);
+    tiled_delete(&s->vegetation);
+    tiled_delete(&s->crowd);
+    tiled_delete(&s->wildlife);
+    mesh_delete(&s->water);
+    s->water = (Mesh){0};
+    s->track = -1;
+}
+bool renderer_load_track(Renderer *r, int track) {
+    if (r->scene.track == track)
+        return true;
+    Uint64 start = SDL_GetTicksNS();
+    scene_delete(&r->scene);
+    const char *id = TRACK_INFO[track].id;
+    char path[5][96];
+    const char *suffix[5] = {".tcm", "-vegetation.tcv", "-crowd.tca", "-wildlife.tcf", "-water.tcm"};
+    for (int i = 0; i < 5; i++)
+        SDL_snprintf(path[i], sizeof path[i], "tracks/%s%s", id, suffix[i]);
+    bool ok = tiled_load(&r->scene.scene, path[0]) && tiled_load(&r->scene.vegetation, path[1]) &&
+              tiled_load(&r->scene.crowd, path[2]) && tiled_load(&r->scene.wildlife, path[3]) &&
+              mesh_load(&r->scene.water, path[4]);
+    r->bound_vao = 0;
+    if (!ok) {
+        SDL_Log("Cannot load the scene of %s", id);
+        scene_delete(&r->scene);
+        return false;
+    }
+    r->scene.track = track;
+    SDL_Log("Loaded %s in %.0f ms (%d scene tiles)", id, (SDL_GetTicksNS() - start) / 1e6,
+            r->scene.scene.tile_count);
+    return true;
+}
 bool renderer_init(Renderer *r) {
     memset(r, 0, sizeof *r);
+    r->scene.track = -1;
     r->last_track = -1;
     r->hero_frame = .30f;
-    r->shader = render_program_sources(world_vs, world_fs, SDL_arraysize(world_fs));
+    r->shader = render_program_parts(world_vs, SDL_arraysize(world_vs), world_fs, SDL_arraysize(world_fs));
     r->depth_shader = render_program(depth_vs, depth_fs);
     r->post_shader = render_program(post_vs, post_fs);
     r->weather_shader = render_program(weather_vs, weather_fs);
@@ -864,23 +1086,6 @@ bool renderer_init(Renderer *r) {
         !r->ao_blur_shader || !r->bloom_down_shader || !r->bloom_up_shader || !r->fxaa_shader ||
         !r->dof_down_shader || !r->dof_blur_shader)
         return false;
-    const char *names[] = {"tracks/country.tcm", "tracks/beach.tcm", "tracks/winter.tcm"};
-    for (int i = 0; i < 3; i++)
-        if (!mesh_load(&r->tracks[i], names[i]))
-            return false;
-    const char *vegetation[] = {"tracks/country-vegetation.tcv", "tracks/beach-vegetation.tcv",
-                                "tracks/winter-vegetation.tcv"};
-    for (int i = 0; i < TRACK_COUNT; i++)
-        if (!mesh_load(&r->vegetation[i], vegetation[i])) return false;
-    const char *wildlife[] = {"tracks/country-wildlife.tcf", "tracks/beach-wildlife.tcf",
-                              "tracks/winter-wildlife.tcf"};
-    for (int i = 0; i < TRACK_COUNT; i++)
-        if (!mesh_load(&r->wildlife[i], wildlife[i])) return false;
-    const char *crowds[] = {"tracks/country-crowd.tca", "tracks/beach-crowd.tca",
-                            "tracks/winter-crowd.tca"};
-    for (int i = 0; i < 3; i++)
-        if (!mesh_load(&r->crowds[i], crowds[i]))
-            return false;
     if (!mesh_load(&r->car, "models/car.tcm") || !mesh_load(&r->fuel, "models/fuel.tcm"))
         return false;
     if (!mesh_load(&r->helicopter, "models/helicopter.tcm") ||
@@ -890,12 +1095,10 @@ bool renderer_init(Renderer *r) {
     const char *rail_models[RAIL_MODEL_COUNT] = {
         "models/steam-locomotive.tcm", "models/steam-tender.tcm", "models/coach.tcm",
         "models/alpine-locomotive.tcm", "models/alpine-coach.tcm",
-        "models/road-train-tractor.tcm", "models/road-train-carriage.tcm"};
+        "models/road-train-tractor.tcm", "models/road-train-carriage.tcm",
+        "models/diesel-locomotive.tcm", "models/container-wagon.tcm"};
     for (int i = 0; i < RAIL_MODEL_COUNT; i++)
         if (!mesh_load(&r->rail_models[i], rail_models[i])) return false;
-    const char *water[] = {"tracks/country-water.tcm", "tracks/beach-water.tcm", "tracks/winter-water.tcm"};
-    for (int i = 0; i < TRACK_COUNT; i++)
-        if (!mesh_load(&r->water[i], water[i])) return false;
     glGenVertexArrays(1, &r->spray_vao);
     glBindVertexArray(r->spray_vao);
     glGenBuffers(1, &r->spray_vbo);
@@ -1220,13 +1423,12 @@ static void draw_railway(Renderer *r, const Game *g, bool depth) {
     const Railway *rail = &g->tracks[g->selected].rail;
     if (!rail->count)
         return;
-    Color white = rgb(1, 1, 1);
     RailVehicle vehicles[MAX_RAIL_VEHICLES];
     int count = rail_vehicles(g, r->alpha, vehicles);
     for (int i = 0; i < count; i++)
         if (vehicles[i].visible)
-            draw_mesh(r, r->rail_models[vehicles[i].model], rail_vehicle_model(&vehicles[i]), white,
-                      depth);
+            draw_mesh(r, r->rail_models[vehicles[i].model], rail_vehicle_model(&vehicles[i]),
+                      TRACK_INFO[g->selected].livery, depth);
     // Striped arms swing down from upright about the hinge on each housing.
     float raise = (1 - rail_arm(g, r->alpha)) * PI * .5f;
     for (int i = 0; i < rail->arm_count; i++) {
@@ -1377,7 +1579,7 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
         set_gloss(r, depth, 0);
         return;
     }
-    draw_mesh(r, r->tracks[g->selected], identity(), white, depth);
+    draw_tiled(r, &r->scene.scene, white, depth);
     draw_boosts(r, g, depth);
     GLuint program = depth ? r->depth_shader : r->shader;
     glUniform1i(glGetUniformLocation(program, "uVegetation"), 1);
@@ -1388,15 +1590,15 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     uniform_vec(program, "uVegetationWind", vegetation_wind);
     glUniform1f(glGetUniformLocation(program, "uVegetationTime"),
                 menu ? r->crowd_time : g->weather.time);
-    draw_mesh(r, r->vegetation[g->selected], identity(), white, depth);
+    draw_tiled(r, &r->scene.vegetation, white, depth);
     glUniform1i(glGetUniformLocation(program, "uVegetation"), 0);
     glUniform1i(glGetUniformLocation(program, "uCrowd"), 1);
     glUniform1f(glGetUniformLocation(program, "uCrowdTime"), r->crowd_time);
     glUniform1f(glGetUniformLocation(program, "uWind"), menu ? 0 : vlen(g->weather.wind));
-    draw_mesh(r, r->crowds[g->selected], identity(), white, depth);
+    draw_tiled(r, &r->scene.crowd, white, depth);
     glUniform1i(glGetUniformLocation(program, "uCrowd"), 0);
     glUniform1i(glGetUniformLocation(program, "uWildlife"), 1);
-    draw_mesh(r, r->wildlife[g->selected], identity(), white, depth);
+    draw_tiled(r, &r->scene.wildlife, white, depth);
     glUniform1i(glGetUniformLocation(program, "uWildlife"), 0);
     if (!menu)
         draw_props(r, g, depth);
@@ -1468,7 +1670,10 @@ static void draw_weather(Renderer *r, const Game *g) {
     glUniform1f(glGetUniformLocation(p, "uTime"), w->time);
     glUniform1f(glGetUniformLocation(p, "uIntensity"), w->intensity);
     glUniform1i(glGetUniformLocation(p, "uKind"), w->kind);
-    glUniform1i(glGetUniformLocation(p, "uTrack"), g->selected);
+    const TrackInfo *info = &TRACK_INFO[g->selected];
+    uniform_vec(p, "uFlakes", v3(info->flakes.r, info->flakes.g, info->flakes.b));
+    uniform_vec(p, "uGustA", info->gust[0]);
+    uniform_vec(p, "uGustB", info->gust[1]);
     glUniform1f(glGetUniformLocation(p, "uNight"), r->night);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1490,13 +1695,14 @@ static void cloud_uniforms(GLuint program, const Renderer *r, const Game *g, boo
                 r->crowd_time * .85f + drift.x * .18f,
                 r->crowd_time * .32f + drift.z * .18f);
     // Coastal fair weather has lighter cloud shadows than the alpine circuit.
-    float amount = g->selected == 1 ? .68f : g->selected == 2 ? .90f : .82f;
+    float amount = TRACK_INFO[g->selected].clouds;
     glUniform1f(glGetUniformLocation(program, "uCloudAmount"), garage ? 0 : amount);
 }
 
 static void sky_uniforms(GLuint program, const Renderer *r) {
     uniform_vec(program, "uHorizon", r->horizon);
     uniform_vec(program, "uZenith", r->zenith);
+    uniform_vec(program, "uEmber", r->ember);
     glUniform1f(glGetUniformLocation(program, "uOvercast"), r->overcast);
     glUniform1f(glGetUniformLocation(program, "uNight"), r->night);
 }
@@ -1662,7 +1868,11 @@ static void draw_water(Renderer *r, const Game *g, int vx, int vy, int vw, int v
     sky_uniforms(p, r);
     cloud_uniforms(p, r, g, r->hero, false);
     glUniform1f(glGetUniformLocation(p, "uTime"), r->crowd_time);
-    glUniform1i(glGetUniformLocation(p, "uTrack"), g->selected);
+    const TrackInfo *info = &TRACK_INFO[g->selected];
+    uniform_vec(p, "uWaterTint", info->water_tint);
+    uniform_vec(p, "uWaterExtinction", info->water_extinction);
+    // Only liquid above the sea is lava; the sea stays water.
+    glUniform1f(glGetUniformLocation(p, "uLavaAbove"), info->lava ? LAVA_ABOVE : 1e9f);
     glUniform2f(glGetUniformLocation(p, "uResolution"), r->width, r->height);
     glUniform2f(glGetUniformLocation(p, "uDepthParams"), r->projection.m[10], r->projection.m[14]);
     glUniform4f(glGetUniformLocation(p, "uViewport"), (float)vx/r->width, (float)vy/r->height,
@@ -1687,7 +1897,7 @@ static void draw_water(Renderer *r, const Game *g, int vx, int vy, int vw, int v
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_TRUE);
-    Mesh m = r->water[g->selected];
+    Mesh m = r->scene.water;
     glBindVertexArray(m.vao);
     glDrawArrays(GL_TRIANGLES, 0, m.count);
     r->draw_calls++; r->triangles += m.count / 3;
@@ -1815,6 +2025,7 @@ static float hero_camera(Renderer *r, const Game *g, float aspect, float *blur) 
 }
 
 void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
+    renderer_load_track(r, g->selected);
     if (g->screen != SCREEN_PAUSE)
         r->crowd_time += clampf(dt, 0, .1f);
     bool menu =
@@ -1834,6 +2045,8 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     r->bound_vao = 0;
     // The garage stays a daylight studio; menus preview the selected race.
     r->night = game_night(g) && !garage ? 1.f : 0.f;
+    // Lava lights the haze and the ground warmly from below after dark.
+    r->ember = TRACK_INFO[g->selected].lava && !garage ? v3(.22f, .07f, .025f) : v3(0, 0, 0);
     r->sky = t->sky;
     if (r->night > 0)
         r->sky = rgb(.012f + t->sky.r * .07f, .02f + t->sky.g * .08f, .045f + t->sky.b * .1f);
@@ -1846,9 +2059,7 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     clear.b = lerpf(clear.b, haze.b, overcast * .75f);
     // Each circuit's haze is the horizon of a deeper sky; the garage car mirrors
     // a studio's overhead softbox instead.
-    static const Vec3 ZENITH[TRACK_COUNT] = {
-        {.38f, .58f, .82f}, {.22f, .55f, .82f}, {.36f, .55f, .80f}};
-    Vec3 zenith = r->night > 0 ? v3(.006f, .012f, .034f) : ZENITH[g->selected];
+    Vec3 zenith = r->night > 0 ? v3(.006f, .012f, .034f) : TRACK_INFO[g->selected].zenith;
     zenith = vlerp(zenith, vmul(v3(haze.r, haze.g, haze.b), .92f), overcast * .85f);
     r->horizon = v3(clear.r, clear.g, clear.b);
     r->zenith = garage ? v3(.62f, .65f, .70f) : zenith;
@@ -1912,6 +2123,7 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     glClear(GL_DEPTH_BUFFER_BIT);
     glUseProgram(r->depth_shader);
     uniform_matrix(r->depth_shader, "uVP", r->light_vp);
+    set_frustum(r, r->light_vp);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(2, 3);
     render_objects(r, g, true, menu, garage);
@@ -1923,19 +2135,18 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     glViewport(vx, vy, vw, vh);
     glUseProgram(r->shader);
     uniform_matrix(r->shader, "uVP", r->vp);
+    set_frustum(r, r->vp);
     uniform_matrix(r->shader, "uLight", r->light_vp);
     uniform_vec(r->shader, "uEye", r->eye);
     cloud_uniforms(r->shader, r, g, calm, garage);
     sky_uniforms(r->shader, r);
     // Night haze closes in a little so distant scenery settles into the dark.
-    r->fog_far = garage ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night);
+    r->fog_far = garage ? 1400 : (190 - 65 * overcast) * (1 - .12f * r->night) * TRACK_INFO[g->selected].fog;
     glUniform1f(glGetUniformLocation(r->shader, "uFogFar"), r->fog_far);
     glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
     glUniform1f(glGetUniformLocation(r->shader, "uGloss"), 0);
     // Road material colors from tools/build_assets.py.
-    static const Vec3 ROAD[TRACK_COUNT] = {
-        {.28f, .31f, .29f}, {.53f, .44f, .31f}, {.37f, .48f, .54f}};
-    uniform_vec(r->shader, "uRoad", ROAD[g->selected]);
+    uniform_vec(r->shader, "uRoad", TRACK_INFO[g->selected].road);
     lamp_uniforms(r);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, r->shadow_texture);
@@ -2003,14 +2214,9 @@ static void mesh_delete(Mesh *m) {
     glDeleteVertexArrays(1, &m->vao);
 }
 void renderer_destroy(Renderer *r) {
-    for (int i = 0; i < 3; i++) {
-        mesh_delete(&r->tracks[i]);
+    scene_delete(&r->scene);
+    for (int i = 0; i < TRACK_COUNT; i++)
         mesh_delete(&r->boosts[i]);
-        mesh_delete(&r->crowds[i]);
-        mesh_delete(&r->wildlife[i]);
-        mesh_delete(&r->vegetation[i]);
-        mesh_delete(&r->water[i]);
-    }
     mesh_delete(&r->cone);
     mesh_delete(&r->tire);
     mesh_delete(&r->fence);

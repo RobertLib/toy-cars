@@ -3,7 +3,8 @@
 #include "math3d.h"
 #include <stdbool.h>
 #include <SDL3/SDL.h>
-#define TRACK_COUNT 3
+#define TRACK_COUNT 10
+#define CUP_COUNT 3
 #define MAX_POINTS 2048
 #define MAX_CANS 24
 #define MAX_RAMPS 12
@@ -44,18 +45,24 @@ typedef struct {
     bool asleep;
     float quiet_time;
 } TrackProp;
-#define MAX_WATER_TRIANGLES 8192
-#define MAX_WATER_REFS 65536
+#define MAX_WATER_TRIANGLES 32768
+// The sea around the coastal islands, as authored in tools/hydrology.py. On a
+// lava track only liquid clearly above it is lava; the sea stays water.
+#define SEA_LEVEL -6.85f
+#define LAVA_ABOVE (SEA_LEVEL + 1)
+#define MAX_WATER_REFS 196608
 #define FIXED_DT (1.0f / 120.0f)
 // The menu's race broadcast: its pack leader drives BROADCAST_SPEED m/s from
 // BROADCAST_START metres at clock zero.
 #define BROADCAST_SPEED 19.f
 #define BROADCAST_START 170.f
-// Includes the road's cross-width tessellation; indices still fit uint16_t.
-#define MAX_SURFACE_TRIANGLES 65536
-#define MAX_SURFACE_REFS 131072
-#define SURFACE_GRID 32
-#define SURFACE_ORIGIN -128.f
+// Includes the road's cross-width tessellation. Each circuit's triangles and
+// grid references are allocated to fit; these bound what a file may ask for.
+#define MAX_SURFACE_TRIANGLES 262144
+#define MAX_SURFACE_REFS 1048576
+// The largest islands span about 460 m; the grid covers 512 m in 8 m cells.
+#define SURFACE_GRID 64
+#define SURFACE_ORIGIN -256.f
 #define SURFACE_CELL 8.f
 // Ground queries bridge slits between adjacent driving meshes up to this far
 // from a triangle; road and curb edges leave seams several centimetres wide.
@@ -87,9 +94,9 @@ typedef struct {
 #define MAX_RAIL_ARMS 2
 #define MAX_RAIL_LIGHTS 2
 #define MAX_RAIL_VEHICLES 4
-// Harvest Hills and Alpine Rush run trains between two tunnels; Sunshine Coast
-// has a seaside road train on a closed promenade with a stop at each end.
-typedef enum { RAIL_STEAM, RAIL_ROAD_TRAIN, RAIL_ALPINE } RailKind;
+// Most circuits run trains between two tunnels; Sunshine Coast and Jungle Ruins
+// have a road train on a closed promenade with a stop at each end.
+typedef enum { RAIL_STEAM, RAIL_ROAD_TRAIN, RAIL_ALPINE, RAIL_FREIGHT } RailKind;
 typedef struct {
     Vec3 pivot;    // Hinge of the barrier arm
     float dx, dz;  // Horizontal direction of the lowered arm
@@ -117,7 +124,41 @@ typedef struct {
     RailLight lights[MAX_RAIL_LIGHTS];
     int arm_count, light_count;
 } Railway;
+// What sets each circuit apart: its place in the Championship, surface grip,
+// climate, colours and sounds. TRACK_INFO in src/tracks.c lists all ten.
+typedef enum { AMBIENCE_COUNTRY, AMBIENCE_BEACH, AMBIENCE_WINTER, AMBIENCE_DESERT, AMBIENCE_FOREST,
+               AMBIENCE_JUNGLE, AMBIENCE_GARDEN, AMBIENCE_HARBOR, AMBIENCE_MOOR, AMBIENCE_VOLCANO } Ambience;
+typedef enum { VERGE_DIRT, VERGE_SAND, VERGE_SNOW } VergeSound;
 typedef struct {
+    const char *id, *name, *subtitle, *description;
+    int cup;
+    bool night;              // The Championship stage runs at night
+    Color accent, sky;       // Interface accent; horizon and fog colour
+    Vec3 zenith, road;       // Sky overhead; the exported asphalt colour
+    float grip, corner_grip; // Lateral grip and the lateral acceleration limit, m/s²
+    bool slippery;           // Catch-up never raises a rival's corner pace here
+    bool lava;               // Liquid above the sea is lava: shading, no spray, recovery
+    int precipitation;       // WEATHER_RAIN or WEATHER_SNOW (snow or volcanic ash)
+    float wind_share;        // Share of weather spells that are gusts
+    Color dust, flakes;      // Tyre dust; snow or ash flakes
+    Vec3 gust[2];            // Leaves, sand or petals carried by the gusts
+    float dust_rate, clouds, fog;
+    Vec3 water_tint, water_extinction;
+    Ambience ambience;
+    VergeSound verge;
+    RailKind rail;
+    Color livery;            // Body colour of the locomotive and coaches
+    int crossings;           // Bridges where the road passes over itself
+    const char *offroad[3], *weather[2];
+} TrackInfo;
+typedef struct {
+    const char *name;
+    int first, count; // Tracks of the cup, in Championship order
+} CupInfo;
+extern const TrackInfo TRACK_INFO[TRACK_COUNT];
+extern const CupInfo CUPS[CUP_COUNT];
+typedef struct {
+    const TrackInfo *info;
     Guardrail guardrails[MAX_POINTS];
     int guardrail_count;
     Railway rail;
@@ -129,16 +170,17 @@ typedef struct {
     Ramp ramps[MAX_RAMPS];
     float boosts[MAX_BOOSTS]; // Distance along the road, centered in the lane.
     int boost_count;
-    SurfaceTriangle surface[MAX_SURFACE_TRIANGLES];
+    SurfaceTriangle *surface;
     uint32_t surface_cells[SURFACE_GRID * SURFACE_GRID + 1];
-    uint16_t surface_refs[MAX_SURFACE_REFS];
+    uint32_t *surface_refs;
     int surface_count;
-    SurfaceTriangle water[MAX_WATER_TRIANGLES];
+    SurfaceTriangle *water;
     uint32_t water_cells[SURFACE_GRID * SURFACE_GRID + 1];
-    uint16_t water_refs[MAX_WATER_REFS];
+    uint16_t *water_refs;
     int water_count;
     int count, can_count, ramp_count;
     float length, elevation;
+    float extent[4]; // Island bounds: minimum and maximum x, minimum and maximum z
     const char *id, *name, *subtitle, *description;
     Color accent, sky;
 } Track;
@@ -166,7 +208,8 @@ typedef struct {
 enum {
     RAIL_MODEL_STEAM_LOCOMOTIVE, RAIL_MODEL_STEAM_TENDER, RAIL_MODEL_COACH,
     RAIL_MODEL_ALPINE_LOCOMOTIVE, RAIL_MODEL_ALPINE_COACH,
-    RAIL_MODEL_ROAD_TRAIN_TRACTOR, RAIL_MODEL_ROAD_TRAIN_CARRIAGE, RAIL_MODEL_COUNT
+    RAIL_MODEL_ROAD_TRAIN_TRACTOR, RAIL_MODEL_ROAD_TRAIN_CARRIAGE,
+    RAIL_MODEL_DIESEL_LOCOMOTIVE, RAIL_MODEL_CONTAINER_WAGON, RAIL_MODEL_COUNT
 };
 typedef struct {
     // Driver-relative steering: -1 left, +1 right.
@@ -280,9 +323,10 @@ typedef struct {
     float best[TRACK_COUNT];
     int medals[TRACK_COUNT];
     int championship_completed; // Permanent track unlock progress.
-    int championship_stages, championship_medal;
-    bool championship_eliminated;
-    int championship_places[TRACK_COUNT][CAR_COUNT]; // 0 = DNF, otherwise 1..8.
+    // Each cup keeps its own series: stages scored, elimination and best medal.
+    int championship_stages[CUP_COUNT], championship_medal[CUP_COUNT];
+    bool championship_eliminated[CUP_COUNT];
+    int championship_places[TRACK_COUNT][CAR_COUNT]; // By track; 0 = DNF, otherwise 1..8.
     char initials[4];
     bool initials_set;
     unsigned record_serial;
@@ -332,8 +376,17 @@ typedef struct {
 } Game;
 extern const Color CAR_COLORS[6];
 extern const char *CAR_COLOR_NAMES[6];
-extern const bool CHAMPIONSHIP_NIGHT[TRACK_COUNT];
 bool game_load(Game *g);
+void game_free(Game *g);
+/* Allocates a track's ground triangles and grid references (tests build their own). */
+bool track_alloc_surface(Track *t, int triangles, int refs);
+int game_cup(const Game *g);
+int track_cup(int track);
+/* Stage of the selected cup's series, 0-based; the stage count when it is complete. */
+int game_cup_stage(const Game *g, int cup);
+bool game_cup_fresh(const Game *g, int cup);
+void game_select_cup(Game *g, int cup);
+int game_track_index(const char *id);
 void track_place_boosts(Track *t);
 void game_start(Game *g);
 void props_reset(Game *g);
@@ -381,6 +434,7 @@ void car_surface_pose(const Track *t, Vec3 *pos, float yaw, float *pitch, float 
 void profile_load(Profile *p);
 bool profile_save(const Profile *p);
 bool profile_reset(Profile *p);
-int game_tests(void);
+/* Simulation tests on one circuit, or on all of them with -1. */
+int game_tests(int track);
 void *asset_read(const char *name, size_t *size);
 #endif

@@ -707,6 +707,69 @@ verified. This pass does not add mobile-device validation.
 - This pass does not include Android or iOS builds, so neither the
   floating-point probe nor the cost on a phone GPU has been measured on a device.
 
+## Ten tracks in three cups (22 October 2026)
+
+- Seven new tracks join the original three: Canyon Dash, Maple Woods, Jungle
+  Ruins (Pro Cup), Sakura Hills, Harbor Lights, Highland Loch and Volcano Peak
+  (Master Cup). From the Pro Cup on, each lap is longer than the one before
+  (1.20, 1.33, 1.58, 1.67, 1.83, 2.04, 2.47 km); jumps grow from three to five.
+- All 16 CTest entries passed in a Release build without warnings:
+  `track_layouts`, `progression`, `sound`, `props`, `music`, `asset_updates` and
+  one simulation per track (`simulation_country` … `simulation_volcano`, 27–128 s
+  each). The six Blender checks (markings, ground contact, spectators, broadcast,
+  water layout, wildlife) passed on all ten scenes, 60 runs in total.
+- Regenerating the original three tracks with the reworked builder reproduced
+  every file byte for byte, except the spectator hair colours on Sunshine Coast
+  and Alpine Rush: a material cache kept Harvest Hills' colours for later tracks
+  in a full build. Hair materials are now chosen per track, and the shipped
+  crowds are the per-track builds.
+- All 21 shaders, rewritten with the OpenGL ES 3.00 header, pass
+  `glslangValidator`.
+- The opt-in graphics tests, now covering all ten tracks and the Rookie Cup's
+  flow, had only their known failure, "mobile recovery target recovers the
+  car". Night darkens every track; Volcano Peak's black rock goes from 45.7 to
+  24.5 mean luma, the others by 66–77%.
+- On Apple M5 at 2880x1800 (fixed-step benchmark, 900 frames of a race), frame
+  time is 4.9 ms on Harvest Hills and 6.9–7.4 ms on the night races of Jungle
+  Ruins, Harbor Lights and Volcano Peak. Only the selected track's meshes are
+  resident; loading one takes 12–25 ms.
+- End-of-race fuel over the three difficulties averages 31–46% on the new
+  tracks (original tracks 35–41%); no race ends above 58%.
+
+Problems found and fixed while verifying:
+
+- Terrain beside the hillier roads reached 60–70° slopes, so a car leaving the
+  road tumbled. Cuttings and embankments are now limited to about 30°; free
+  off-road fixtures also skip ground too steep to park on, such as the banks
+  between the levels of Volcano Peak's spiral.
+- A tunnel hill stood beside a bridge approach (Jungle Ruins) and a portal 6 m
+  from a curving road (Sakura Hills). Crossing sites now keep tunnel hills clear
+  of every bridge deck and portals 12 m from every road, the crossing road
+  included.
+- Bridge approaches reached a 53% grade on Volcano Peak. Natural grades are
+  limited to 11% and approaches lengthen with the lift; the steepest new road is
+  now 34% (the original tracks reach 37%).
+- Fixed lap fractions ran the four-lane section through 12–18 m hairpins,
+  creasing the road surface by up to 8.6°. Each later track now places it on its
+  longest stretch without tight or climbing bends and away from bridge
+  approaches; Maple Woods and Sakura Hills, like Alpine Rush, have a compact one.
+- Three streams ended in dry hollows and the jungle river ran only 47 m. Maple
+  Woods and Sakura Hills now end in ponds, and the springs of Canyon Dash, Jungle
+  Ruins and Harbor Lights moved so their streams reach the sea (81–98 m) clear
+  of parallel roads. Narrow channels get a centre vertex per water cell and finer
+  ground, which closed gaps in the exported water.
+- The whole volcano water mesh was lava, the sea included. Only liquid above sea
+  level is lava now; its night has a warm ember glow instead of near-black
+  ground.
+- The level-crossing test drove straight off curved approaches, a false
+  crossing appeared where the lap closes, and one off-road fixture sat beside a
+  raised deck that railings make unreachable. The tests now steer, skip the
+  closing segment and skip fixtures beside raised decks.
+- A safety-net stake stood 1.6 m from another level of the volcano road: stakes
+  are now checked at the height where they stand.
+- Four-card rows on mobile overlapped subtitles with the track maps; subtitles
+  now share one fitted size.
+
 ## Still required before public release
 
 - Playtesting with people on physical phones, particularly steering feel,

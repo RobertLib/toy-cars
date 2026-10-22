@@ -37,6 +37,24 @@ ambience-beach.ogg    jackmichaelking, Gentle ocean waves birdsong and gull.WAV
                       https://freesound.org/s/518637/
 ambience-winter.ogg   xkeril, Morning in swiss mountain
                       https://freesound.org/s/757868/
+ambience-desert.ogg   fran_marenco, Wind in the desert countryside 1
+                      https://freesound.org/s/796193/
+ambience-forest.ogg   cribbler, Wind and crows
+                      https://freesound.org/s/734711/
+ambience-jungle.ogg   felix.blume, Night Frogs and Crickets in the Forest -Trésor
+                      Nature Reserve, French Guiana
+                      https://freesound.org/s/868734/
+ambience-garden.ogg   tomasloos, Birds, wind through bamboo and a little
+                      waterstream - Japan - Binaural
+                      https://freesound.org/s/843520/
+                      with tomasloos, Bridge over stream - Japan - Binaural
+                      https://freesound.org/s/843511/
+ambience-harbor.ogg   Kinoton, Genaral Habour Ambience
+                      https://freesound.org/s/561815/
+ambience-moor.ogg     Kinoton, Skylarks Over Windy Dunes
+                      https://freesound.org/s/635912/
+ambience-volcano.ogg  felix.blume, Volcano Mount Yasur, Tanna Island
+                      https://freesound.org/s/661147/
 ambience-night.ogg    sengjinn, AMBIENCE NIGHT FIELD CRICKET 01.wav
                       https://freesound.org/s/175020/
 rain.ogg              speakwithanimals, Rain Slowly Passing TREATED
@@ -90,4 +108,4 @@ ui-move.ogg           Kenney, UI Audio: click1
 ui-select.ogg         Kenney, UI Audio: switch7
                       https://kenney.nl/assets/ui-audio
 
-Retrieved 21 October 2026.
+Retrieved 21 October 2026; the desert to volcano ambience beds 22 October 2026.

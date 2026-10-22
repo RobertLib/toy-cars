@@ -8,6 +8,8 @@ import bpy, math, random, struct, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hydrology import Watershed
 from railway import Railway, build_vehicles
+from themes import THEMES, NAMES, spline_point
+import biomes
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
@@ -92,13 +94,15 @@ def road_marking(name,surface,lap_length,start,end,left,right,material,
                 faces.append((index,index+1,index+2))
     if geometry is None:return mesh(name,vertices,faces,material)
 
-def tire_marks(surface,path,length,road,theme):
+def tire_marks(surface,path,length,road,T):
     """Permanent paired skid marks, clipped onto the banked road below its paint."""
+    theme=T.index
     rng=random.Random(928+theme)
     geometries=[([],[]) for _ in range(4)]
     # A few isolated marks on straights, with repeated braking/drifting lines
     # concentrated around the strongest changes of heading.
-    starts=[8.]+[length*(i+.35)/12+rng.uniform(-5,5) for i in range(1,12)]
+    spans=12 if T.legacy else max(12,int(round(12*length/1000)))
+    starts=[8.]+[length*(i+.35)/spans+rng.uniform(-5,5) for i in range(1,spans)]
     runs=[(start,rng.uniform(8,21),rng.choice([-1,1])*rng.uniform(1.4,2.7),
            rng.uniform(-.65,.65)) for start in starts]
     bends=[]
@@ -116,7 +120,7 @@ def tire_marks(surface,path,length,road,theme):
         for _ in range(rng.randint(6,9)):
             runs.append((distance-rng.uniform(10,18),rng.uniform(19,30),
                          inside*rng.uniform(.5,1.9),inside*rng.uniform(.3,1.2)))
-        if len(chosen)==7:break
+        if len(chosen)==(7 if T.legacy else max(7,int(round(7*length/1000)))):break
     for run,(start,span,lane,drift) in enumerate(runs):
         # Keep the finish seam clear and give overlaps distinct surface layers.
         end=min(length-.5,start+span)
@@ -136,7 +140,7 @@ def tire_marks(surface,path,length,road,theme):
                 center=offset(a)+wheel
                 road_marking('Tire marks',nearby,length,start+a*span,start+b*span,
                              center-width,center+width,None,
-                             lane_shift=offset(b)-offset(a),height=.016+run*.00006,
+                             lane_shift=offset(b)-offset(a),height=.016+run%150*.00006,
                              geometry=geometries[shade])
     for shade,(vertices,faces) in enumerate(geometries):
         strength=.07+shade*.05
@@ -276,47 +280,10 @@ def build_helicopter():
     for o in tail:o.location+=Vector(xyz((.25,.74,-4.02)))
     save('helicopter')
 
-# Independent authored layouts: country infield weave, three coastal lobes,
-# and alpine switchbacks crossed by a diagonal return. No shared affine template.
-TRACK_KNOTS = [
-    # Harvest Hills: outer loop and infield weave.
-    [
-        (-62, -81), (-18, -81), (43, -76), (80, -50), (88, -5),
-        (77, 45), (46, 78), (1, 84), (-43, 67), (-78, 39),
-        (-83, 2), (-65, -22), (-29, -10), (10, 19), (44, 39),
-        (61, 17), (47, -10), (12, -24), (-22, -38), (-43, -15),
-        (-31, 17), (-1, 37), (19, 13), (12, -12), (-18, -50),
-        (-60, -42), (-80, -63),
-    ],
-    # Sunshine Coast: three broad lobes around open bays.
-    [
-        (100.8, 0), (87.02, 38.75), (53.98, 59.92), (19.38, 59.58), (-5.04, 47.82),
-        (-21.28, 36.85), (-38.98, 28.34), (-61.26, 12.99), (-78.96, -16.8), (-77.06, -56.0),
-        (-50.4, -87.25), (-9.97, -94.75), (24.98, -76.72), (41.89, -46.59), (44.02, -19.6),
-        (42.56, 0), (44.02, 19.6), (41.89, 46.59), (24.98, 76.72), (-9.97, 94.75),
-        (-50.4, 87.25), (-77.06, 56.0), (-78.96, 16.8), (-61.26, -12.99), (-38.98, -28.34),
-        (-21.28, -36.85), (-5.04, -47.82), (19.38, -59.58), (53.98, -59.92), (87.02, -38.75),
-    ],
-    # Alpine Rush: stacked switchbacks and a diagonal return.
-    [
-        (-80, -80), (-40, -80), (30, -75), (80, -65), (82, -35),
-        (50, -20), (-45, -20), (-75, 0), (-62, 27), (-20, 30),
-        (55, 30), (80, 50), (65, 78), (20, 84), (-35, 65),
-        (-55, 35), (-35, 0), (-10, -30), (-15, -57), (-48, -60),
-        (-78, -45), (-95, -58),
-    ],
-]
-def spline(t,theme):
-    knots=TRACK_KNOTS[theme]
-    q=t*len(knots);i=int(q)%len(knots);u=q-int(q)
-    p=[knots[(i+j)%len(knots)] for j in [-1,0,1,2]]
-    v=[.5*((2*p[1][a])+(-p[0][a]+p[2][a])*u+(2*p[0][a]-5*p[1][a]+4*p[2][a]-p[3][a])*u*u+(-p[0][a]+3*p[1][a]-3*p[2][a]+p[3][a])*u*u*u) for a in [0,1]]
-    return v
-
-def terrain(x,z,theme):
-    if theme==0:return 4.0+4.4*sin(x*.025+.8)*cos(z*.029)+2.1*sin(z*.055+x*.02)
-    if theme==1:return 3.5+3.4*sin(x*.027)*cos(z*.031)+1.8*sin(z*.038+.6)
-    return 8+7.2*sin(x*.023+.5)*cos(z*.029)+3.3*cos(z*.041+x*.014)
+# Layouts, terrain and palettes live in themes.py: the country infield weave,
+# three coastal lobes, alpine switchbacks and the seven later circuits.
+def spline(t,T):
+    return spline_point(T.knots,t)
 
 def tree(x,y,z,s,theme):
     before=set(bpy.context.scene.objects)
@@ -361,7 +328,8 @@ def barn(x,y,z,yaw,theme):
         cone('Grain silo',(x+6,y+4,z-2),2,2,8,mat('Silo silver',(.58,.64,.60)),16)
         cone('Silo lid',(x+6,y+8.8,z-2),2.2,0,1.6,roof,16)
 
-def spectator(position,yaw,theme,kind,pose,rng,ground_height,group):
+def spectator(position,yaw,T,kind,pose,rng,ground_height,group):
+    style=T.outfit
     """One low-poly, vertex-colored toy figure, baked into the track batch."""
     scale={'child':.70,'adult':1.,'tall':1.12,'broad':1.02,'senior':.96}[kind]
     width=1.22 if kind=='broad' else 1.
@@ -401,13 +369,14 @@ def spectator(position,yaw,theme,kind,pose,rng,ground_height,group):
              [(j*8+k,(j+1)*8+k,(j+1)*8+(k+1)%8,j*8+(k+1)%8) for j in range(3) for k in range(8)],material)
     # Each shoe follows the actual triangulated island, including hillside groups.
     for side in [-1,1]:
-        foot=point((side*.18,0,.04));floor=(ground_height(foot[0],foot[2])-position[1])/scale
+        # Later circuits seat the sole at its centre, which matters on steep ground.
+        foot=point((side*.18,0,.04 if T.legacy else .07));floor=(ground_height(foot[0],foot[2])-position[1])/scale
         block((side*.18,floor+.09,.07),(.23,.18,.40),rubber)
         knee=(side*.18,.55,.015);hip=(side*.15,.95,0)
-        limb((side*.18,floor+.17,.03),knee,.095,skin if theme==1 else trousers)
+        limb((side*.18,floor+.17,.03),knee,.095,skin if style in ('beach','tropic') else trousers)
         limb(knee,hip,.12,trousers)
     block((0,1.23,0),(.58*width,.64,.34),shirt)
-    if theme==2:
+    if style=='winter':
         block((0,1.47,.02),(.65*width,.13,.40),orange)
         block((.16,1.27,.20),(.12,.35,.055),orange)
     limb((0,1.50,0),(0,1.64,0),.105,skin)
@@ -415,9 +384,9 @@ def spectator(position,yaw,theme,kind,pose,rng,ground_height,group):
     block((0,2.015,-.025),(.40,.13,.34),hair)
     # A nose and dark glasses make the direction of attention readable.
     block((0,1.80,.245),(.09,.10,.09),skin)
-    if theme==1 or pose=='camera':block((0,1.88,.225),(.37,.065,.045),dark)
+    if style in ('beach','tropic','desert') or pose=='camera':block((0,1.88,.225),(.37,.065,.045),dark)
     hat=rng.randrange(3)
-    if theme==2:
+    if style=='winter':
         head((0,2.035,0),(.24,.16,.24),shirt)
         block((0,2.19,0),(.13,.13,.13),cream)
     elif hat==0:
@@ -435,7 +404,7 @@ def spectator(position,yaw,theme,kind,pose,rng,ground_height,group):
         body_part=1 if side<0 else 2
         shoulder=(side*.30*width,1.45,0)
         limb(shoulder,elbow,.105,shirt)
-        limb(elbow,hand,.08,shirt if theme==2 else skin)
+        limb(elbow,hand,.08,shirt if style=='winter' else skin)
         block(hand,(.16,.18,.16),skin)
     if pose=='camera':
         body_part=0
@@ -457,8 +426,11 @@ def spectator(position,yaw,theme,kind,pose,rng,ground_height,group):
     obj['spectator_parts']=parts;obj['spectator_scale']=scale;obj['spectator_width']=width
     return obj
 
-def build_spectators(path,theme,ground_height,obstacles,water_sample):
-    rng=random.Random(920+theme)
+def build_spectators(path,T,ground_height,obstacles,water_sample,sites):
+    theme=T.index;rng=random.Random(920+theme)
+    # Hair materials are named by body type; drop the previous circuit's so a
+    # full build and a single-track build choose the same colors.
+    for key in [key for key in materials if key.startswith('Spectator hair')]:del materials[key]
     bpy.context.view_layer.update()
     bounds=[]
     for obj in obstacles:
@@ -468,7 +440,7 @@ def build_spectators(path,theme,ground_height,obstacles,water_sample):
                        min(p[2] for p in corners)-.85,max(p[2] for p in corners)+.85))
     occupied=[];counts=[]
     # Unevenly spaced viewing spots, on both sides and around all three jumps.
-    for group,idx in enumerate([8,58,95,116,170,218,282,309,360,405,470,503,550,601,628]):
+    for group,idx in enumerate(sites):
         side=-1 if group%3==0 else 1;count=0;wanted=[7,4,6,5,3,8][group%6]
         for attempt in range(160):
             if count==wanted:break
@@ -478,48 +450,55 @@ def build_spectators(path,theme,ground_height,obstacles,water_sample):
             p=path[(idx+int(rng.uniform(-spread,spread)))%len(path)]
             lane=side*(-1 if attempt>=120 else 1)*(p[5]+rng.uniform(3.2,6.6))
             x,z=p[0]+p[4]*lane,p[2]-p[3]*lane
-            if (x/124)**2+(z/122)**2>=1:continue
+            if not T.within(x,z,124,122):continue
             if water_sample(x,z)[0]>-2:continue
             if any(a<x<b and c<z<d for a,b,c,d in bounds):continue
             if any(math.hypot(x-a,z-b)<1.65 for a,b in occupied):continue
             near=min(path,key=lambda q:(q[0]-x)**2+(q[2]-z)**2)
             if math.hypot(near[0]-x,near[2]-z)<near[5]+2.6:continue
+            # Later circuits widen and narrow their roads and pass other levels
+            # nearby: keep clear of every station.
+            if not T.legacy and any(math.hypot(q[0]-x,q[2]-z)<q[5]+2.6 for q in path):continue
             y=ground_height(x,z)
             if max(abs(ground_height(x+dx,z+dz)-y) for dx,dz in [(-.4,0),(.4,0),(0,-.4),(0,.4)])>.24:continue
             yaw=math.atan2(near[0]-x,near[2]-z)+rng.uniform(-.18,.18)
             kind=['adult','child','broad','senior','tall'][(count+group)%5]
             pose=['flag','cheer','wave','camera','clap'][(count+group*2)%5]
-            spectator((x,y,z),yaw,theme,kind,pose,rng,ground_height,group)
+            spectator((x,y,z),yaw,T,kind,pose,rng,ground_height,group)
             occupied.append((x,z));count+=1
         assert count>=3,('Too little room for spectator group',theme,group,count)
         counts.append(count)
     print('SPECTATORS',theme,sum(counts),'in',len(counts),'groups',counts,flush=True)
 
-def color_waterbed(island,sample,theme,grass):
+def color_waterbed(island,sample,T,grass):
     # Interpolated vertex colors keep the shoreline organic even on coarse
     # terrain triangles; assigning whole dark faces makes a saw-toothed bank.
+    # Later themes can also tint the ground itself, such as sandstone strata.
     old=island.data.color_attributes.get('Riverbed')
     if old:island.data.color_attributes.remove(old)
     colors=island.data.color_attributes.new(name='Riverbed',type='FLOAT_COLOR',domain='POINT')
-    bed=[(.43,.44,.33),(.63,.56,.39),(.43,.53,.55)][theme]
+    bed=T.colors['bed']
+    tint=getattr(T,'tint',None)
     for i,vertex in enumerate(island.data.vertices):
         x,y,z=eng(vertex.co);wet,level,_=sample(x,z)
+        base=tint(x,y,z) if tint else grass
         blend=max(0,min(1,(wet+1.5)/3))*max(0,min(1,(level+.6-y)/.8))
         blend=blend*blend*(3-2*blend)
-        colors.data[i].color=(*(a+(b-a)*blend for a,b in zip(grass,bed)),1)
+        colors.data[i].color=(*(a+(b-a)*blend for a,b in zip(base,bed)),1)
 
-def build_water(name,theme,sample,layout,ground_height,road_bvh):
+def build_water(T,sample,layout,ground_height,road_bvh):
+    name=T.key;W=T.water
     vertices=[];faces=[];payload=[]
     def vertex(wx,wz):
         edge,level,flow=sample(wx,wz)
-        if (wx/128)**2+(wz/126)**2<.99:
+        if T.within(wx,wz,128*.99**.5,126*.99**.5):
             bed=ground_height(wx,wz)
             hit,_,_,_=road_bvh.ray_cast(Vector((wx,-wz,level+2)),Vector((0,0,-1)))
             if hit is not None:bed=max(bed,hit.z+.035)
         else:bed=-8
         return (wx,level,wz,min(edge,level-bed),flow[0],flow[1])
     def emit(tri,ocean=False):
-        if theme==1 and not ocean and max(q[1] for q in tri)<=-6.849:return
+        if T.sea and not ocean and max(q[1] for q in tri)<=-6.849:return
         # Clip at the actual bank/road intersection, avoiding square shorelines.
         poly=[]
         for a,b in zip(tri[-1:]+tri[:-1],tri):
@@ -539,32 +518,41 @@ def build_water(name,theme,sample,layout,ground_height,road_bvh):
         for i in range(math.floor(x0/step),math.ceil(x1/step)):
             x,z=i*step,j*step
             a,b,c,d=vertex(x,z),vertex(x+step,z),vertex(x+step,z+step),vertex(x,z+step)
-            emit([a,c,b]);emit([a,d,c])
-    if theme==1:
+            if T.legacy:
+                emit([a,c,b]);emit([a,d,c]);continue
+            # A fan round the cell's centre keeps channels narrower than a cell.
+            e=vertex(x+step/2,z+step/2)
+            emit([a,e,b]);emit([b,e,c]);emit([c,e,d]);emit([d,e,a])
+    if T.sea:
         # Ocean replaces the old opaque turquoise plinth. Its centre is hidden
         # by the island; the inner edge extends under the carved river mouth.
-        for i in range(192):
-            a=i*2*pi/192;b=(i+1)*2*pi/192
-            q=[(cos(t)*r,-6.85,sin(t)*r,3.,.18,.08) for t,r in [(a,118),(a,145),(b,145),(b,118)]]
+        segments=192 if T.legacy else 288
+        for i in range(segments):
+            a=i*2*pi/segments;b=(i+1)*2*pi/segments
+            def radii(t):
+                if T.legacy:return 118,145
+                edge=T.edge_radius(t);return edge-12,edge+26
+            q=[(cos(t)*r,-6.85,sin(t)*r,3.,.18,.08) for t,r in
+               [(a,radii(a)[0]),(a,radii(a)[1]),(b,radii(b)[1]),(b,radii(b)[0])]]
             emit([q[0],q[2],q[1]],True);emit([q[0],q[3],q[2]],True)
-    obj=mesh('Watershed — spring to basin' if theme==0 else 'Watershed — downhill outlet',vertices,faces,mat('Water preview',(.12,.36,.33)))
+    obj=mesh(W['title'],vertices,faces,mat('Water preview',(.12,.36,.33)))
     obj['water']=True
     obj['water_route']=[v for p in layout.route for v in p]
     obj['water_source']=layout.source
-    obj['water_destination']=['sheltered pond with sediment shelves','tidal estuary','rocky meltwater outlet'][theme]
-    obj['water_character']=['meadow meanders','sand-bar creek','confined alpine channel'][theme]
+    obj['water_destination']=W['destination']
+    obj['water_character']=W['character']
     if layout.lake_level is not None:obj['water_lake_level']=layout.lake_level
     with open(os.path.join(ROOT,'assets/tracks',name+'-water.tcm'),'wb') as f:
         f.write(b'TCM1');f.write(struct.pack('<I',len(payload)//10));f.write(struct.pack('<%sf'%len(payload),*payload))
     print('WATER',name,len(payload)//30,'triangles',flush=True)
 
-def refine_water_ground(vs,fs,sample):
-    for _ in range(2):
+def refine_water_ground(vs,fs,sample,limits=(1.35,1.35)):
+    for limit in limits:
         edges=set()
         for face in fs:
             for a,b in zip(face,face[1:]+face[:1]):
                 p,q=vs[a],vs[b]
-                if math.hypot(p[0]-q[0],p[2]-q[2])<=1.35:continue
+                if math.hypot(p[0]-q[0],p[2]-q[2])<=limit:continue
                 probes=[sample(p[0],p[2]),sample(q[0],q[2]),
                         sample((p[0]+q[0])/2,(p[2]+q[2])/2)]
                 # Refine the narrow stream and shore, not the flat pond floor.
@@ -591,11 +579,9 @@ def refine_water_ground(vs,fs,sample):
 
 # Entry taper, four-lane start/end, exit taper. Keep the broad carriageway on
 # open perimeter sections, away from the fords and the infield hairpins.
-FOUR_LANE_SECTIONS=[(.055,.09,.205,.24),(.06,.095,.25,.285),(.395,.425,.45,.475)]
-
-def road_half_width(t,theme):
-    entry,start,end,exit=FOUR_LANE_SECTIONS[theme]
-    base=5.5 if theme==2 else 5.2
+def road_half_width(t,T):
+    entry,start,end,exit=T.four_lane
+    base=T.half
     if t<=entry or t>=exit:return base
     if start<=t<=end:return base*2
     u=(t-entry)/(start-entry) if t<start else (exit-t)/(exit-end)
@@ -606,11 +592,107 @@ def road_half_width(t,theme):
     else:blend=u-ease/2
     return base*(1+blend/(1-ease))
 
-def grade_fords(path,banks,watershed):
+def passing_section(xz,heights,total,minimum):
+    """The four-lane section of a later circuit, as lap fractions (entry,
+    full, end, exit): the longest stretch away from the start line and the
+    bridge approaches whose bends stay wider than 40 m (down to 20 m on the
+    twistiest layouts) and climb gently, at most a quarter of the lap. Fixed fractions would
+    run the wide road through hairpins."""
+    n=len(xz);step=total/n;k=max(2,int(round(5/step)))
+    def heading(i):
+        a,b=xz[(i-1)%n],xz[(i+1)%n];return math.atan2(b[0]-a[0],b[1]-a[1])
+    turns=[abs((heading((i+k)%n)-heading((i-k)%n)+pi)%(2*pi)-pi)/(2*k*step) for i in range(n)]
+    grades=[abs(heights[(i+k)%n]-heights[(i-k)%n])/(2*k*step) for i in range(n)]
+    # Bridge approaches climb: a wide road there would twist on its bends.
+    crossings=[]
+    for i in range(n):
+        (ax,az),(bx,bz)=xz[i],xz[(i+1)%n]
+        for j in range(i+3,n-(i==0)):
+            (cx,cz),(ex,ez)=xz[j],xz[(j+1)%n]
+            det=(bx-ax)*(ez-cz)-(bz-az)*(ex-cx)
+            if abs(det)<1e-9:continue
+            u=((cx-ax)*(ez-cz)-(cz-az)*(ex-cx))/det;v=((cx-ax)*(bz-az)-(cz-az)*(bx-ax))/det
+            if 0<u<1 and 0<v<1:crossings+=[i,j]
+    def clear(i):
+        return all(min(abs(i-c),n-abs(i-c))*step>110 for c in crossings)
+    for radius in (40,30,25,20):
+        # A bend that also climbs twists a wide carriageway: at 40 m radius
+        # it may climb 14%, at 20 m only 7%.
+        gentle=[turns[i]<1/radius and turns[i]*grades[i]<.0035 and 50<i*step<total-50 and clear(i)
+                for i in range(n)]
+        best=(0,0);i=0
+        while i<n:
+            if not gentle[i]:i+=1;continue
+            j=i
+            while j+1<n and gentle[j+1]:j+=1
+            if j-i>best[1]-best[0]:best=(i,j)
+            i=j+1
+        first,last=best[0]*step,min(best[1]*step,best[0]*step+total*.25)
+        if last-first>=70+minimum:break
+    # Tapers of 35 m, shortened (to 20 m at most) to keep the theme's minimum
+    # at full width.
+    taper=min(35.,(last-first-minimum)/2)
+    assert taper>=20,('No straight for the passing section',last-first)
+    return (first/total,(first+taper)/total,(last-taper)/total,last/total)
+
+def centreline(T):
+    """Stations (x, y, z, dx, dz, half width, distance) before grading.
+
+    The first circuits place their 640 stations evenly in the spline parameter
+    and follow the terrain directly. Later circuits space stations evenly along
+    the road and smooth the profile, the way a road is cut and filled."""
+    path=[];distance=0
+    if T.legacy:
+        N=T.stations
+        for i in range(N):
+            t=i/N;x,z=spline(t,T);x2,z2=spline((t+.0001)%1,T);d=Vector((x2-x,0,z2-z)).normalized()
+            y=T.terrain(x,z)+.15
+            if i:distance+=Vector((x-path[-1][0],y-path[-1][1],z-path[-1][2])).length
+            path.append((x,y,z,d.x,d.z,road_half_width(t,T),distance))
+        return path
+    dense=[spline(i/(len(T.knots)*40),T) for i in range(len(T.knots)*40)]
+    lengths=[0.]
+    for a,b in zip(dense,dense[1:]+dense[:1]):lengths.append(lengths[-1]+math.dist(a,b))
+    total=lengths[-1];N=T.stations or int(round(total/1.6))
+    xz=[];k=0
+    for i in range(N):
+        s=total*i/N
+        while lengths[k+1]<s:k+=1
+        a,b=dense[k],dense[(k+1)%len(dense)];f=(s-lengths[k])/max(1e-9,lengths[k+1]-lengths[k])
+        xz.append((a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f))
+    raw=[T.terrain(x,z) for x,z in xz]
+    # A circular Gaussian over the stations removes bumps a car would launch off.
+    sigma=T.smooth/(total/N);reach=int(sigma*3)+1
+    weights=[math.exp(-.5*(k/sigma)**2) for k in range(-reach,reach+1)]
+    heights=[sum(w*raw[(i+k)%N] for k,w in zip(range(-reach,reach+1),weights))/sum(weights) for i in range(N)]
+    # Cut and fill keep every climb within the theme's grade: each pair of
+    # neighbours that is too steep moves symmetrically towards the limit.
+    limit=T.max_grade*total/N
+    for _ in range(4000):
+        worst=0.
+        for i in range(N):
+            j=(i+1)%N;excess=abs(heights[j]-heights[i])-limit
+            if excess>0:
+                shift=math.copysign(excess*.5,heights[j]-heights[i])
+                heights[i]+=shift;heights[j]-=shift;worst=max(worst,excess)
+        if worst<1e-4:break
+    # Round off the corners where a climb meets its limit; averaging keeps it.
+    sigma=5/(total/N);reach=int(sigma*3)+1
+    weights=[math.exp(-.5*(k/sigma)**2) for k in range(-reach,reach+1)]
+    heights=[sum(w*heights[(i+k)%N] for k,w in zip(range(-reach,reach+1),weights))/sum(weights) for i in range(N)]
+    T.four_lane=passing_section(xz,heights,total,T.passing)
+    for i in range(N):
+        (x,z),(x2,z2)=xz[i],xz[(i+1)%N];(x0,z0)=xz[i-1]
+        d=Vector((x2-x0,0,z2-z0)).normalized();y=heights[i]+.15
+        if i:distance+=Vector((x-path[-1][0],y-path[-1][1],z-path[-1][2])).length
+        path.append((x,y,z,d.x,d.z,road_half_width(i/N,T),distance))
+    return path
+
+def grade_fords(path,banks,watershed,ramps):
     # Only a stream actually crossing the pavement creates a ford. Proximity
     # to a pond or a bank must not carve independent holes into either edge.
     wet=[]
-    bridge_lift,_=grade_bridges(path.copy())
+    bridge_lift,_=grade_bridges(path.copy(),watershed.T.legacy)
     for i,p in enumerate(path):
         if bridge_lift[i]>.05:continue
         steps=math.ceil(2*p[5]/.4)
@@ -637,7 +719,7 @@ def grade_fords(path,banks,watershed):
         start=path[group[0][0]][6]-2;end=path[group[-1][0]][6]+2
         # Finish grading before a jump's footprint; otherwise the approach
         # steepens under its fixed wedge and exposes a vertical entry lip.
-        ramp_distances=[path[i][6] for i in (99,296,486)]
+        ramp_distances=[path[i][6] for i,_ in ramps]
         approach=min([28.]+[max(8.,start-s-6.) for s in ramp_distances if s<start])
         departure=min([28.]+[max(8.,s-end-6.) for s in ramp_distances if s>end])
         for i,p in enumerate(path):
@@ -657,8 +739,10 @@ def grade_fords(path,banks,watershed):
         path[i]=(*p[:6],distance)
     return distance+math.dist(path[-1][:3],path[0][:3])
 
-def grade_bridges(path):
-    """Raise the earlier branch at each crossing, with smooth 55 m approaches."""
+def grade_bridges(path,legacy=True):
+    """Raise the earlier branch at each crossing, with smooth 55 m approaches.
+    Later circuits lengthen the approaches with the lift, keeping its own
+    grade below about 24%."""
     n=len(path);crossings=[]
     for i,a in enumerate(path):
         b=path[(i+1)%n];dx,dz=b[0]-a[0],b[2]-a[2]
@@ -672,11 +756,12 @@ def grade_bridges(path):
     assert crossings, "Each circuit needs a real bridge crossing"
     lift=[0.]*n
     rise=max(9.,max(path[lower][1]-path[upper][1]+9. for upper,lower in crossings))
+    approach=55. if legacy else max(55.,rise*1.875/.24)
     for upper,lower in crossings:
         # A broad level span clears the entire lower carriageway, including verges.
         start=path[upper][6]-24;end=path[upper][6]+24
         for i,p in enumerate(path):
-            u=max(0.,1-max(start-p[6],p[6]-end,0)/55)
+            u=max(0.,1-max(start-p[6],p[6]-end,0)/approach)
             blend=u*u*u*(10-15*u+6*u*u)
             lift[i]+= (rise-lift[i])*blend
     distance=0.
@@ -686,26 +771,194 @@ def grade_bridges(path):
         path[i]=(*q,distance)
     return lift,distance+math.dist(path[-1][:3],path[0][:3])
 
-def build_track(theme,name):
+def island_grid(T):
+    """Flat terrain grid before grading: vertices, triangles and the outline.
+
+    The first circuits use a polar grid of 40 rings and 192 spokes. Later
+    islands follow their superellipse outline with rings about 3.4 m apart,
+    and each ring has as many vertices as its circumference needs."""
+    if T.legacy:
+        vs=[(0,0,0)];rings=40;slices=192
+        for r in range(1,rings+1):
+            for j in range(slices):
+                a=j*2*pi/slices;rad=r/rings
+                vs.append((cos(a)*128*rad,0,sin(a)*126*rad))
+        fs=[(0,1+(j+1)%slices,1+j) for j in range(slices)]
+        for r in range(1,rings):
+            for j in range(slices):
+                a=1+(r-1)*slices+j;b=1+(r-1)*slices+(j+1)%slices;c=1+r*slices+(j+1)%slices;d=1+r*slices+j
+                fs.extend([(a,b,c),(a,c,d)])
+        outline=[(cos(j*2*pi/192)*128,sin(j*2*pi/192)*126) for j in range(192)]
+        return vs,fs,outline
+    big=max(T.radius);rings=int(round(big/3.4))
+    vs=[(0,0,0)];ring_start=[0];ring_count=[1]
+    for r in range(1,rings+1):
+        count=max(8,int(round(2*pi*big*r/rings/4.6)))
+        ring_start.append(len(vs));ring_count.append(count)
+        for j in range(count):
+            a=j*2*pi/count;rad=T.edge_radius(a)*r/rings
+            vs.append((cos(a)*rad,0,sin(a)*rad))
+    fs=[]
+    for r in range(1,rings+1):
+        inner,outer=ring_start[r-1],ring_start[r];ni,no=ring_count[r-1],ring_count[r]
+        if r==1:
+            fs.extend((0,outer+(j+1)%no,outer+j) for j in range(no));continue
+        # Zip two rings of different counts together by angle.
+        i=j=0
+        while i<ni or j<no:
+            ai=(i+1)/ni;aj=(j+1)/no
+            if j<no and (i>=ni or aj<=ai):
+                fs.append((inner+i%ni,outer+(j+1)%no,outer+j));j+=1
+            else:
+                fs.append((inner+i%ni,inner+(i+1)%ni,outer+j%no));i+=1
+    outline=[(vs[ring_start[rings]+j][0],vs[ring_start[rings]+j][2]) for j in range(ring_count[rings])]
+    return vs,fs,outline
+
+def crossing_lift(path,legacy=True):
+    """Bridge lift of each station, from the horizontal layout alone."""
+    return grade_bridges([p[:6]+(p[6],) for p in path],legacy)[0]
+
+def straightness(path,i,before,after):
+    """Heading change and vertical curvature around station i, lower is straighter."""
+    n=len(path);step=path[1][6]-path[0][6]
+    a,b=int(before/step),int(after/step)
+    turn=0.;h=None
+    for k in range(-a,b+1,2):
+        p=path[(i+k)%n];q=path[(i+k+2)%n]
+        heading=math.atan2(q[0]-p[0],q[2]-p[2])
+        if h is not None:turn+=abs((heading-h+pi)%(2*pi)-pi)
+        h=heading
+    bump=sum(abs(path[(i+k-4)%n][1]-2*path[(i+k)%n][1]+path[(i+k+4)%n][1]) for k in range(-a,b+1,4))
+    return turn+bump*.4
+
+def spread_sites(T,path,count,phase,avoid,before,after,gap,keep_clear=(),open_road=False,
+                 start=60,end=40,span=(0.,1.)):
+    """Stations spread evenly over a share of the lap (all of it by default),
+    each on the straightest nearby stretch."""
+    n=len(path);length=path[-1][6];step=length/n
+    lift=crossing_lift(path,T.legacy)
+    rail=T.rail_station(path)
+    chosen=[]
+    def site(target,window):
+        best=None
+        for i in range(n):
+            s=path[i][6]
+            off=abs(s-target);off=min(off,length-off)
+            if off>length*(span[1]-span[0])*window/count:continue
+            if s<start or s>length-end:continue
+            if not open_road and max(lift[(i+k)%n] for k in range(-int(15/step),int(30/step)+1,2))>.05:continue
+            rail_gap=abs(s-path[rail][6]);rail_gap=min(rail_gap,length-rail_gap)
+            if rail_gap<avoid:continue
+            if not open_road and path[i][5]>T.half+.01:continue
+            if any(min(abs(s-c),length-abs(s-c))<gap for c in chosen):continue
+            if any(min(abs(s-c),length-abs(s-c))<35 for c in keep_clear):continue
+            score=straightness(path,i,before,after)+off/length*2
+            if best is None or score<best[0]:best=(score,i,s)
+        return best
+    for j in range(count):
+        target=length*(span[0]+(span[1]-span[0])*(((j+phase)/count)%1))
+        # Prefer a site close to the even spacing; widen only if none is clear.
+        best=site(target,.2) or site(target,.5) or site(target,1.)
+        assert best,('No site for a ramp or pickup',T.key,j)
+        chosen.append(best[2])
+    return sorted(int(round(path_index)) for path_index in
+                  (min(range(n),key=lambda i:abs(path[i][6]-c)) for c in chosen))
+
+def pick_rail_site(T,path):
+    """The straightest station near the authored share of the lap whose line,
+    tunnels included, stays clear of every other part of the road. Wider
+    searches and other crossing angles are tried if the first finds nothing."""
+    n=len(path);length=path[-1][6];step=length/n
+    lift=crossing_lift(path,T.legacy)
+    site=T.rail;target=site['fraction']*length
+    tunnel=0 if site['kind']=='road' else 14
+    coarse=path[::3]
+    # Tunnel hills ease down beside graded roads but not beside bridge decks,
+    # so their whole dome must keep clear of every raised approach.
+    decks=[q for q,l in zip(coarse,lift[::3]) if l>.05]
+    domes=[] if site['kind']=='road' else [
+        (side*(site['after'] if side>0 else site['before'])+side*k,d)
+        for side in (-1,1) for k in range(-11,28,3) for d in (-14,-7,0,7,14)]
+    def clear_line(i,angle):
+        p=path[i];s=p[6];heading=math.atan2(p[3],p[4])+math.radians(angle)
+        ux,uz=math.sin(heading),math.cos(heading)
+        if site['kind']=='road':
+            # The promenade runs along the line with a turning loop at each end.
+            reach=[(t,d) for t in range(-int(site['before'])-14,int(site['after'])+15,2) for d in (-6,0,6)]
+        else:
+            reach=[(t,0) for t in range(-int(site['before'])-tunnel,int(site['after'])+tunnel+1,2)]
+        for t,d in reach:
+            x=p[0]+ux*t+uz*d;z=p[2]+uz*t-ux*d
+            if not T.within(x,z,112,110):return False
+            # The crossing road itself only needs to clear the portals and
+            # tunnels; a bend may otherwise bring it right up to a portal.
+            portal=tunnel and abs(t)>=(site['before'] if t<0 else site['after'])-6
+            for q in coarse:
+                gap=abs(q[6]-s);gap=min(gap,length-gap)
+                if not portal and gap<abs(t)/max(.3,abs(math.sin(math.radians(angle))))+20:continue
+                if math.hypot(q[0]-x,q[2]-z)<q[5]+(12 if portal else 9):return False
+        for t,d in domes:
+            x=p[0]+ux*t+uz*d;z=p[2]+uz*t-ux*d
+            if any(math.hypot(q[0]-x,q[2]-z)<q[5]+4 for q in decks):return False
+        return True
+    for window,angles in ((site.get('window',.12),(site['angle'],)),(.5,(site['angle'],100,80,120,65,135))):
+        best=None
+        for i in range(n):
+            s=path[i][6];off=abs(s-target);off=min(off,length-off)
+            if off>length*window or s<80 or s>length-50:continue
+            if max(lift[(i+k)%n] for k in range(-int(60/step),int(60/step)+1,3))>.05:continue
+            if any(path[(i+k)%n][5]>T.half+.01 for k in range(-int(40/step),int(40/step)+1,3)):continue
+            score=straightness(path,i,40,40)+off/length*3
+            if best is not None and score>=best[0]:continue
+            for angle in angles:
+                if clear_line(i,angle):
+                    best=(score,i,angle);break
+        if best:break
+    assert best,('No clear site for the level crossing',T.key)
+    site['angle']=best[2]
+    print('RAIL SITE',T.key,'station',best[1],'distance',round(path[best[1]][6]),'angle',best[2],flush=True)
+    return best[1]
+
+def choose_cans(T,path,ramps):
+    if T.legacy:return T.cans
+    return spread_sites(T,path,T.can_count,.08,45,25,15,T.can_spacing*path[-1][6]/T.can_count,
+                        [path[i][6] for i,_ in ramps],True)
+
+def choose_ramps(T,path):
+    if T.legacy:return T.ramps
+    # Jumps share the last three quarters of the lap, once the grid has
+    # spread out, and stay clear of the finish line.
+    sites=spread_sites(T,path,T.ramp_count,.5,70,32,30,120,start=150,end=80,
+                       span=(.26,.97))
+    return [(i,T.ramp_height) for i in sites]
+
+def build_track(T):
+    theme=T.index;name=T.key;C=T.colors
     clear();random.seed(185+theme)
-    N=640;width=10.4 if theme!=2 else 11.0
-    watershed=Watershed(theme,terrain)
+    width=2*T.half
+    watershed=Watershed(T)
     water_sample=watershed.sample
-    path=[];distance=0
-    for i in range(N):
-        t=i/N;x,z=spline(t,theme);x2,z2=spline((t+.0001)%1,theme);d=Vector((x2-x,0,z2-z)).normalized()
-        y=terrain(x,z,theme)+.15
-        if i:distance+=Vector((x-path[-1][0],y-path[-1][1],z-path[-1][2])).length
-        path.append((x,y,z,d.x,d.z,road_half_width(t,theme),distance))
-    grass=mat(['Meadow','Golden sand','Powder snow'][theme],[(.48,.64,.30),(.83,.73,.49),(.76,.87,.87)][theme])
-    road=mat('Road '+name,[(.28,.31,.29),(.53,.44,.31),(.37,.48,.54)][theme])
-    curb=mat('Curb '+name,[(.80,.31,.18),(.89,.43,.18),(.21,.50,.64)][theme])
+    path=centreline(T);N=len(path)
+    if not T.legacy and 'index' not in T.rail:
+        T.rail['index']=pick_rail_site(T,path)
+    grass=mat(C['grass_name'],C['grass'])
+    road=mat('Road '+name,C['road'])
+    curb=mat('Curb '+name,C['curb'])
     banks=[]
     for i in range(N):
-        pp,pn=path[(i-5)%N],path[(i+5)%N]
-        banks.append(max(-.33,min(.33,(pp[3]*pn[4]-pp[4]*pn[3])*.55)))
-    length=grade_fords(path,banks,watershed)
-    bridge_lift,length=grade_bridges(path)
+        # Crossfall follows the heading change over about 16 m of road.
+        k=5 if T.legacy else max(3,int(round(8/(path[1][6]-path[0][6]))))
+        pp,pn=path[(i-k)%N],path[(i+k)%N]
+        banks.append(max(-T.bank_limit,min(T.bank_limit,(pp[3]*pn[4]-pp[4]*pn[3])*T.bank)))
+    if not T.legacy:
+        # Ease the crossfall in and out over about 6 m, so the wide passing
+        # sections and their tapers do not twist between stations.
+        step=path[1][6]-path[0][6];sigma=6/step;reach=int(sigma*3)+1
+        weights=[math.exp(-.5*(k/sigma)**2) for k in range(-reach,reach+1)]
+        banks=[sum(w*banks[(i+k)%N] for k,w in zip(range(-reach,reach+1),weights))/sum(weights) for i in range(N)]
+    ramps=choose_ramps(T,path)
+    length=grade_fords(path,banks,watershed,ramps)
+    bridge_lift,length=grade_bridges(path,T.legacy)
     # Author the road first so terrain grading can respect its tightest bends.
     verts=[]
     for i,p in enumerate(path):
@@ -718,7 +971,7 @@ def build_track(theme,name):
     # A single diagonal across 22 metres twists the whole carriageway when
     # its direction, width or banking changes. Keep edge indices stable for
     # shoulders and curbs, and track (station, lane) for all paint vertices.
-    across=8
+    across=8 if T.legacy else 12
     coordinates=[(i,side*path[i][5]) for i in range(N) for side in [-1,1]]
     rows=[]
     for i,p in enumerate(path):
@@ -736,7 +989,7 @@ def build_track(theme,name):
     for poly in ribbon.data.polygons:poly.use_smooth=True
     ribbon.data.calc_loop_triangles()
     # A level crossing: the rail bed and tunnel hills grade the terrain below.
-    rail=Railway(globals(),theme,path,ribbon,length)
+    rail=Railway(globals(),T,path,ribbon,length)
     road_points=KDTree(N)
     for i,p in enumerate(path):
         if bridge_lift[i]<.05:road_points.insert(Vector((p[0],0,p[2])),i)
@@ -759,6 +1012,11 @@ def build_track(theme,name):
         left=verts[idx*2][1]+(verts[((idx+1)%N)*2][1]-verts[idx*2][1])*f
         right=verts[idx*2+1][1]+(verts[((idx+1)%N)*2+1][1]-verts[idx*2+1][1])*f
         grade=left+(right-left)*max(0,min(1,(lane/closest[5]+1)/2))-.22
+        if not T.legacy:
+            # Cuttings and embankments of the hillier islands stay below
+            # about 30 degrees, so a car leaving the road meets drivable ground.
+            reach=.55*max(0,road_distance-closest[5]-1.5)
+            y=grade+max(-reach,min(reach,y-grade))
         y=grade+(y-grade)*blend
         wet,level,flow=water_sample(x,z)
         if wet>-3:
@@ -777,17 +1035,9 @@ def build_track(theme,name):
             y+=(target-y)*bank_blend*road_blend
         return rail.grade(x,z,y,road_distance-closest[5],wet) if rail_grading else y
     rail.prepare(lambda x,z:graded_ground(x,z,False))
-    vs=[(0,0,0)];rings=40;slices=192
-    for r in range(1,rings+1):
-        for j in range(slices):
-            a=j*2*pi/slices;rad=r/rings
-            vs.append((cos(a)*128*rad,0,sin(a)*126*rad))
-    fs=[(0,1+(j+1)%slices,1+j) for j in range(slices)]
-    for r in range(1,rings):
-        for j in range(slices):
-            a=1+(r-1)*slices+j;b=1+(r-1)*slices+(j+1)%slices;c=1+r*slices+(j+1)%slices;d=1+r*slices+j
-            fs.extend([(a,b,c),(a,c,d)])
-    vs,fs=refine_water_ground(vs,fs,water_sample)
+    vs,fs,outline=island_grid(T)
+    # The later islands also carve the trickle below a spring at 0.7 m.
+    vs,fs=refine_water_ground(vs,fs,water_sample,(1.35,1.35) if T.legacy else (1.35,1.35,.7))
     vs,fs=rail.refine(vs,fs)
     vs=[(x,graded_ground(x,z),z) for x,_,z in vs]
     # A coarse terrain face can span both sides of a hairpin. Cut only those
@@ -829,8 +1079,8 @@ def build_track(theme,name):
     # Per-face palette variation gives the ground a hand-built faceted finish.
     for k in range(7):island.data.materials.append(mat(name+' ground tone '+str(k),tuple(min(1,v*(.985+k*.005)) for v in grass.diffuse_color[:3])))
     for poly in island.data.polygons:poly.material_index=random.randrange(1,8);poly.use_smooth=True
-    for material in island.data.materials:material['paint']=-1-theme
-    color_waterbed(island,water_sample,theme,grass.diffuse_color[:3])
+    for material in island.data.materials:material['paint']=-T.ground
+    color_waterbed(island,water_sample,T,grass.diffuse_color[:3])
     # The hillside closing each tunnel reads as its dark interior.
     if tunnel_faces:
         dark_index=len(island.data.materials)
@@ -840,17 +1090,16 @@ def build_track(theme,name):
         for i in split:colors.data[i].color=(.025,.025,.03,1)
         for poly in island.data.polygons:
             if set(poly.vertices)<=split:poly.material_index=dark_index
-    edgevs=[];edgefs=[]
-    for j in range(slices):
-        a=j*2*pi/slices;x=cos(a)*128;z=sin(a)*126
+    edgevs=[];edgefs=[];slices=len(outline)
+    for x,z in outline:
         y=graded_ground(x,z)
-        edgevs.extend([(x,y,z),(x,-9 if theme==1 else -7,z)])
+        edgevs.extend([(x,y,z),(x,T.edge_depth,z)])
     for j in range(slices):edgefs.append((j*2,j*2+1,((j+1)%slices)*2+1,((j+1)%slices)*2))
-    mesh('Exposed diorama edge',edgevs,edgefs,mat('Island edge '+name,[(.51,.37,.21),(.72,.59,.36),(.44,.62,.67)][theme]))
+    mesh('Exposed diorama edge',edgevs,edgefs,mat('Island edge '+name,C['edge']))
     road_bvh=BVHTree.FromPolygons([v.co for v in ribbon.data.vertices],
                                   [p.vertices[:] for p in ribbon.data.loop_triangles
                                    if bridge_lift[p.polygon_index//across]<.05],all_triangles=True)
-    build_water(name,theme,water_sample,watershed,ground_height,road_bvh)
+    build_water(T,water_sample,watershed,ground_height,road_bvh)
     # Paint follows the road's exact elevation and banking.
     ribbon.data.calc_loop_triangles();surface=[]
     for triangle in ribbon.data.loop_triangles:
@@ -859,7 +1108,7 @@ def build_track(theme,name):
             i,lane=coordinates[vertex];s=length if segment==N-1 and i==0 else path[i][6]
             points.append((s,lane,*verts[vertex]))
         surface.append(points)
-    tire_marks(surface,path,length,road,theme)
+    tire_marks(surface,path,length,road,T)
     # The shoulder meets the actual island mesh; no unsupported road skirt.
     for side in [-1,1]:
         bed=[]
@@ -878,11 +1127,11 @@ def build_track(theme,name):
                 cuts[i]=max(cuts[i],cut);cuts[(i+1)%N]=max(cuts[(i+1)%N],cut)
         for i,cut in enumerate(cuts):
             x,y,z=bed[i*2+1];bed[i*2+1]=(x,y-cut,z)
-        shoulder=mesh('Sculpted road bed' ,bed,[(i*2,i*2+1,((i+1)%N)*2+1,((i+1)%N)*2) for i in range(N) if max(bridge_lift[i],bridge_lift[(i+1)%N])<.05],mat('Road foundation '+name,[(.41,.44,.31),(.68,.57,.36),(.66,.78,.80)][theme]))
+        shoulder=mesh('Sculpted road bed' ,bed,[(i*2,i*2+1,((i+1)%N)*2+1,((i+1)%N)*2) for i in range(N) if max(bridge_lift[i],bridge_lift[(i+1)%N])<.05],mat('Road foundation '+name,C['foundation']))
         shoulder['drivable']=True
     # Exposed bridge deck and side girders leave the lower road completely open.
     bridge_material=mat('Bridge concrete '+name,(.56,.59,.55))
-    steel=mat('Bridge steel '+name,[(.52,.20,.12),(.16,.45,.49),(.27,.37,.49)][theme])
+    steel=mat('Bridge steel '+name,C['steel'])
     for i,p in enumerate(path):
         j=(i+1)%N;q=path[j]
         if min(bridge_lift[i],bridge_lift[j])<.05:continue
@@ -941,10 +1190,10 @@ def build_track(theme,name):
             lane=side*width*.5
             road_marking('Extra lane divider',surface,length,p[6]-.825,p[6]+.825,
                          lane-.075,lane+.075,cream)
-    # Three raised wedges: identical exported collision metadata and actual mesh.
-    ramps=[]
-    for idx in [99,296,486]:
-        p=path[idx];yaw=math.atan2(p[3],p[4]);length_r=5.8;height=1.40 if theme!=2 else 1.65
+    # Raised wedges: identical exported collision metadata and actual mesh.
+    ramp_records=[]
+    for idx,height in ramps:
+        p=path[idx];yaw=math.atan2(p[3],p[4]);length_r=5.8
         def local(x,y,z):return(p[0]+cos(yaw)*x+sin(yaw)*z,p[1]+y,p[2]-sin(yaw)*x+cos(yaw)*z)
         vv=[local(x,y,z) for x,y,z in [(-3.9,0,-length_r/2),(3.9,0,-length_r/2),(-3.9,height,length_r/2),(3.9,height,length_r/2),(-3.9,0,length_r/2),(3.9,0,length_r/2)]]
         ramp_mesh=mesh('Jump ramp',vv,[(0,2,3,1),(0,4,2),(1,3,5),(2,4,5,3)],mat('Ramp deck',(.67,.42,.18)))
@@ -955,7 +1204,7 @@ def build_track(theme,name):
                 a=local(side*2.6,(zz+length_r/2)/length_r*height+.035,zz-.4)
                 b=local(0,(zz+.7+length_r/2)/length_r*height+.035,zz+.7)
                 beam('Ramp chevron',a,b,.065,cream,5)
-        ramps.append((float(idx),length_r,height,3.9))
+        ramp_records.append((float(idx),length_r,height,3.9))
     # Start gantry, grids and checker stripe are meshes, too.
     p=path[0];yaw=math.atan2(p[3],p[4])
     def startpos(x,y,z):return(p[0]+cos(yaw)*x+sin(yaw)*z,p[1]+y,p[2]-sin(yaw)*x+cos(yaw)*z)
@@ -977,111 +1226,129 @@ def build_track(theme,name):
     rail_markers=rail.build(surface,ground_height)
     scenery_before=set(bpy.context.scene.objects)
     # Place vegetation only outside the racing surface.
-    def nearest(x,z):return min(math.hypot(x-p[0],z-p[2])-p[5] for p in path[::4])
+    if T.legacy:
+        def nearest(x,z):return min(math.hypot(x-p[0],z-p[2])-p[5] for p in path[::4])
+    else:
+        coarse=KDTree(len(path[::4]))
+        for k,p in enumerate(path[::4]):coarse.insert(Vector((p[0],0,p[2])),k)
+        coarse.balance()
+        def nearest(x,z):
+            return min(d-path[k*4][5] for _,k,d in coarse.find_n(Vector((x,0,z)),6))
     def scenery_site(x,z,radius):
-        sites=[(x,z)]+sorted(((a,b) for a in range(-96,97,4) for b in range(-96,97,4)),
+        reach=int(T.sx(96))
+        sites=[(x,z)]+sorted(((a,b) for a in range(-reach,reach+1,4) for b in range(-int(T.sz(96)),int(T.sz(96))+1,4)),
                             key=lambda p:math.hypot(p[0]-x,p[1]-z))
         for a,b in sites:
-            if (a/110)**2+(b/108)**2<1 and nearest(a,b)>radius+3 and water_sample(a,b)[0]<-radius \
+            if T.within(a,b,110,108) and nearest(a,b)>radius+3 and water_sample(a,b)[0]<-radius \
                and rail.clear(a,b,radius):
                 return a,b
         raise RuntimeError(('No room for scenery',name,radius))
-    placed=0
-    for _ in range(900):
-        x=random.uniform(-111,111);z=random.uniform(-108,108)
-        if (x/119)**2+(z/118)**2>1 or nearest(x,z)<4.8:continue
-        if (x+12)**2+(z+35)**2<190:continue
-        if water_sample(x,z)[0]>-4 or not rail.clear(x,z,2.5):continue
-        y=ground_height(x,z)-.05
-        if placed<105:
-            tree(x,y,z,random.uniform(.65,1.3),theme)
+    ctx=dict(api=globals(),T=T,path=path,ground=ground_height,water=water_sample,nearest=nearest,
+             site=scenery_site,rail=rail,watershed=watershed,anchor=roadside_anchor,length=length)
+    if T.legacy:
+        placed=0
+        for _ in range(900):
+            x=random.uniform(-111,111);z=random.uniform(-108,108)
+            if (x/119)**2+(z/118)**2>1 or nearest(x,z)<4.8:continue
+            if (x+12)**2+(z+35)**2<190:continue
+            if water_sample(x,z)[0]>-4 or not rail.clear(x,z,2.5):continue
+            y=ground_height(x,z)-.05
+            if placed<105:
+                tree(x,y,z,random.uniform(.65,1.3),theme)
+            else:
+                ico('Granite boulder',(x,y+.6,z),(random.uniform(1.0,2.5),random.uniform(.9,2.5),random.uniform(1,2.3)),mat('Boulder '+name,C['boulder']))
+            placed+=1
+            if placed>=145:break
+        if theme!=1:
+            bx,bz=scenery_site(-10,-36,10)
+            barn(bx,ground_height(bx,bz),bz,0,theme)
+            for i in range(9):
+                x=-28+i*4;z=-53;y=T.terrain(x,z)
+                if nearest(x,z)<2.5 or not rail.clear(x,z,1):continue
+                box('Fence post',(x,y+1,z),(.25,2,.25),wood,.025)
+                if i<8 and nearest(x+4,z)>2.5:
+                    for h in [.65,1.45]:beam('Fence rail',(x,y+h,z),(x+4,T.terrain(x+4,z)+h,z),.09,cream,5)
+            if theme==0:
+                for j in range(5):
+                    for i in range(7):
+                        x=-29+i*2.1;z=24+j*3.2
+                        if nearest(x,z)<2 or not rail.clear(x,z,1):continue
+                        box('Crop row',(x,T.terrain(x,z)+.5,z),(.6,1.0,1.8),mat('Harvest gold',(.80,.64,.22)),.16)
+                for x,z in [(15,-32),(21,-32),(18,-27)]:
+                    if nearest(x,z)>3 and rail.clear(x,z,1.5):cone('Hay bale',(x,ground_height(x,z)+1,z),1.5,1.5,2,mat('Hay straw',(.80,.62,.29)),12)
+            else:
+                for x,z in [(-16,25),(-13,26),(-18,27)]:
+                    x,z=scenery_site(x,z,2)
+                    y=ground_height(x,z);ico('Snowman body',(x,y+1.3,z),(1.2,1.3,1.2),cream,2);ico('Snowman head',(x,y+2.95,z),(.78,.78,.78),cream,2)
+                    cone('Snowman hat',(x,y+3.65,z),.83,.83,.19,dark);cone('Hat top',(x,y+4,z),.51,.51,.65,dark)
         else:
-            ico('Granite boulder',(x,y+.6,z),(random.uniform(1.0,2.5),random.uniform(.9,2.5),random.uniform(1,2.3)),mat('Boulder '+name,[(.59,.60,.46),(.68,.57,.38),(.59,.72,.78)][theme]))
-        placed+=1
-        if placed>=145:break
-    if theme!=1:
-        bx,bz=scenery_site(-10,-36,10)
-        barn(bx,ground_height(bx,bz),bz,0,theme)
-        for i in range(9):
-            x=-28+i*4;z=-53;y=terrain(x,z,theme)
-            if nearest(x,z)<2.5 or not rail.clear(x,z,1):continue
-            box('Fence post',(x,y+1,z),(.25,2,.25),wood,.025)
-            if i<8 and nearest(x+4,z)>2.5:
-                for h in [.65,1.45]:beam('Fence rail',(x,y+h,z),(x+4,terrain(x+4,z,theme)+h,z),.09,cream,5)
-        if theme==0:
-            for j in range(5):
-                for i in range(7):
-                    x=-29+i*2.1;z=24+j*3.2
-                    if nearest(x,z)<2 or not rail.clear(x,z,1):continue
-                    box('Crop row',(x,terrain(x,z,theme)+.5,z),(.6,1.0,1.8),mat('Harvest gold',(.80,.64,.22)),.16)
-            for x,z in [(15,-32),(21,-32),(18,-27)]:
-                if nearest(x,z)>3 and rail.clear(x,z,1.5):cone('Hay bale',(x,ground_height(x,z)+1,z),1.5,1.5,2,mat('Hay straw',(.80,.62,.29)),12)
-        else:
-            for x,z in [(-16,25),(-13,26),(-18,27)]:
-                x,z=scenery_site(x,z,2)
-                y=ground_height(x,z);ico('Snowman body',(x,y+1.3,z),(1.2,1.3,1.2),cream,2);ico('Snowman head',(x,y+2.95,z),(.78,.78,.78),cream,2)
-                cone('Snowman hat',(x,y+3.65,z),.83,.83,.19,dark);cone('Hat top',(x,y+4,z),.51,.51,.65,dark)
+            for x,z,col in [(-12,-35,(.92,.34,.19)),(3,-27,(.23,.59,.68)),(-20,25,(.91,.69,.25)),(25,31,(.92,.34,.19))]:
+                x,z=scenery_site(x,z,6)
+                y=ground_height(x,z);beam('Beach parasol pole',(x,y,z),(x,y+4,z),.1,cream)
+                cone('Striped parasol',(x,y+4,z),3.5,0,.95,mat('Parasol '+str(col),col),12)
+                box('Beach towel',(x+3,y+.08,z+3),(1.7,.08,3.5),cream,.04,yaw=.2)
+                box('Beach lounger',(x-2,y+.55,z+2),(1.4,.2,2.8),wood,.06)
+            hx,hz=scenery_site(-10,42,6)
+            box('Lifeguard hut',(hx,ground_height(hx,hz)+2.7,hz),(6,4,5),mat('Hut aqua',(.22,.58,.57)),.15)
+            box('Lifeguard roof',(hx,ground_height(hx,hz)+5,hz),(7,.45,6),cream,.12)
     else:
-        for x,z,col in [(-12,-35,(.92,.34,.19)),(3,-27,(.23,.59,.68)),(-20,25,(.91,.69,.25)),(25,31,(.92,.34,.19))]:
-            x,z=scenery_site(x,z,6)
-            y=ground_height(x,z);beam('Beach parasol pole',(x,y,z),(x,y+4,z),.1,cream)
-            cone('Striped parasol',(x,y+4,z),3.5,0,.95,mat('Parasol '+str(col),col),12)
-            box('Beach towel',(x+3,y+.08,z+3),(1.7,.08,3.5),cream,.04,yaw=.2)
-            box('Beach lounger',(x-2,y+.55,z+2),(1.4,.2,2.8),wood,.06)
-        hx,hz=scenery_site(-10,42,6)
-        box('Lifeguard hut',(hx,ground_height(hx,hz)+2.7,hz),(6,4,5),mat('Hut aqua',(.22,.58,.57)),.15)
-        box('Lifeguard roof',(hx,ground_height(hx,hz)+5,hz),(7,.45,6),cream,.12)
+        biomes.scenery(ctx)
     # Direction boards before selected bends.
-    for idx in [45,150,240,345,410,555]:
+    for idx in (T.signs if T.legacy else biomes.sign_sites(T,path)):
         # A board may not stand among the crossing's signals.
         while rail.near_road(path[idx][6],10):idx-=4
         p=path[idx];xx,yy,zz=roadside_anchor(idx,1,2);yaw=math.atan2(p[3],p[4])
         box('Direction sign',(xx,yy+2,zz),(2.8,1.15,.18),orange,.08,yaw)
         box('Sign post',(xx,yy+.9,zz),(.16,1.8,.16),dark,.02)
-    # Habitat-specific, clustered banks, not the same necklace of stones around
-    # every body of water. Sand banks stay mostly bare; upland rock is coarser.
-    bank_rng=random.Random(613+theme)
-    x0,x1,z0,z1=watershed.bounds
-    for _ in range(450):
-        x=bank_rng.uniform(x0-2,x1+2);z=bank_rng.uniform(z0-2,z1+2)
-        wet,level,_=water_sample(x,z)
-        if not -1.8<wet<.55 or nearest(x,z)<2.8 or (x/124)**2+(z/122)**2>1 or not rail.clear(x,z,1):continue
-        patch=sin(x*.19+z*.27)*sin(z*.13-x*.23)
-        if theme==0 and patch<-.1:continue
-        if theme==1 and bank_rng.random()<.78:continue
-        y=ground_height(x,z)
-        size=bank_rng.uniform(.22,.55) if theme!=2 else bank_rng.uniform(.35,.95)
-        ico('Riverbank pebble',(x,y+size*.20,z),(size,size*.45,size*.72),
-            mat('Wet river stones '+name,[(.40,.43,.34),(.57,.52,.38),(.46,.56,.59)][theme]),1 if theme==2 else 2)
-        if theme==0 and wet<0 and patch>.05:
-            for blade in range(bank_rng.randrange(5,10)):
-                rx=x+bank_rng.uniform(-.35,.35);rz=z+bank_rng.uniform(-.35,.35)
-                ry=ground_height(rx,rz)
-                beam('Waterside reed',(rx,ry,rz),(rx+.12,ry+.6+bank_rng.random()*.6,rz+.1),
-                     .035,mat('Reed green',(.35,.40,.16)),5)
-    # Water emerges from a rocky spring / melting snow at the uphill head.
-    sx,sz=watershed.source
-    for _ in range([2,1,4][theme]):
-        rx=sx+bank_rng.uniform(-1.,1.);rz=sz+bank_rng.uniform(-.5,1.)
-        size=bank_rng.uniform(.55,.95) if theme!=2 else bank_rng.uniform(.85,1.7)
-        ico('Spring head rock' if theme!=2 else 'Meltwater snowbank',
-            (rx,ground_height(rx,rz)+size*.3,rz),(size,size*.55,size*.8),
-            mat('Spring source '+name,[(.43,.46,.35),(.57,.53,.40),(.89,.95,.94)][theme]),2)
+    if T.legacy:
+        # Habitat-specific, clustered banks, not the same necklace of stones around
+        # every body of water. Sand banks stay mostly bare; upland rock is coarser.
+        bank_rng=random.Random(613+theme)
+        x0,x1,z0,z1=watershed.bounds
+        for _ in range(450):
+            x=bank_rng.uniform(x0-2,x1+2);z=bank_rng.uniform(z0-2,z1+2)
+            wet,level,_=water_sample(x,z)
+            if not -1.8<wet<.55 or nearest(x,z)<2.8 or (x/124)**2+(z/122)**2>1 or not rail.clear(x,z,1):continue
+            patch=sin(x*.19+z*.27)*sin(z*.13-x*.23)
+            if theme==0 and patch<-.1:continue
+            if theme==1 and bank_rng.random()<.78:continue
+            y=ground_height(x,z)
+            size=bank_rng.uniform(.22,.55) if theme!=2 else bank_rng.uniform(.35,.95)
+            ico('Riverbank pebble',(x,y+size*.20,z),(size,size*.45,size*.72),
+                mat('Wet river stones '+name,C['pebble']),1 if theme==2 else 2)
+            if theme==0 and wet<0 and patch>.05:
+                for blade in range(bank_rng.randrange(5,10)):
+                    rx=x+bank_rng.uniform(-.35,.35);rz=z+bank_rng.uniform(-.35,.35)
+                    ry=ground_height(rx,rz)
+                    beam('Waterside reed',(rx,ry,rz),(rx+.12,ry+.6+bank_rng.random()*.6,rz+.1),
+                         .035,mat('Reed green',(.35,.40,.16)),5)
+        # Water emerges from a rocky spring / melting snow at the uphill head.
+        sx,sz=watershed.source
+        for _ in range([2,1,4][theme]):
+            rx=sx+bank_rng.uniform(-1.,1.);rz=sz+bank_rng.uniform(-.5,1.)
+            size=bank_rng.uniform(.55,.95) if theme!=2 else bank_rng.uniform(.85,1.7)
+            ico('Spring head rock' if theme!=2 else 'Meltwater snowbank',
+                (rx,ground_height(rx,rz)+size*.3,rz),(size,size*.55,size*.8),
+                mat('Spring source '+name,C['spring']),2)
+    else:
+        biomes.banks(ctx)
     obstacles=set(bpy.context.scene.objects)-scenery_before
     obstacles.update(o for o in scenery_before if o.name.startswith(('Finish gantry','Reflector')))
     obstacles.update(rail_markers)
-    build_spectators(path,theme,ground_height,obstacles,water_sample)
+    build_spectators(path,T,ground_height,obstacles,water_sample,
+                     T.crowd if T.legacy else biomes.crowd_sites(T,path,ramps))
     from leisure import build as build_leisure
     leisure_before=set(bpy.context.scene.objects)
-    build_leisure(globals(),theme,path,ground_height,water_sample,
+    build_leisure(globals(),T,path,ground_height,water_sample,
                   obstacles | {o for o in bpy.context.scene.objects if 'spectator_group' in o})
     obstacles.intersection_update(set(bpy.context.scene.objects))
     obstacles.update(set(bpy.context.scene.objects)-leisure_before)
     from broadcast import build as build_broadcast
-    obstacles.update(build_broadcast(globals(),theme,path,ground_height,water_sample,
-                     obstacles | {o for o in bpy.context.scene.objects if 'spectator_group' in o}))
+    obstacles.update(build_broadcast(globals(),T,path,ground_height,water_sample,
+                     obstacles | {o for o in bpy.context.scene.objects if 'spectator_group' in o},
+                     T.broadcast if T.legacy else biomes.broadcast_sites(T,path)))
     from habitats import build as build_habitats
-    build_habitats(globals(),theme,path,ground_height,water_sample,
+    build_habitats(globals(),T,path,ground_height,water_sample,
                    obstacles | {o for o in bpy.context.scene.objects if 'spectator_group' in o})
     export(os.path.join(ROOT,'assets/tracks',name+'-vegetation.tcv'),vegetation=True)
     export(os.path.join(ROOT,'assets/tracks',name+'-wildlife.tcf'),wildlife=True)
@@ -1092,12 +1359,12 @@ def build_track(theme,name):
     from export_guardrails import export_guardrails
     export_guardrails(os.path.join(ROOT,'assets/tracks',name+'.tcg'))
     cans=[]
-    for k,idx in enumerate([40,130,240,360,455,580]):cans.append((float(idx),(-1 if k%2 else 1)*3.8))
+    for k,idx in enumerate(choose_cans(T,path,ramps)):cans.append((float(idx),(-1 if k%2 else 1)*(3.8 if T.legacy else T.half-1.4)))
     with open(os.path.join(ROOT,'assets/tracks',name+'.tcp'),'wb') as f:
-        f.write(b'TCP1');f.write(struct.pack('<IIIf',N,len(cans),len(ramps),length))
+        f.write(b'TCP1');f.write(struct.pack('<IIIf',N,len(cans),len(ramp_records),length))
         for p in path:f.write(struct.pack('<7f',*p))
         for p in cans:f.write(struct.pack('<2f',*p))
-        for p in ramps:f.write(struct.pack('<4f',*p))
+        for p in ramp_records:f.write(struct.pack('<4f',*p))
     save(name)
     print('TRACK',name,'length',round(length,1),'elevation',round(max(p[1] for p in path)-min(p[1] for p in path),1),flush=True)
 
@@ -1106,6 +1373,6 @@ if __name__=='__main__':
         clear();build_vehicles(globals(),ROOT);sys.exit(0)
     if '--tracks-only' not in sys.argv:build_car();build_can();build_helicopter();build_vehicles(globals(),ROOT)
     only=sys.argv[sys.argv.index('--only')+1] if '--only' in sys.argv else None
-    for theme,name in enumerate(['country','beach','winter']):
-        if only in (None,name):build_track(theme,name)
+    for T in THEMES:
+        if only in (None,T.key):build_track(T)
     print('All Blender source scenes and runtime assets generated.',flush=True)

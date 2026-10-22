@@ -29,8 +29,10 @@ adventure with visually varied tracks. Its mobile focus makes it a useful
 reference for bold silhouettes and environments that can be read at speed on a
 small display.
 
-**Applied:** country, beach and winter have different palettes, buildings,
-vegetation, surface grip, circuit shape and vertical profile. Collectibles are
+**Applied:** each of the ten tracks — countryside, beach, alpine, desert
+canyon, autumn forest, jungle temple, cherry-blossom festival, harbour city,
+Scottish moor and volcano — has its own palette, buildings, landmarks,
+vegetation, wildlife, surface grip, circuit shape and vertical profile. Collectibles are
 bright green, float above the asphalt and respond with particles, sound and an
 explicit fuel message. Two-thumb controls remain outside the forward view.
 
@@ -101,12 +103,20 @@ Sources: [Sega Rally gameplay](https://en.wikipedia.org/wiki/Sega_Rally_Champion
 [Daytona USA gameplay](https://en.wikipedia.org/wiki/Daytona_USA#Gameplay).
 
 **Applied:** ToyCars combines a saved Championship route with an Arcade mode
-for individual races on earned tracks. A podium on Harvest Hills unlocks
-Sunshine Coast, a podium there unlocks Alpine Rush, and a podium in Alpine Rush
-completes Championship. Any difficulty qualifies. This is an adaptation for
-ToyCars, not an exact reproduction of either Sega game's rules: positions
-reset between stages, progress survives quitting, and fuel remains the race's
-survival constraint. No cumulative points or checkpoint countdown was added.
+for individual races on earned tracks. Any difficulty qualifies. This is an
+adaptation for ToyCars, not an exact reproduction of either Sega game's rules:
+progress survives quitting, and fuel remains the race's survival constraint.
+
+The ten tracks are grouped like the cups of kart racers' grand prix modes, where
+a cup is a short series of courses scored by finishing points: a Rookie Cup of
+three short circuits, a Pro Cup of three longer ones and a Master Cup of four.
+Each cup is its own points series; a top-four finish advances to the next stage
+and a medal in a cup's final standings opens the next cup. From the
+Pro Cup on, every lap is longer than the one before (1.20–2.47 km), jumps grow
+from three to five, and the hardest surfaces (ice, mud, volcanic ash) and night
+races close the cups.
+
+Source: [Mario Kart, Grand Prix](https://en.wikipedia.org/wiki/Mario_Kart#Gameplay).
 
 ## Trackside television production
 

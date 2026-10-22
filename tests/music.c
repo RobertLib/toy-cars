@@ -322,6 +322,17 @@ static void test_flow(void) {
     CHECK(m->song == 4 && music_playing(m) == MUSIC_CUE_RACE + 4,
           "changing environment selects its soundtrack");
     render(m, 2);
+    // Every circuit alternates two different songs, and neighbours in the
+    // Championship never share the same pair.
+    for (int track = 0; track < MUSIC_TRACKS; track++) {
+        int a = music_track_song(track, 0), b = music_track_song(track, 1);
+        CHECK(a != b && a >= 0 && a < MUSIC_SONGS && b >= 0 && b < MUSIC_SONGS,
+              "each circuit has two distinct race songs");
+        if (track > 0) {
+            int c = music_track_song(track - 1, 0), d = music_track_song(track - 1, 1);
+            CHECK(!((a == c && b == d) || (a == d && b == c)), "consecutive circuits vary their songs");
+        }
+    }
 
     c.scene = MUSIC_MENU;
     music_context(m, c);
@@ -443,8 +454,10 @@ static void test_determinism(void) {
 }
 
 static void write_preview(const char *directory) {
-    const char *names[] = {"harvest-hills", "sunshine-coast", "alpine-rush"};
-    for (int track = 0; track < 3; track++) {
+    const char *names[MUSIC_TRACKS] = {"harvest-hills", "sunshine-coast", "alpine-rush", "canyon-dash",
+                                       "maple-woods", "jungle-ruins", "sakura-hills", "harbor-lights",
+                                       "highland-loch", "volcano-peak"};
+    for (int track = 0; track < MUSIC_TRACKS; track++) {
         static const struct {
             double seconds;
             MusicScene scene;

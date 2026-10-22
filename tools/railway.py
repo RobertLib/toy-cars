@@ -14,13 +14,10 @@ from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
-# Road station of the crossing, rail angle from the road heading, and the
-# distances of the two tunnel portals (or road-train stops) from the road.
-SITES = {
-    0: dict(index=192, angle=125, before=38, after=34),
-    1: dict(index=555, angle=90, before=23, after=23),
-    2: dict(index=48, angle=125, before=30, after=38),
-}
+# Each theme's rail entry gives the road station of the crossing (or its share
+# of the lap), the rail angle from the road heading, the distances of the two
+# tunnel portals (or road-train stops) from the road, and the kind of line.
+KINDS = {'steam': 0, 'road': 1, 'alpine': 2, 'freight': 3}
 TUNNEL = 14.        # Hidden track beyond each portal
 BED = .62           # Rail top above the graded formation
 FORMATION = 2.2     # Half-width of the flat formation
@@ -42,20 +39,23 @@ def smoothstep(x):
 
 
 class Railway:
-    def __init__(self, api, theme, path, ribbon, length):
-        site = SITES[theme]
+    def __init__(self, api, T, path, ribbon, length):
+        site = T.rail
+        theme = T.index
+        self.T = T
         self.api, self.theme, self.path = api, theme, path
         self.length = length
         self.stations = [p[6] for p in path]
-        self.road = path[site['index']]
-        self.index = site['index']
+        self.index = T.rail_station(path)
+        self.road = path[self.index]
         heading = math.atan2(self.road[3], self.road[4]) + math.radians(site['angle'])
         self.u = (math.sin(heading), math.cos(heading))
         self.n = (self.u[1], -self.u[0])
         self.angle = math.radians(site['angle'])
         self.before, self.after = site['before'], site['after']
-        self.loop = theme == 1
-        self.gauge = .5 if theme == 2 else .72
+        self.kind = site['kind']
+        self.loop = self.kind == 'road'
+        self.gauge = .5 if self.kind == 'alpine' else .72
         ribbon.data.calc_loop_triangles()
         self.road_bvh = BVHTree.FromPolygons(
             [v.co.copy() for v in ribbon.data.vertices],
@@ -125,7 +125,7 @@ class Railway:
         for side in (-1, 1):
             t = self.portal(side)
             ground = natural(*self.at(t))
-            limit = .9 if self.theme == 0 else 1.2
+            limit = self.T.rail.get('limit', 1.2)
             drops.append(max(-limit, min(limit, .35 * (ground - (self.a + self.b*t)))))
         self.drop = tuple(drops)
         start, end = -self.before - TUNNEL, self.after + TUNNEL
@@ -456,9 +456,9 @@ class Railway:
         api = self.api
         mat = api['mat']
         theme = self.theme
-        ballast = mat('Rail ballast ' + str(theme), [(.45, .43, .40), None, (.66, .70, .73)][theme])
+        ballast = mat('Rail ballast ' + str(theme), self.T.rail['ballast'])
         steel = mat('Rail steel', (.40, .38, .36))
-        sleeper = mat('Rail sleepers ' + str(theme), [(.36, .25, .17), None, (.42, .36, .31)][theme])
+        sleeper = mat('Rail sleepers ' + str(theme), self.T.rail['sleeper'])
         panel = mat('Crossing panels', (.47, .44, .39))
         # Off the road: ballast shoulders, sleepers and rails into each tunnel.
         edge = self.half + 1.2
@@ -539,8 +539,8 @@ class Railway:
         api = self.api
         mat = api['mat']
         theme = self.theme
-        stone = mat('Portal stone ' + str(theme), [(.66, .58, .48), None, (.55, .58, .62)][theme])
-        trim = mat('Portal trim ' + str(theme), [(.52, .42, .33), None, (.43, .47, .52)][theme])
+        stone = mat('Portal stone ' + str(theme), self.T.rail['stone'])
+        trim = mat('Portal trim ' + str(theme), self.T.rail['trim'])
         darkness = mat('Tunnel darkness', (.025, .025, .03))
         snow = mat('Fresh snow', (.89, .95, .94))
         for side in (-1, 1):
@@ -590,7 +590,7 @@ class Railway:
                                                (.55, SPRING - bottom, .14), trim, .02, yaw))
             self.objects.append(api['box']('Portal parapet', P(0, top + .2, .5), (WALL * 2 + .4, .4, FACADE + .4),
                                            trim, .05, yaw))
-            if theme == 2:
+            if self.T.rail.get('cap'):
                 self.objects.append(api['box']('Portal snow cap', P(0, top + .5, .5),
                                                (WALL * 2 + .5, .22, FACADE + .5), snow, .1, yaw))
             # Retaining walls hold the cutting in front of the face.
@@ -694,7 +694,7 @@ class Railway:
             self.objects.append(cone('Loop planter', (cx, cy + .3, cz), LOOP - 2.4, LOOP - 2.5, .6, planter, 24))
             self.objects.append(cone('Loop flower bed', (cx, cy + .62, cz), LOOP - 2.7, LOOP - 2.8, .06,
                                      mat('Loop flowers', (.36, .55, .27)), 24))
-            api['tree'](cx, cy + .6, cz, .8, 1)
+            api['tree'](cx, cy + .6, cz, .8, 1) if self.T.legacy else api['biomes'].tree(self.T, cx, cy + .6, cz, .8)
             self.stops.append(t)
 
     def build_equipment(self):
@@ -793,7 +793,7 @@ class Railway:
             visible = (TUNNEL - STEP - .3, distances[-1] - TUNNEL + STEP + .3)
             zone = (self.road[5] + 1.6) / abs(math.sin(self.angle)) + SWEPT
         assert len(passes) == (2 if self.loop else 1), passes
-        kind = {0: 0, 1: 1, 2: 2}[self.theme]
+        kind = KINDS[self.kind]
         with open(path, 'wb') as f:
             f.write(b'TCR1')
             f.write(struct.pack('<7I', kind, 1 if self.loop else 0, len(self.points), len(passes),
@@ -821,6 +821,7 @@ VEHICLES = {
     'steam-locomotive': 7.8, 'steam-tender': 5.4, 'coach': 10.6,
     'alpine-locomotive': 10.4, 'alpine-coach': 11.2,
     'road-train-tractor': 4.4, 'road-train-carriage': 5.2,
+    'diesel-locomotive': 12.5, 'container-wagon': 13.1,
 }
 
 
@@ -829,13 +830,14 @@ def build_vehicles(api, root):
     box, beam, cone, ico, mesh, mat = (api[k] for k in ('box', 'beam', 'cone', 'ico', 'mesh', 'mat'))
     clear, export, save = api['clear'], api['export'], api['save']
     cream, dark, glass, chrome, rubber = (api[k] for k in ('cream', 'dark', 'glass', 'chrome', 'rubber'))
-    green = mat('Locomotive green', (.12, .39, .27))
+    # Body colours marked as paint take each circuit's livery at runtime.
+    green = mat('Locomotive green', (.12, .39, .27), 1)
     black = mat('Locomotive black', (.07, .075, .08))
     red = mat('Buffer beam red', (.74, .13, .10))
     brass = mat('Polished brass', (.88, .68, .28))
     coal = mat('Coal', (.05, .05, .055))
     roof = mat('Coach roof grey', (.42, .44, .45))
-    alpine = mat('Alpine railway red', (.76, .09, .08))
+    alpine = mat('Alpine railway red', (.76, .09, .08), 1)
     trim = mat('Alpine trim white', (.93, .93, .90))
     machinery = mat('Bogie grey', (.22, .23, .25))
     land = mat('Road train red', (.90, .20, .14))
@@ -1029,6 +1031,42 @@ def build_vehicles(api, root):
             beam('Carriage hub', (side * 1.02, .36, z), (side * 1.04, .36, z), .17, sun, 8)
     beam('Drawbar', (0, .5, 2.4), (0, .5, 2.9), .05, dark, 6)
     done('road-train-carriage')
+
+    # Harbour freight: a hood diesel with a cab at each end, and container flats.
+    diesel = mat('Diesel livery', (.10, .30, .62), 1)
+    stripe = mat('Diesel stripe', (.95, .78, .16))
+    box('Diesel frame', (0, 1.05, 0), (2.6, .5, 12.0), machinery, .05)
+    box('Diesel hood', (0, 2.2, 0), (2.2, 1.9, 8.2), diesel, .12)
+    box('Diesel hood stripe', (0, 1.55, 0), (2.24, .22, 8.24), stripe, .02)
+    for end in (-1, 1):
+        box('Diesel cab', (0, 2.6, end * 5.0), (2.8, 2.7, 2.2), diesel, .12)
+        box('Diesel cab roof', (0, 4.05, end * 5.0), (2.9, .2, 2.3), roof, .05)
+        box('Diesel windscreen', (0, 3.15, end * 6.12), (2.3, .9, .06), glass, .05)
+        box('Diesel nose stripe', (0, 1.6, end * 6.12), (2.82, .3, .06), stripe, .02)
+        for side in (-1, 1):
+            box('Diesel headlamp', (side * .8, 2.05, end * 6.14), (.32, .22, .06), cream, .03)
+            box('Diesel cab window', (side * 1.41, 3.15, end * 5.0), (.05, .8, 1.2), glass, .04)
+        buffers(end * 6.2, 1.1, end, .85)
+        bogie(end * 3.8, 1.0)
+    for k in range(6):
+        box('Diesel louvre', (0, 3.18, -2.5 + k), (1.6, .06, .5), machinery, .01)
+    done('diesel-locomotive')
+
+    flat = mat('Wagon deck', (.30, .28, .27))
+    reds = mat('Container rust red', (.66, .20, .12))
+    blues = mat('Container blue', (.14, .36, .60))
+    box('Wagon deck', (0, 1.25, 0), (2.5, .3, 12.9), flat, .04)
+    box('Wagon frame', (0, .95, 0), (2.0, .3, 12.5), machinery, .03)
+    for k, (z, m) in enumerate(((-3.15, reds), (3.15, blues))):
+        box('Container', (0, 2.7, z), (2.44, 2.6, 6.05), m, .03)
+        for j in range(7):
+            box('Container rib', (1.23, 2.7, z - 2.7 + j * .9), (.04, 2.5, .12), m, .005)
+            box('Container rib', (-1.23, 2.7, z - 2.7 + j * .9), (.04, 2.5, .12), m, .005)
+        box('Container doors', (0, 2.7, z + 3.04 * (1 if k else -1)), (2.3, 2.4, .05), machinery, .01)
+    for end in (-1, 1):
+        buffers(end * 6.5, 1.1, end, .85)
+        bogie(end * 4.6, 1.0)
+    done('container-wagon')
 
     # The editable scene lays the stock out side by side.
     x = 0

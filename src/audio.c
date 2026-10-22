@@ -223,14 +223,36 @@ static float engine_cutoff(const CarAudio *e) {
 }
 
 static int surface_sound(int track) {
-    return track == 2 ? SFX_SNOW : track == 1 ? SFX_SAND : SFX_DIRT;
+    VergeSound verge = TRACK_INFO[track].verge;
+    return verge == VERGE_SNOW ? SFX_SNOW : verge == VERGE_SAND ? SFX_SAND : SFX_DIRT;
 }
+// Each environment has its own recorded bed. The daytime birdsong of the
+// countryside, desert, forest, garden and moor gives way to crickets at night;
+// the jungle, harbor and volcano beds are night recordings.
 static int ambience_sound(const Game *g) {
-    if (g->selected == 2)
+    bool night = game_night(g);
+    switch (TRACK_INFO[g->selected].ambience) {
+    case AMBIENCE_WINTER:
         return SFX_AMBIENCE_WINTER;
-    if (g->selected == 1)
+    case AMBIENCE_BEACH:
         return SFX_AMBIENCE_BEACH;
-    return game_night(g) ? SFX_AMBIENCE_NIGHT : SFX_AMBIENCE_COUNTRY;
+    case AMBIENCE_DESERT:
+        return night ? SFX_AMBIENCE_NIGHT : SFX_AMBIENCE_DESERT;
+    case AMBIENCE_FOREST:
+        return night ? SFX_AMBIENCE_NIGHT : SFX_AMBIENCE_FOREST;
+    case AMBIENCE_GARDEN:
+        return night ? SFX_AMBIENCE_NIGHT : SFX_AMBIENCE_GARDEN;
+    case AMBIENCE_MOOR:
+        return night ? SFX_AMBIENCE_NIGHT : SFX_AMBIENCE_MOOR;
+    case AMBIENCE_JUNGLE:
+        return SFX_AMBIENCE_JUNGLE;
+    case AMBIENCE_HARBOR:
+        return SFX_AMBIENCE_HARBOR;
+    case AMBIENCE_VOLCANO:
+        return SFX_AMBIENCE_VOLCANO;
+    default:
+        return night ? SFX_AMBIENCE_NIGHT : SFX_AMBIENCE_COUNTRY;
+    }
 }
 
 static void play_at(Audio *a, const Listener *l, int sound, float gain, float pitch, Vec3 pos,
@@ -272,10 +294,12 @@ static void cue(Audio *a, const Game *g, const Listener *l, const SoundEvent *e)
         // road train's toy-train chord.
         RailKind kind = g->tracks[g->selected].rail.kind;
         int sound = kind == RAIL_STEAM ? SFX_STEAM_WHISTLE
-                    : kind == RAIL_ALPINE ? SFX_TRAIN_HORN : SFX_LAND_TRAIN_HORN;
-        float level = kind == RAIL_STEAM ? -29 : kind == RAIL_ALPINE ? -33 : -31;
+                    : kind == RAIL_ALPINE || kind == RAIL_FREIGHT ? SFX_TRAIN_HORN : SFX_LAND_TRAIN_HORN;
+        float level = kind == RAIL_STEAM ? -29 : kind == RAIL_ALPINE ? -33 : kind == RAIL_FREIGHT ? -31 : -31;
         Place p = place(a, l, e->pos, v3(0, 0, 0), 22, 220);
-        sfx_play(&a->sfx, sound, lufs(level) * p.gain, kind == RAIL_ALPINE ? .94f : 1, p.pan);
+        // A freight diesel sounds the same horn an octave lower.
+        sfx_play(&a->sfx, sound, lufs(level) * p.gain,
+                 kind == RAIL_ALPINE ? .94f : kind == RAIL_FREIGHT ? .5f : 1, p.pan);
         break;
     }
     case SOUND_LANDING:
@@ -396,7 +420,7 @@ static void railway_sounds(Audio *a, const Game *g, const Listener *l, float bed
         }
     }
     int sound = rail->kind == RAIL_STEAM ? SFX_STEAM_TRAIN
-                : rail->kind == RAIL_ALPINE ? SFX_TRAIN : SFX_LAND_TRAIN;
+                : rail->kind == RAIL_ALPINE || rail->kind == RAIL_FREIGHT ? SFX_TRAIN : SFX_LAND_TRAIN;
     float gain = 0, pitch = 1, pan = 0, cutoff = 1;
     if (nearest >= 0) {
         const RailVehicle *v = &vehicles[nearest];
@@ -411,7 +435,7 @@ static void railway_sounds(Audio *a, const Game *g, const Listener *l, float bed
             pitch = (1 + .35f * clampf(speed / 7, 0, 1)) * p.pitch;
         } else {
             gain *= lufs(rail->kind == RAIL_STEAM ? -28 : -30);
-            pitch = (rail->kind == RAIL_STEAM ? 1.15f : .8f) * p.pitch;
+            pitch = (rail->kind == RAIL_STEAM ? 1.15f : rail->kind == RAIL_FREIGHT ? .68f : .8f) * p.pitch;
         }
     }
     sfx_hold(&a->sfx, &a->train, sound, gain, pitch, pan, cutoff);

@@ -5,9 +5,11 @@ Run with: python3 tests/track_layouts.py
 from pathlib import Path
 import math
 import struct
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = ("country", "beach", "winter")
+sys.path.insert(0, str(ROOT / "tools"))
+from themes import NAMES  # noqa: E402
 
 
 def solve(matrix, rhs):
@@ -36,10 +38,14 @@ def affine_error(source, target):
 
 def main():
     circuits = []
+    previous = 0
     for name in NAMES:
         raw = (ROOT / "assets" / "tracks" / (name + ".tcp")).read_bytes()
         count, _, _, length = struct.unpack_from("<IIIf", raw, 4)
         assert raw[:4] == b"TCP1" and length > 900, (name, "extended circuit")
+        if circuits:
+            assert length > previous or len(circuits) < 3, (name, "later circuits grow longer")
+        previous = length
         points = [struct.unpack_from("<7f", raw, 20 + i * 28) for i in range(0, count, 8)]
         circuits.append([(p[0], p[2]) for p in points])
     # Prove the regression check recognizes the affine copies it must reject.

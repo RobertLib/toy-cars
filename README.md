@@ -62,21 +62,42 @@ an internet connection to run.
 
 ## In the box
 
-- Three individually shaped, elevated 3D tracks: **Harvest Hills**, **Sunshine
-  Coast**, and **Alpine Rush**. Harvest Hills has an outer loop and a woven
-  infield (1.09 km, three crossings); Sunshine Coast has three broad coastal
-  lobes (0.99 km, three crossings); Alpine Rush has long switchbacks and a
-  diagonal return (0.96 km, two crossings). Each has bridges with open underpasses,
-  smooth elevated approaches,
-  banking, three physical jump ramps and six fuel pickups near the road edges.
-  [Compare the three layouts](screenshots/track-layouts.svg).
+- Ten individually shaped, elevated 3D tracks in three cups, each a different
+  world. They grow harder from track to track, and from the fourth on every lap
+  is longer than the one before
+  ([compare all ten layouts](screenshots/track-layouts.svg)):
+
+  | # | Track | World | Length | Bridges | Jumps | Raced by |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 1 | **Harvest Hills** | Countryside, red barns, a pond | 1.09 km | 3 | 3 | day |
+  | 2 | **Sunshine Coast** | Beach, dunes and a seaside road train | 0.99 km | 3 | 3 | day |
+  | 3 | **Alpine Rush** | Snowy switchbacks on ice | 0.96 km | 2 | 3 | night |
+  | 4 | **Canyon Dash** | Red mesas, saguaros and a ranch | 1.20 km | 1 | 3 | day |
+  | 5 | **Maple Woods** | Autumn forest, cabins and a sawmill | 1.33 km | 2 | 4 | day |
+  | 6 | **Jungle Ruins** | Rainforest temple on slippery mud | 1.58 km | 3 | 4 | night |
+  | 7 | **Sakura Hills** | Cherry blossom, pagoda and torii gates | 1.67 km | 1 | 4 | day |
+  | 8 | **Harbor Lights** | City docks, cranes and a freight line | 1.83 km | 2 | 4 | night |
+  | 9 | **Highland Loch** | Moors, a castle and dry-stone walls | 2.04 km | 2 | 5 | day |
+  | 10 | **Volcano Peak** | Black rock, ash and a lava crater | 2.47 km | 2 | 5 | night |
+
+  The **Rookie Cup** is the first three, the **Pro Cup** the next three and the
+  **Master Cup** the last four. Each track has bridges with open underpasses,
+  smooth elevated approaches, banking, a four-lane passing section, physical
+  jump ramps and six fuel pickups near the road edges. Later tracks add longer
+  laps, more jumps, tighter combinations, big climbs on the moor and the volcano
+  (30 and 52 m) and harder surfaces: mud in the jungle, ash on the volcano, where
+  touching the lava sends the car back to the road.
 - Habitat-specific surroundings: flowering meadow and hedgerow patches in
   Harvest Hills, dune grass, coastal scrub and driftwood on Sunshine Coast,
   and dwarf pines, scree and fallen branches in Alpine Rush. Grass, sand and
   snow have subtle procedural surface variation without extra texture assets.
 - Animated wildlife away from the road: grazing deer, hopping hares, geese
-  near country water, snakes in the warmer tracks, and birds circling overhead.
-  The three tracks contain 28 / 20 / 17 animals. Articulated movement also
+  near country water, snakes in the warmer tracks, and birds circling overhead;
+  coyotes and vultures in the canyon, foxes and ducks in the woods, parrots,
+  toucans and tapirs in the jungle, cranes and sika deer among the cherry trees,
+  gulls and cats on the docks, sheep and highland cattle on the moor, ravens and
+  goats on the volcano. The first three tracks contain 28 / 20 / 17 animals,
+  the later ones 19 to 28. Articulated movement also
   animates shadows and freezes when paused. Wildlife is decorative and does
   not collide with cars. Ground paths are checked against the terrain during
   asset generation; each track adds one wildlife draw per scene/shadow pass.
@@ -90,26 +111,31 @@ an internet connection to run.
   skipped road distance; ordinary shoulder excursions keep their progress.
   Brief exits have a one-second grace period unless they save over 24 meters.
   Manual recovery cannot keep progress gained through a shortcut.
-- **Championship:** race Harvest Hills, Sunshine Coast and Alpine Rush as one
-  series. Places 1–8 earn 10 / 8 / 6 / 5 / 4 / 3 / 2 / 1 points; a DNF earns zero.
-  Finish in the top four in each of the first two stages to advance and unlock
-  the next track. Fifth or worse, or a DNF, eliminates you and ends that run.
-  The HUD shows live
-  projected overall position, with race position secondary. Results show the
-  overall points table; standings are final once all rivals finish or retire.
+- **Championship:** three cups, each its own series: the **Rookie Cup**
+  (Harvest Hills, Sunshine Coast, Alpine Rush), the **Pro Cup** (Canyon Dash,
+  Maple Woods, Jungle Ruins) and the **Master Cup** (Sakura Hills, Harbor
+  Lights, Highland Loch, Volcano Peak). Places 1–8 earn 10 / 8 / 6 / 5 / 4 / 3 /
+  2 / 1 points; a DNF earns zero. Finish in the top four in every stage before a
+  cup's final to advance and unlock the next track. Fifth or worse, or a DNF,
+  eliminates you and ends that cup's run. The HUD shows live projected overall
+  position in the cup, with race position secondary. Results show the overall
+  points table; standings are final once all rivals finish or retire.
   Equal totals are resolved by most wins, then most second places and so on;
   exact ties use stable driver order.
-  After all three stages, overall first / second / third wins a gold / silver /
-  bronze medal with a matching celebration. Fourth or worse loses the championship.
-  Winning the final race alone does not guarantee a championship medal.
+  After a cup's final, overall first / second / third wins a gold / silver /
+  bronze cup medal with a matching celebration; any cup medal unlocks the first
+  track of the next cup. Fourth or worse loses the cup.
+  Winning the final race alone does not guarantee a medal.
   Progress and each driver's classification save after each settled stage.
-  Initials are requested after the opening finish and reused on later stages.
+  Initials are requested after a cup's opening finish and reused on later stages.
   **NEXT STAGE**, Enter or gamepad A continues after rivals finish if you qualify.
   **BACK TO MENU** or Esc works while rivals are still racing: the rest of the
   stage is simulated instantly and scored as if you had watched it.
-  Final or elimination results return to the menu, where a new championship starts from zero points
-  while unlocked tracks, records and the best championship medal remain saved.
-  Older saves keep their unlocked tracks and records and start a new points series.
+  Final or elimination results return to the menu, where that cup starts again from
+  zero points while unlocked tracks, records, the other cups' series and the best
+  medal of each cup remain saved. Saves from the three-track versions import as
+  the Rookie Cup, keeping their unlocked tracks, records and medals; a won
+  championship opens the Pro Cup.
   Preview the celebration with `./build/ToyCars --screen championship`
   (does not save progress).
 - **Arcade:** single races on unlocked tracks for medals and personal records.
@@ -208,8 +234,9 @@ an internet connection to run.
   deform on impact and fold stakes around their planted feet, with damped motion
   that keeps them close to the ground; every car can hit them.
   The fences pause with the race and reset on restart.
-- Rally spectators in 15 scattered groups on each circuit: adults, children,
-  older fans, photographers and flag bearers with summer or winter clothing.
+- Rally spectators in 15 to 24 scattered groups on each circuit (more on the
+  longer tracks): adults, children, older fans, photographers and flag bearers
+  dressed for the place, from beachwear and desert hats to winter coats.
   Fans wave, clap, hop and sway at individual tempos, with fluttering flags
   and matching animated shadows. Pausing the game freezes their animation.
 - A countryside landscape park with open lawn, winding gravel walks, grouped
@@ -220,16 +247,19 @@ an internet connection to run.
   compound with a fifth camera, TV van, satellite dish, reporter, boom operator,
   vision technician, monitors, flight cases and cables. Eight crew members wear
   media vests and headsets; equipment is placed clear of roads, water and scenery.
-- **Railways and level crossings:** Harvest Hills has a steam train (locomotive,
-  tender and two coaches) and Alpine Rush a red narrow-gauge mountain train with
-  panorama coaches. Each runs between two tunnel portals in the hillsides and
-  crosses the circuit once, at grade. Sunshine Coast has no room for a railway,
-  so a seaside road train with three open carriages runs on a promenade between
-  two stops, turning round a palm planter at each end, and crosses the circuit
-  in both directions. Signals flash and a bell rings 5.5 seconds before a train
-  arrives; red-and-white barriers fall over the next three seconds and rise
-  once it has passed, closing the road for about eight to nine seconds. Trains
-  keep a timetable that changes every race, about every 40 to 60 seconds; on the
+- **Railways and level crossings:** every track crosses a railway once, at
+  grade. Steam trains (locomotive, tender and two coaches) run on Harvest Hills,
+  Canyon Dash, Jungle Ruins, Highland Loch and Volcano Peak, each in its own
+  livery; a red narrow-gauge mountain train with panorama coaches runs on Alpine
+  Rush, Maple Woods and Sakura Hills; a diesel freight train with container
+  wagons serves Harbor Lights. Each runs between two tunnel portals in the
+  hillsides. Sunshine Coast has no room for a railway, so a seaside road train
+  with three open carriages runs on a promenade between two stops, turning round
+  a palm planter at each end, and crosses the circuit in both directions.
+  Signals flash and a bell rings 5.5 seconds before a train arrives;
+  red-and-white barriers fall over the next three seconds and rise once it has
+  passed, closing the road for about eight to nine seconds. Trains keep a
+  timetable that changes every race, about every 40 to 60 seconds; on the
   railway circuits the first one comes after the opening lap's field has
   passed. A lowered barrier stops a car like a railing, and a car left on the
   rails is shoved aside by the train. Rivals stop at the line and queue unless
@@ -237,17 +267,17 @@ an internet connection to run.
   can bring the field back together. The menu broadcast has its own train,
   timed to clear the crossing just ahead of the pack. At night the signals,
   barrier tips and headlamps glow; the steam locomotive puffs smoke.
-- A small camera helicopter patrols beside the race on all three circuits,
+- A small camera helicopter patrols beside the race on every circuit,
   occasionally drawing closer during a relaxed 48-second flight cycle. Both
   rotors turn and cast shadows; pausing freezes the helicopter too.
-- Occasional weather with gentle five-second transitions: rain in Harvest Hills
-  and Sunshine Coast, snow in Alpine Rush, and gusts carrying leaves, sand or
-  loose snow. Showers soften sunlight and bring haze; flags react to the wind.
+- Occasional weather with gentle five-second transitions: rain on most tracks,
+  snow in Alpine Rush and falling ash on Volcano Peak, and gusts carrying
+  leaves, sand, petals or loose snow. Showers soften sunlight and bring haze; flags react to the wind.
   Races start clear, with longer clear spells between weather events. Each retry
   gets a new forecast. Weather pauses with the race and leaves car handling unchanged.
 - **Day and night races:** each Championship stage has a fixed time of day:
-  Harvest Hills and Sunshine Coast run by day, and the Alpine Rush final runs at
-  night. In Arcade, choose **DAY** or **NIGHT** beside the track preview (or press
+  Alpine Rush, Jungle Ruins, Harbor Lights and Volcano Peak run at night, the
+  others by day. Lanterns, torches, lit windows and the lava glow in the dark. In Arcade, choose **DAY** or **NIGHT** beside the track preview (or press
   N); the choice is remembered. Night races run under a cool moonlight with a dark
   sky and haze, and all eight cars drive with working headlights:
   low beams light the road, rivals and scenery ahead, and tail lamps cast a short
@@ -267,8 +297,7 @@ an internet connection to run.
   their own engines and a Doppler shift as they pass. Tires squeal in slides and
   crunch over gravel, sand or snow off the road; fords splash, wind builds with
   speed, and cars thud on landing and bang into each other, rails, cones, tire
-  stacks and nets. Each track has its own countryside, coastal, alpine or night
-  ambience, rain and gusts follow the weather, the camera helicopter can be heard
+  stacks and nets. Each track has its own recorded ambience, rain and gusts follow the weather, the camera helicopter can be heard
   overhead, and rally crowds cheer the finish. Menus click for every change,
   whatever the input. See [Sound effects](docs/SOUND.md).
 
@@ -283,8 +312,9 @@ an internet connection to run.
 | Recover | R | RECOVER | — |
 | Pause / resume | Escape | Pause button | Start |
 | Start / retry (next stage after a Championship race) | Enter | Menu buttons | A / south button |
-| Select track in menu | 1 / 2 / 3 | Track cards | Use touch or mouse |
-| Switch race mode | Tab | Championship / Arcade buttons | Use touch or mouse |
+| Select track in menu | 1–9, 0; left / right | Track cards | D-pad left / right |
+| Switch cup in menu | C | Cup tabs | Shoulder buttons |
+| Switch race mode | Tab | Championship / Arcade buttons | X / west button |
 | Arcade day / night | N | DAY / NIGHT buttons | Use touch or mouse |
 
 Hold the brake to stop, then keep holding to reverse at low speed with any
@@ -316,19 +346,30 @@ editable scenes in `art/`:
 - `helicopter.blend` — camera helicopter with separately animated main and tail rotors.
 - `trains.blend` — the steam locomotive, tender and coach, the mountain railway's
   locomotive and panorama coach, and the seaside road train's tractor and carriage.
-- `country.blend`, `beach.blend`, `winter.blend` — complete themed scenes with
-  terrain, road, curbs, ramps, a level crossing with its railway and tunnels (or
-  the road train's promenade), buildings, trees and props.
+- `trains.blend` also holds the harbor's diesel locomotive and container wagon.
+- `country.blend`, `beach.blend`, `winter.blend`, `canyon.blend`, `autumn.blend`,
+  `jungle.blend`, `sakura.blend`, `harbor.blend`, `highland.blend` and
+  `volcano.blend` — complete themed scenes with terrain, road, curbs, ramps, a
+  level crossing with its railway and tunnels (or the road train's promenade),
+  buildings, landmarks, trees and props.
+
+Every circuit's parameters live in `tools/themes.py`: island size and shape,
+terrain, colours, counts of trees, jumps and spectators, water and railway. The
+later circuits are corner polygons in `tools/layouts.py`, and their scenery,
+landmarks and animals are modeled in `tools/biomes.py`. Jumps, fuel cans,
+signs, crowds and the level crossing are placed automatically on the
+straightest suitable stretches.
 
 Each circuit combines two-lane roads with a four-lane passing section of twice
 the width. Country and coast have long passing sectors; the alpine switchbacks
-have a shorter 44 m straight. Entry and exit tapers connect the constant-width
+have a shorter 44 m straight. The later circuits put theirs on their longest
+stretch without tight bends, so the wide road never runs through a hairpin. Entry and exit tapers connect the constant-width
 sections; lane markings, shoulders and gameplay boundaries follow the road.
 Paired, gently curved tire marks with subtle color and faded ends cluster and overlap
-in sharper bends. They are present on all three circuits
+in sharper bends. They are present on every circuit
 from the start and follow the road elevation and banking.
 
-Reproduce all seven scenes and their runtime exports:
+Reproduce all fourteen scenes and their runtime exports:
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender -b --python tools/build_assets.py
@@ -336,8 +377,10 @@ cmake --build build
 ```
 
 Options go after `--`: `--tracks-only` skips the car, can, helicopter and
-rolling stock, `--only country|beach|winter` builds a single circuit, and
-`--vehicles-only` exports just the rolling stock.
+rolling stock, `--only NAME` builds a single circuit (`country`, `beach`,
+`winter`, `canyon`, `autumn`, `jungle`, `sakura`, `harbor`, `highland` or
+`volcano`; each takes two to five minutes), and `--vehicles-only` exports just
+the rolling stock. `python3 tools/layout_svg.py` redraws the layout comparison.
 
 The Blender script is an authoring tool. Gameplay and rendering run in C.
 The custom mesh and track formats are documented in [Architecture](docs/ARCHITECTURE.md).
@@ -373,6 +416,8 @@ python3 tests/track_layouts.py
   --no-audio --screenshot screenshots/demo.bmp
 ```
 
+`ctest` runs the headless simulation once per track (`simulation_country` …
+`simulation_volcano`); `./build/ToyCars --test --track canyon` runs one of them.
 The headless tests drive complete races on every track at all three difficulty
 levels and check fuel, AI progress, rival pace adaptation, jumps, lap progression,
 recovery, pause, fuel exhaustion and independent multitouch input. Regression tests cover finish-line
@@ -426,7 +471,11 @@ After rebuilding the Blender scenes, verify road markings, terrain contact and s
 /Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python tests/spectators.py
 /Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python tests/broadcast.py
 /Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python tests/water_layout.py
+/Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python tests/wildlife.py
 ```
+
+Each script checks all ten scenes; `TOYCARS_TRACKS=canyon,volcano` in the
+environment limits it to those.
 
 Diagnostic runs (`--autoplay`, `--frames` or `--screen`) leave personal records,
 medals and Championship progress unchanged, including in memory. Diagnostic
@@ -461,8 +510,10 @@ normal Blender asset builder. Animal geometry remains editable in each
 color, paint, origin/yaw, species, part, ground slopes). The runtime shares
 animation code between visible and shadow passes. Validate placement/export
 with `blender -b --python-exit-code 1 --python tests/wildlife.py`.
-The terrain uses paint values -1 / -2 / -3 to select meadow / sand / snow
-surface shading; ordinary model paint remains in the 0–1 range.
+The terrain uses paint values -1 to -10 to select each environment's ground
+shading (meadow, sand, snow, red desert, leaf litter, jungle floor, lawn with
+petals, paving slabs, heather moor, volcanic ash); ordinary model paint remains in the
+0–1 range.
 
 C sources use the repository's `.clang-format` style. To keep changes readable:
 
@@ -495,7 +546,7 @@ The asset builder exports `*-vegetation.tcv` separately from static scenery:
 `TCV1`, little-endian vertex count, 18 floats per vertex (position, normal, color,
 paint, root xyz, reference height, flexibility, frond flag, two reserved zeros).
 Graphics tests check visible motion in both the everyday breeze and stronger
-gusts, as well as frozen animation during pause, on all three tracks.
+gusts, as well as frozen animation during pause, on every track.
 
 Boost pads: each circuit has three muted teal pads with smoothly animated chevrons on dry, straighter stretches.
 Drive over them in the race direction to gain up to 7 m/s (capped at 40 m/s).

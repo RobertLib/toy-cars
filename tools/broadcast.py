@@ -4,7 +4,8 @@ import bpy
 from mathutils import Vector
 
 
-def build(api, theme, path, ground, water, obstacles):
+def build(api, T, path, ground, water, obstacles, stations):
+    theme = T.index
     box, beam, ico, mat = (api[k] for k in ('box', 'beam', 'ico', 'mat'))
     ink, metal, glass, ivory = (api[k] for k in ('dark', 'chrome', 'glass', 'cream'))
     blue = mat('Broadcast cobalt', (.055, .24, .62))
@@ -28,7 +29,7 @@ def build(api, theme, path, ground, water, obstacles):
             for extra in (radius + 3.5, radius + 7, radius + 12, radius + 18):
                 for side in (1, -1):
                     x, z = p[0] + side*p[4]*(p[5]+extra), p[2] - side*p[3]*(p[5]+extra)
-                    if (x/113)**2 + (z/112)**2 > .97:
+                    if not T.within(x, z, 113 * .97 ** .5, 112 * .97 ** .5):
                         continue
                     if any(a-radius < x < b+radius and c-radius < z < d+radius for a,b,c,d in bounds):
                         continue
@@ -143,8 +144,8 @@ def build(api, theme, path, ground, water, obstacles):
             obj['broadcast_compound']=compound
         return set(bpy.context.scene.objects)-before
 
-    created=station(12,True)
-    for idx in (70,205,355,500):
+    created=station(stations[0],True)
+    for idx in stations[1:]:
         created.update(station(idx))
     print('BROADCAST',theme,'5 stations, 8 crew,',len(created),'objects',flush=True)
     return created

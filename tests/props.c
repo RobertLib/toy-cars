@@ -7,6 +7,7 @@ static int failures;
 // Synthetic flat ground makes momentum, settling and stack tests independent of art.
 static void flat(Game *g) {
     Track *t=&g->tracks[0];
+    if (!track_alloc_surface(t,2,SURFACE_GRID*SURFACE_GRID*2)) abort();
     t->surface_count=2;
     t->surface[0]=(SurfaceTriangle){v3(-128,0,-128),v3(128,0,-128),v3(128,0,128)};
     t->surface[1]=(SurfaceTriangle){v3(-128,0,-128),v3(128,0,128),v3(-128,0,128)};
@@ -129,6 +130,7 @@ int main(void) {
     for (int track=0;track<TRACK_COUNT;track++) {
         g->selected=track; props_reset(g);
         printf("Track %d: %d fence panels\n",track,g->fence_count);
+        fflush(stdout);
         CHECK(g->fence_count>=4 && g->fence_count<=MAX_FENCE_PANELS);
         CHECK(g->prop_count<=MAX_TRACK_PROPS);
         int tires=0;
@@ -152,7 +154,7 @@ int main(void) {
         props_reset(g);
         CHECK(vlen(vsub(initial,g->fences[0].nodes[3].pos))<.0001f);
     }
-    free(g);
+    game_free(g); free(g);
     printf("Track props: %d failures\n",failures);
     return failures ? 1 : 0;
 }

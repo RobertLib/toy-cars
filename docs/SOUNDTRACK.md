@@ -10,15 +10,20 @@ download music.
 
 ## Music
 
-| Setting | Song | Final-lap version | Character |
+| Song | Final-lap version | Character | Tracks |
 | --- | --- | --- | --- |
-| Menu, garage, help, settings, records | Racing Game Menu (165 BPM) | — | Bright synth menu loop |
-| Harvest Hills | Blossom Mountain [Remake] (140 BPM) | Climax, 155 BPM | Bright, harp and tambourine |
-| Harvest Hills | Joyful Jungle (140 BPM) | Climax, 155 BPM | Joyful, outdoor |
-| Sunshine Coast | Sky Blue Street (165 BPM) | Climax, 180 BPM | Happy, open sky |
-| Sunshine Coast | Sunny City (120 BPM) | Climax, 135 BPM | Saxophone and piano, summery |
-| Alpine Rush | Fever Stadium (165 BPM) | Climax, 180 BPM | Eurobeat |
-| Alpine Rush | Cool Highway [Remake] (140 BPM) | Climax, 155 BPM | Techno |
+| Racing Game Menu (165 BPM) | — | Bright synth menu loop | Menu, garage, help, settings, records |
+| Blossom Mountain [Remake] (140 BPM) | Climax, 155 BPM | Bright, harp and tambourine | Harvest Hills, Maple Woods, Sakura Hills |
+| Joyful Jungle (140 BPM) | Climax, 155 BPM | Joyful, outdoor | Harvest Hills, Jungle Ruins, Highland Loch |
+| Sky Blue Street (165 BPM) | Climax, 180 BPM | Happy, open sky | Sunshine Coast, Sakura Hills, Highland Loch |
+| Sunny City (120 BPM) | Climax, 135 BPM | Saxophone and piano, summery | Sunshine Coast, Canyon Dash, Harbor Lights |
+| Fever Stadium (165 BPM) | Climax, 180 BPM | Eurobeat | Alpine Rush, Canyon Dash, Jungle Ruins, Volcano Peak |
+| Cool Highway [Remake] (140 BPM) | Climax, 155 BPM | Techno | Alpine Rush, Maple Woods, Harbor Lights, Volcano Peak |
+
+The collection has six course songs for ten tracks, so each track plays its own
+pair of them (`TRACK_SONGS` in `src/music.c`). Neighbouring tracks never share a
+pair; the two fastest songs belong to the night finals of the Rookie and Master
+cups, Alpine Rush and Volcano Peak.
 
 Each climax version is the same song at a higher tempo, with added handclaps.
 There are four jingles: Final Lap, and Race Finish Best, Good and Bad. Each Race

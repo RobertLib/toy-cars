@@ -26,6 +26,9 @@ def export_guardrails(path):
 
 if __name__ == '__main__':
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for name in ('country', 'beach', 'winter'):
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from themes import NAMES
+    for name in NAMES:
         bpy.ops.wm.open_mainfile(filepath=os.path.join(root, 'art', name + '.blend'))
         export_guardrails(os.path.join(root, 'assets', 'tracks', name + '.tcg'))

@@ -22,7 +22,7 @@ typedef struct {
     RailCar cars[MAX_RAIL_VEHICLES];
 } Consist;
 // Extents measured from the exported models; buffers and drawbars touch.
-static const Consist CONSISTS[3] = {
+static const Consist CONSISTS[4] = {
     [RAIL_STEAM] = {15.f, 0, 0, 28, 48, 4,
                     {{RAIL_MODEL_STEAM_LOCOMOTIVE, 4.05f, -3.75f, 1.45f},
                      {RAIL_MODEL_STEAM_TENDER, 2.88f, -2.88f, 1.37f},
@@ -37,6 +37,10 @@ static const Consist CONSISTS[3] = {
                      {{RAIL_MODEL_ALPINE_LOCOMOTIVE, 5.23f, -5.23f, 1.33f},
                       {RAIL_MODEL_ALPINE_COACH, 5.68f, -5.68f, 1.33f},
                       {RAIL_MODEL_ALPINE_COACH, 5.68f, -5.68f, 1.33f}}},
+    [RAIL_FREIGHT] = {14.f, 0, 0, 30, 50, 3,
+                      {{RAIL_MODEL_DIESEL_LOCOMOTIVE, 6.58f, -6.58f, 1.45f},
+                       {RAIL_MODEL_CONTAINER_WAGON, 6.88f, -6.88f, 1.28f},
+                       {RAIL_MODEL_CONTAINER_WAGON, 6.88f, -6.88f, 1.28f}}},
 };
 
 static float consist_length(const Consist *c) {
