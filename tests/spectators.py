@@ -15,6 +15,7 @@ from mathutils.bvhtree import BVHTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from themes import THEMES
+import meshdata
 import os
 # TOYCARS_TRACKS=canyon,volcano checks only those scenes.
 THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
@@ -29,11 +30,11 @@ for T in THEMES:
     data = (ROOT / 'assets/tracks' / (name + '.tcp')).read_bytes()
     count, = struct.unpack_from('<I', data, 4)
     path = [struct.unpack_from('<7f', data, 20 + i * 28) for i in range(count)]
-    rendered = (ROOT / 'assets/tracks' / (name + '-crowd.tca')).read_bytes()
+    rendered = meshdata.read(ROOT / 'assets/tracks' / (name + '-crowd.tca'))
     vertex_count, = struct.unpack_from('<I', rendered, 4)
     assert rendered[:4] == b'TCA1' and len(rendered) == 8 + vertex_count * 72
     positions = {rendered[i:i+12] for i in range(8, len(rendered), 72)}
-    static = (ROOT / 'assets/tracks' / (name + '.tcm')).read_bytes()
+    static = meshdata.read(ROOT / 'assets/tracks' / (name + '.tcm'))
     static_positions = {static[i:i+12] for i in range(8, len(static), 40)}
     assert positions.isdisjoint(static_positions), (name, 'static duplicate of animated crowd')
     records = [struct.unpack_from('<18f', rendered, i) for i in range(8, len(rendered), 72)]
@@ -61,11 +62,13 @@ for T in THEMES:
             assert struct.pack('<3f', *point) in positions, (name, 'spectator missing from export')
             assert all(math.hypot(point[0]-p[0], point[2]-p[2]) > p[5]+1.25 for p in path), (
                 name, 'spectator or flag encroaches on road')
-        # The two shoes are the first two blocks; their centers must touch the
-        # actual mesh, not the analytic hill function used before road grading.
-        for base in (0, 32):
-            shoe = vertices[base:base+8]
-            center = sum(shoe, Vector()) / 8
+        # Each shoe's vertex range is recorded; its centre must touch the actual
+        # mesh, not the analytic hill function used before road grading.
+        soles = list(obj['spectator_soles'])
+        assert len(soles) == 4, (name, 'two shoes')
+        for base, count in zip(soles[::2], soles[1::2]):
+            shoe = vertices[base:base+count]
+            center = sum(shoe, Vector()) / count
             bottom = min(v.z for v in shoe)
             hit, _, _, _ = ground.ray_cast(Vector((center.x, center.y, 100)), Vector((0, 0, -1)))
             assert hit is not None and abs(bottom-hit.z) < .025, (name, 'floating shoe', bottom, hit)

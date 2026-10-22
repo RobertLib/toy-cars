@@ -129,9 +129,10 @@ a fifth camera operator, reporter with microphone, sound engineer with boom and
 mixer bag, vision technician with monitors, TV van, roof dish, radio mast,
 flight cases and terrain-following cables. Crew wear media vests, passes and
 headsets. Locations are checked against road clearance, water, slopes and existing
-scenery; subsequent habitat generation also avoids the new props. The original
-low-poly geometry is static, included in the existing scene/shadow batch and
-editable in the three Blender track scenes.
+scenery; subsequent habitat generation also avoids the new props. The crew are
+rounded, smooth-shaded figures; the truck, dish and cameras are signed distance
+models shared by every circuit. All of it is static, included in the existing
+scene/shadow batch and editable in the Blender track scenes.
 
 
 ### Rally safety netting

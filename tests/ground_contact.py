@@ -14,6 +14,7 @@ from mathutils.bvhtree import BVHTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from themes import THEMES
+import meshdata
 import os
 # TOYCARS_TRACKS=canyon,volcano checks only those scenes.
 THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
@@ -128,7 +129,7 @@ for T in THEMES:
                 continue
             expected.add(struct.pack("<9f", *(v for p in points for v in (p.x, p.z, -p.y))))
     assert actual == expected, (name, "collision triangles differ from visible surfaces")
-    rendered = (ROOT / "assets" / "tracks" / (name + ".tcm")).read_bytes()
+    rendered = meshdata.read(ROOT / "assets" / "tracks" / (name + ".tcm"))
     positions = {rendered[i:i+12] for i in range(8, len(rendered), 40)}
     assert all(data[i:i+12] in positions for i in range(8, len(data), 12)), (
         name, "collision geometry is missing from the rendered export")

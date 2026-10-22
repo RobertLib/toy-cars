@@ -91,14 +91,15 @@ _ICO_FACES = ((0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11), (1, 5, 
 
 
 class Batch:
-    """Flat-shaded low-poly dressing, merged into one mesh per colour."""
+    """Low-poly dressing, merged into one mesh per colour: flat-shaded walls and
+    trunks, smooth-shaded crowns and cones so distant woods read as soft masses."""
 
     def __init__(self, api, name, land=True):
         self.api, self.name, self.land = api, name, land
         self.parts = {}
 
-    def faces(self, color, vs, fs, paint=0):
-        key = (tuple(round(c, 4) for c in color), paint)
+    def faces(self, color, vs, fs, paint=0, smooth=False):
+        key = (tuple(round(c, 4) for c in color), paint, smooth)
         part_vs, part_fs = self.parts.setdefault(key, ([], []))
         base = len(part_vs)
         part_vs.extend(tuple(v) for v in vs)
@@ -121,6 +122,9 @@ class Batch:
         else:
             vs.append(b)
             fs = [(k, (k + 1) % sides, sides) for k in range(sides)]
+            # A cone has no caps, so it shades smoothly round its sides.
+            self.faces(color, vs, fs, smooth=True)
+            return
         self.faces(color, vs, fs)
 
     def box(self, center, size, color, yaw=0.):
@@ -135,9 +139,11 @@ class Batch:
 
     def ico(self, center, scale, color, yaw=0.):
         c, s = math.cos(yaw), math.sin(yaw)
-        vs = [(center[0] + (c * p.x + s * p.z) * scale[0], center[1] + p.y * scale[1],
-               center[2] + (c * p.z - s * p.x) * scale[2]) for p in _ICO]
-        self.faces(color, vs, _ICO_FACES)
+        # Each vertex bulges or sinks a little, so no crown is a regular solid.
+        lump = [1 + .08 * math.sin(yaw * 3.1 + k * 2.39) for k in range(len(_ICO))]
+        vs = [(center[0] + (c * p.x + s * p.z) * scale[0] * l, center[1] + p.y * scale[1] * l,
+               center[2] + (c * p.z - s * p.x) * scale[2] * l) for p, l in zip(_ICO, lump)]
+        self.faces(color, vs, _ICO_FACES, smooth=True)
 
     def quad(self, corners, color):
         self.faces(color, corners, [(0, 1, 2, 3)])
@@ -167,11 +173,11 @@ class Batch:
 
     def build(self):
         objs = []
-        for (color, paint), (vs, fs) in self.parts.items():
+        for (color, paint, smooth), (vs, fs) in self.parts.items():
             name = '%s %.3f %.3f %.3f' % (self.name, *color)
             obj = self.api['mesh'](self.name, vs, fs, self.api['mat'](name, color, paint))
             for poly in obj.data.polygons:
-                poly.use_smooth = False
+                poly.use_smooth = smooth
             if self.land:
                 obj['land'] = True
             objs.append(obj)

@@ -5,6 +5,7 @@ Blender. Export is a deliberately small, versioned triangle/vertex-color format.
 No Blender installation or Python interpreter is needed to play the game.
 """
 import bpy, math, random, struct, os, sys
+import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hydrology import Watershed
 from railway import Railway, build_vehicles
@@ -159,11 +160,15 @@ def export(path,crowd=False,wildlife=False,vegetation=False,land=False):
         if ('vegetation_origin' in o)!=vegetation:continue
         e=o.evaluated_get(deps);me=e.to_mesh();me.calc_loop_triangles();normal=e.matrix_world.to_3x3().inverted().transposed()
         for tri in me.loop_triangles:
+            # Zero-area slivers have no normal to shade by.
+            if tri.area<1e-10:continue
             material=me.materials[tri.material_index] if me.materials else None
             color=tuple(material.diffuse_color[:3]) if material else (.5,.5,.5)
             paint=material.get('paint',0) if material else 0
             for idx in tri.vertices:
-                v=me.vertices[idx];p=e.matrix_world@v.co;n=(normal@(v.normal if tri.use_smooth else tri.normal)).normalized()
+                v=me.vertices[idx];p=e.matrix_world@v.co
+                # A vertex shared by opposite faces has no smooth normal; use its face's.
+                n=(normal@(v.normal if tri.use_smooth and v.normal.length>.5 else tri.normal)).normalized()
                 vertex_color=me.color_attributes.get('Riverbed')
                 tint=tuple(vertex_color.data[idx].color[:3]) if vertex_color else color
                 data.extend((*eng(p),*eng(n),*tint,paint))
@@ -174,9 +179,13 @@ def export(path,crowd=False,wildlife=False,vegetation=False,land=False):
                 if wildlife:data.extend((*o['wildlife_origin'],*o['wildlife_motion']))
                 if vegetation:data.extend((*o['vegetation_origin'],*o['vegetation_motion']))
         e.to_mesh_clear()
+    # Indexed: identical corners are stored once, which roughly halves the files.
+    rows=np.array(data,dtype='<f4').reshape(-1,18 if crowd or wildlife or vegetation else 10)
+    unique,index=np.unique(rows,axis=0,return_inverse=True)
     with open(path,'wb') as f:
-        f.write(b'TCV1' if vegetation else b'TCF1' if wildlife else b'TCA1' if crowd else b'TCM1');f.write(struct.pack('<I',len(data)//(18 if crowd or wildlife or vegetation else 10)));f.write(struct.pack('<%sf'%len(data),*data))
-    print('EXPORTED',os.path.basename(path),len(data)//(54 if crowd or wildlife or vegetation else 30),'triangles',flush=True)
+        f.write(b'TCV2' if vegetation else b'TCF2' if wildlife else b'TCA2' if crowd else b'TCM2')
+        f.write(struct.pack('<II',len(unique),len(rows)));f.write(unique.tobytes());f.write(index.reshape(-1).astype('<u4').tobytes())
+    print('EXPORTED',os.path.basename(path),len(rows)//3,'triangles',len(unique),'vertices',flush=True)
 
 def export_surface(path):
     """Collision uses the same triangles as the visible driving surfaces."""
@@ -203,175 +212,9 @@ def save(name):
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(ROOT,'art',name+'.blend'))
 
 cream=mat('Warm ivory',(.94,.91,.80));rubber=mat('Soft rubber',(.055,.065,.073));chrome=mat('Brushed aluminum',(.60,.66,.65));glass=mat('Smoky blue glass',(.075,.18,.22));orange=mat('Signal orange',(.96,.25,.075));dark=mat('Ink',(.09,.13,.16));wood=mat('Warm cedar',(.53,.29,.14))
-paint=mat('Custom body paint',(.94,.28,.10),1)
-
-def build_car():
-    clear()
-    box('Die cast rally chassis',(0,.51,0),(1.7,.53,3.0),paint,.19)
-    box('Hood',(0,.84,.90),(1.58,.23,.96),paint,.09)
-    box('Cabin glazing',(0,1.09,-.24),(1.37,.66,1.31),glass,.19)
-    box('Floating roof',(0,1.43,-.29),(1.39,.15,1.10),paint,.12)
-    for x in [-.52,.52]:
-        box('Hood racing stripe',(x,.963,.91),(.17,.012,.8),cream,.003)
-        box('Roof racing stripe',(x,1.51,-.28),(.14,.015,.86),cream,.002)
-    for x in [-.85,.85]:
-        for z in [-.95,.94]:
-            beam('All terrain tire',(x-.15,.39,z),(x+.15,.39,z),.43,rubber,16)
-            beam('Recessed wheel hub',(x-.17,.39,z),(x+.17,.39,z),.245,chrome,12)
-            beam('Hub center',(x-.18,.39,z),(x+.18,.39,z),.105,dark,10)
-        box('Side mirror',(x,1.05,.32),(.23,.15,.23),paint,.06)
-        box('Door handle',(x,.92,-.38),(.06,.07,.23),cream,.015)
-    box('Front bumper',(0,.43,1.52),(1.63,.22,.16),chrome,.05)
-    box('Intake',(0,.64,1.506),(.58,.20,.055),dark,.02)
-    for x in [-.57,.57]:
-        box('Headlamp',(x,.80,1.48),(.39,.25,.08),cream,.055)
-        box('Tail lamp',(x,.73,-1.49),(.37,.16,.055),orange,.025)
-    box('Rear wing',(0,1.03,-1.36),(1.91,.13,.34),dark,.035)
-    for x in [-.58,.58]:box('Wing strut',(x,.84,-1.35),(.07,.31,.08),dark)
-    box('Number plate',(0,.73,-1.54),(.44,.15,.04),cream,.01)
-    export(os.path.join(ROOT,'assets/models/car.tcm'));save('rally_car')
-
-# The garage's other cars share the rally car's footprint, so collisions and
-# the chase camera fit them all. Lamp centres match CAR_LAMPS in renderer.c.
-def wheels(x,y,z,radius,width,hub):
-    for side in [-x,x]:
-        for along in z:
-            beam('All terrain tire',(side-width/2,y,along),(side+width/2,y,along),radius,rubber,16)
-            beam('Recessed wheel hub',(side-width/2-.02,y,along),(side+width/2+.02,y,along),radius*hub,chrome,12)
-            beam('Hub center',(side-width/2-.03,y,along),(side+width/2+.03,y,along),radius*.24,dark,10)
-
-def build_sprite():
-    clear()
-    box('Rounded hatch body',(0,.50,0),(1.62,.50,2.6),paint,.22)
-    box('Short hood',(0,.79,.84),(1.50,.16,.74),paint,.08)
-    box('Bubble glazing',(0,1.08,-.16),(1.42,.70,1.62),glass,.25)
-    box('Roof',(0,1.45,-.2),(1.44,.12,1.38),paint,.1)
-    box('Roof stripe',(0,1.512,-.2),(.32,.014,1.18),cream,.003)
-    box('Hood stripe',(0,.875,.86),(.32,.012,.62),cream,.003)
-    box('Roof spoiler',(0,1.43,-.96),(1.30,.07,.22),dark,.03)
-    wheels(.80,.38,[-.85,.85],.38,.28,.62)
-    for x in [-.81,.81]:
-        box('Side mirror',(x,1.0,.42),(.2,.14,.2),paint,.06)
-        box('Door handle',(x,.86,-.2),(.06,.07,.2),cream,.015)
-    box('Front bumper',(0,.40,1.32),(1.55,.20,.12),chrome,.05)
-    box('Rear bumper',(0,.40,-1.32),(1.55,.20,.12),chrome,.05)
-    box('Grille',(0,.58,1.30),(.5,.12,.05),dark,.02)
-    for x in [-.55,.55]:
-        box('Headlamp',(x,.74,1.30),(.32,.26,.06),cream,.06)
-        box('Tail lamp',(x*1.09,.82,-1.31),(.22,.30,.05),orange,.025)
-    box('Number plate',(0,.62,-1.35),(.42,.14,.04),cream,.01)
-    export(os.path.join(ROOT,'assets/models/sprite.tcm'));save('sprite')
-
-def build_bruiser():
-    clear()
-    box('Pickup chassis',(0,.70,0),(1.78,.52,3.15),paint,.16)
-    box('Hood',(0,1.01,1.08),(1.66,.14,.92),paint,.07)
-    box('Cab glazing',(0,1.27,.22),(1.58,.64,1.02),glass,.14)
-    box('Cab roof',(0,1.63,.2),(1.62,.12,.98),paint,.08)
-    box('Bed floor',(0,.97,-.86),(1.54,.04,1.42),dark)
-    for x in [-.83,.83]:
-        box('Bed side',(x,1.10,-.86),(.12,.30,1.44),paint,.03)
-        box('Side mirror',(x*1.05,1.22,.82),(.16,.2,.18),dark,.04)
-        beam('Roll bar post',(x*.86,.98,-.2),(x*.86,1.78,-.2),.05,dark)
-    box('Tailgate',(0,1.10,-1.53),(1.66,.30,.1),paint,.03)
-    beam('Roll bar',(-.72,1.78,-.2),(.72,1.78,-.2),.05,dark)
-    for x in [-.45,-.15,.15,.45]:
-        box('Light bar lamp',(x,1.84,-.18),(.22,.12,.1),cream,.02)
-    wheels(.88,.52,[-1.05,1.05],.52,.36,.5)
-    for z in [-1.05,1.05]:
-        for x in [-.88,.88]:
-            box('Wheel arch',(x,1.02,z),(.30,.08,1.08),dark,.03)
-    box('Bull bar',(0,.66,1.64),(1.5,.14,.12),chrome,.04)
-    for x in [-.55,.55]:
-        beam('Bull bar upright',(x,.6,1.66),(x,1.08,1.66),.045,chrome)
-    beam('Bull bar top',(-.55,1.08,1.66),(.55,1.08,1.66),.045,chrome)
-    box('Grille',(0,.82,1.58),(.62,.22,.05),dark,.02)
-    for x in [-.60,.60]:
-        box('Headlamp',(x,.98,1.56),(.34,.22,.07),cream,.05)
-        box('Tail lamp',(x*1.2,1.02,-1.58),(.2,.22,.05),orange,.02)
-    box('Rear bumper',(0,.50,-1.60),(1.70,.18,.14),chrome,.04)
-    export(os.path.join(ROOT,'assets/models/bruiser.tcm'));save('bruiser')
-
-def build_comet():
-    clear()
-    box('Low coupe body',(0,.42,0),(1.82,.40,3.2),paint,.16)
-    box('Long hood',(0,.65,.86),(1.70,.12,1.40),paint,.06)
-    box('Fastback glazing',(0,.86,-.36),(1.36,.44,1.25),glass,.2)
-    box('Roof',(0,1.07,-.42),(1.32,.09,.88),paint,.06)
-    box('Rear deck',(0,.69,-1.2),(1.74,.14,.72),paint,.06)
-    for x in [-.3,.3]:
-        box('Hood stripe',(x,.715,.86),(.16,.012,1.3),cream,.003)
-        box('Roof stripe',(x,1.118,-.42),(.13,.012,.8),cream,.002)
-        box('Deck stripe',(x,.765,-1.2),(.16,.012,.62),cream,.003)
-    box('Rear wing',(0,1.06,-1.46),(1.95,.07,.38),dark,.03)
-    for x in [-.6,.6]:
-        box('Wing strut',(x,.88,-1.42),(.07,.30,.1),dark)
-    box('Front splitter',(0,.24,1.62),(1.80,.06,.2),dark,.02)
-    for x in [-.92,.92]:
-        box('Side skirt',(x,.27,0),(.06,.1,2.0),dark,.02)
-        box('Side mirror',(x*.86,.9,.28),(.2,.11,.18),paint,.05)
-        box('Side intake',(x*1.0,.48,-.62),(.03,.16,.42),dark,.01)
-    wheels(.86,.37,[-1.08,1.08],.37,.3,.7)
-    for x in [-.62,.62]:
-        box('Headlamp',(x,.60,1.58),(.42,.12,.06),cream,.03)
-        box('Tail lamp',(x*.89,.62,-1.60),(.5,.1,.05),orange,.02)
-    for x in [-.3,.3]:
-        beam('Exhaust',(x,.32,-1.55),(x,.32,-1.68),.07,chrome)
-    box('Number plate',(0,.46,-1.62),(.42,.13,.04),cream,.01)
-    export(os.path.join(ROOT,'assets/models/comet.tcm'));save('comet')
-
-def build_cars():
-    build_car();build_sprite();build_bruiser();build_comet()
-
-def build_can():
-    clear();fuel=mat('Fuel mint',(.43,.93,.63))
-    box('Jerrycan body',(0,.61,0),(.79,1.06,.39),fuel,.1)
-    box('Handle',(0,1.19,0),(.5,.13,.24),dark,.055)
-    for x in [-.2,.2]:box('Handle neck',(x,1.11,0),(.09,.22,.22),dark,.03)
-    box('Fuel label',(0,.67,.203),(.5,.47,.018),cream,.025)
-    box('Label slash',(0,.67,.22),(.14,.32,.02),orange,.01,yaw=-.3)
-    beam('Cap',(.3,1.04,0),(.3,1.17,0),.13,dark)
-    export(os.path.join(ROOT,'assets/models/fuel.tcm'));save('fuel_can')
-
-def build_helicopter():
-    """Separate rotor exports pivot at the origin; the editable scene is assembled."""
-    clear()
-    blue=mat('Broadcast navy',(.12,.24,.31))
-    ico('Rounded cabin',(0,0,.45),(1.0,.85,1.75),cream,2)
-    ico('Cockpit glazing',(0,.22,1.28),(.89,.65,1.02),glass,2)
-    box('Cabin roof',(0,.75,.38),(1.5,.18,1.75),blue,.12)
-    ico('Engine housing',(0,.69,-.62),(.61,.49,.91),blue,2)
-    beam('Rotor mast',(0,.9,0),(0,1.55,0),.12,chrome)
-    beam('Tapered tail silhouette',(0,.10,-.9),(0,.52,-4.1),.19,blue)
-    mesh('Tail fin',[(-.08,.4,-4.25),(-.08,1.7,-4.35),(-.08,1.7,-3.93),(-.08,.4,-3.55),
-                     (.08,.4,-4.25),(.08,1.7,-4.35),(.08,1.7,-3.93),(.08,.4,-3.55)],
-         [(0,1,2,3),(4,7,6,5),(0,4,5,1),(1,5,6,2),(2,6,7,3),(3,7,4,0)],orange)
-    box('Tail stabilizer',(0,.5,-3.25),(2.0,.10,.48),cream,.04)
-    for side in [-1,1]:
-        x=side*.97
-        beam('Landing skid',(x,-1.12,-1.25),(x,-1.12,1.45),.065,dark)
-        beam('Skid curved nose',(x,-1.12,1.45),(x,-.96,1.77),.065,dark)
-        for z in [-.73,.85]:beam('Skid support',(side*.6,-.5,z),(x,-1.12,z),.055,chrome)
-        box('Broadcast side stripe',(side*.96,-.05,.05),(.035,.22,1.3),orange,.015)
-    ico('Underslung camera',(0,-.87,1.12),(.29,.29,.29),dark,2)
-    beam('Camera lens',(0,-.90,1.25),(0,-1.02,1.43),.15,glass)
-    body=list(bpy.context.scene.objects)
-    export(os.path.join(ROOT,'assets/models/helicopter.tcm'))
-    for o in body:o.hide_render=True
-    for angle in [0,pi/2]:
-        box('Main rotor blade',(0,0,0),(6.8,.045,.17),dark,.018,yaw=angle)
-    ico('Main rotor hub',(0,0,0),(.24,.12,.24),chrome,1)
-    rotor=[o for o in bpy.context.scene.objects if o not in body]
-    export(os.path.join(ROOT,'assets/models/helicopter-rotor.tcm'))
-    for o in rotor:o.hide_render=True
-    box('Tail rotor blade',(0,0,0),(.055,1.25,.12),dark,.015)
-    box('Tail rotor blade',(0,0,0),(.055,.12,1.25),dark,.015)
-    tail=[o for o in bpy.context.scene.objects if o not in body and o not in rotor]
-    export(os.path.join(ROOT,'assets/models/helicopter-tail-rotor.tcm'))
-    for o in body+rotor:o.hide_render=False
-    for o in rotor:o.location+=Vector(xyz((0,1.55,0)))
-    for o in tail:o.location+=Vector(xyz((.25,.74,-4.02)))
-    save('helicopter')
+# The garage cars, fuel can, helicopter and turntable are signed distance models:
+# see tools/cars.py and tools/models.py.
+import cars, models, flora, roadside, landmarks
 
 # Layouts, terrain and palettes live in themes.py: the country infield weave,
 # three coastal lobes, alpine switchbacks and the seven later circuits.
@@ -379,47 +222,23 @@ def spline(t,T):
     return spline_point(T.knots,t)
 
 def tree(x,y,z,s,theme):
+    """Palms on the coast, firs and meadow oaks elsewhere, from the flora library."""
     before=set(bpy.context.scene.objects)
     if theme==1:
-        beam('Palm trunk',(x,y,z),(x+s*.7,y+s*7,z),s*.25,wood)
-        top=(x+s*.7,y+s*7,z)
-        for k in range(7):
-            a=k*pi*2/7
-            end=(top[0]+cos(a)*s*4.3,top[1]-.9*s,top[2]+sin(a)*s*4.3)
-            mid=(top[0]+cos(a)*s*2,top[1]+s*.6,top[2]+sin(a)*s*2)
-            perp=(-sin(a)*s*.7,0,cos(a)*s*.7)
-            mesh('Sculpted palm frond',[top,(mid[0]+perp[0],mid[1],mid[2]+perp[2]),end,(mid[0]-perp[0],mid[1],mid[2]-perp[2]),mid],[(0,1,4),(1,2,4),(2,3,4),(3,0,4)],mat('Palm green',(.15,.47,.29)))
-        for k in range(3):ico('Coconut',(top[0]+.35*s*cos(k*2),top[1]-.4*s,top[2]+.35*s*sin(k*2)),(.35*s,)*3,wood)
+        flora.plant('Palm',('palm',),flora.palm,x,y,z,s)
+    elif theme==2 or random.random()<.5:
+        if theme==2:flora.plant('Snowy fir',('fir','snow'),lambda v:flora.fir(v,snow=(.93,.96,.98)),x,y,z,s)
+        else:flora.plant('Layered fir',('fir',),flora.fir,x,y,z,s)
     else:
-        cone('Tree trunk',(x,y+1.2*s,z),.3*s,.22*s,2.4*s,wood)
-        if theme==2 or random.random()<.5:
-            for k in range(3):
-                cone('Layered fir',(x,y+(2.6+k*1.5)*s,z),(2.1-k*.42)*s,0,3.3*s,mat('Pine needles',(.13,.31,.25)))
-                if theme==2:cone('Snow cap',(x,y+(3.15+k*1.5)*s,z),(1.78-k*.38)*s,0,2.55*s,mat('Fresh snow',(.89,.95,.94)))
-        else:
-            ico('Rounded crown',(x,y+4.2*s,z),(2.6*s,3*s,2.3*s),mat('Leaf green',(.31,.52,.25)),2)
-            ico('Small crown',(x+1.7*s,y+3.7*s,z+.6*s),(1.8*s,2.1*s,1.7*s),mat('Leaf light',(.48,.64,.28)),1)
-
+        flora.plant('Meadow oak',('broadleaf',),flora.broadleaf,x,y,z,s)
     for obj in set(bpy.context.scene.objects)-before:
         obj['vegetation_origin']=(x,y,z,7*s)
-        obj['vegetation_motion']=(1.0 if theme==1 else .4 if theme==2 else .65,
-                                  float(obj.name.startswith('Sculpted palm frond')),0.,0.)
+        obj['vegetation_motion']=(1.0 if theme==1 else .4 if theme==2 else .65,float(bool(obj.get('frond'))),*obj.get('crown',(0.,0.)))
 
 def barn(x,y,z,yaw,theme):
-    wall=mat('Barn vermilion',(.72,.22,.13)) if theme==0 else mat('Chalet wood',(.45,.30,.23))
-    roof=mat('Roof charcoal',(.19,.24,.26)) if theme==0 else mat('Snow roofs',(.91,.94,.92))
-    objs=set(bpy.context.scene.objects)
-    box('Barn walls',(x,y+3,z),(8,6,11),wall,.12)
-    vs=[(x-4.8,y+5.8,z-6),(x+4.8,y+5.8,z-6),(x,y+8.6,z-6),(x-4.8,y+5.8,z+6),(x+4.8,y+5.8,z+6),(x,y+8.6,z+6)]
-    mesh('Pitched roof',vs,[(0,3,5,2),(2,5,4,1),(0,2,1),(3,4,5)],roof)
-    box('Barn double door',(x,y+2,z+5.53),(3.2,4,.13),cream,.04)
-    box('Door inset',(x,y+2,z+5.61),(2.7,3.5,.05),wall)
-    for dx in [-1.32,0,1.32]:box('Door frame',(x+dx,y+2,z+5.7),(.14,3.6,.09),cream)
-    for k in range(5):box('Wall batten',(x-4.04,y+3,z-4+k*2),(.1,5.4,.15),cream)
-    for dx in [-2.8,2.8]:box('Barn window',(x+dx,y+4,z+5.58),(1.15,1.3,.1),glass,.05)
-    if theme==0:
-        cone('Grain silo',(x+6,y+4,z-2),2,2,8,mat('Silo silver',(.58,.64,.60)),16)
-        cone('Silo lid',(x+6,y+8.8,z-2),2.2,0,1.6,roof,16)
+    """A red barn and silo on the farm, a snowed-in log chalet in the Alps."""
+    if theme==0:roadside.place('Red barn',('barn',),landmarks.barn,x,y,z,yaw)
+    else:roadside.place('Alpine chalet',('chalet',),landmarks.chalet,x,y,z,yaw)
 
 def spectator(position,yaw,T,kind,pose,rng,ground_height,group):
     style=T.outfit
@@ -432,7 +251,7 @@ def spectator(position,yaw,T,kind,pose,rng,ground_height,group):
     shirt=mat('Spectator shirt '+str(c:=rng.randrange(len(shirts))),shirts[c])
     trousers=mat('Spectator denim',(.13,.23,.34)) if rng.random()<.6 else dark
     hair=mat('Spectator hair '+kind,(.68,.69,.65) if kind=='senior' else rng.choice([(.16,.10,.07),(.48,.25,.10),(.85,.65,.28)]))
-    vertices=[];faces=[];face_materials=[];palette=[];parts=[];body_part=0
+    vertices=[];faces=[];face_materials=[];palette=[];parts=[];body_part=0;soles=[];flat=[]
     def point(p):
         x,y,z=p;x*=scale;y*=scale;z*=scale
         return (position[0]+cos(yaw)*x+sin(yaw)*z,position[1]+y,position[2]-sin(yaw)*x+cos(yaw)*z)
@@ -442,51 +261,65 @@ def spectator(position,yaw,T,kind,pose,rng,ground_height,group):
         parts.extend([body_part]*len(vs))
         faces.extend(tuple(start+i for i in f) for f in fs)
         face_materials.extend([palette.index(material)]*len(fs))
-    def block(p,size,material):
-        x,y,z=p;a,b,c=[v/2 for v in size]
-        part([(x+dx*a,y+dy*b,z+dz*c) for dx,dy,dz in
-              [(-1,-1,-1),(1,-1,-1),(1,1,-1),(-1,1,-1),(-1,-1,1),(1,-1,1),(1,1,1),(-1,1,1)]],
-             [(0,3,2,1),(4,5,6,7),(0,4,7,3),(1,2,6,5),(0,1,5,4),(3,7,6,2)],material)
-    def limb(a,b,r,material):
+        return start
+    def rings(loops,bottom,top,material):
+        """A closed smooth surface from stacked loops of points and two poles."""
+        n=len(loops[0]);vs=[bottom]+[p for loop in loops for p in loop]+[top]
+        fs=[(0,1+(k+1)%n,1+k) for k in range(n)]
+        for j in range(len(loops)-1):
+            a=1+j*n;fs+=[(a+k,a+(k+1)%n,a+n+(k+1)%n,a+n+k) for k in range(n)]
+        t=len(vs)-1;a=1+(len(loops)-1)*n
+        fs+=[(a+k,a+(k+1)%n,t) for k in range(n)]
+        return part(vs,[tuple(reversed(f)) for f in fs],material)
+    def blob(c,r,material,lon=8,lat=5,e=1.):
+        """An ellipsoid, or with e<1 a rounded box (superellipsoid)."""
+        f=lambda v:math.copysign(abs(v)**e,v)
+        loops=[[(c[0]+r[0]*f(cos(ph))*f(cos(th)),c[1]+r[1]*f(sin(ph)),c[2]+r[2]*f(cos(ph))*f(sin(th)))
+                for th in (2*pi*k/lon for k in range(lon))] for ph in (-pi/2+pi*j/lat for j in range(1,lat))]
+        return rings(loops,(c[0],c[1]-r[1],c[2]),(c[0],c[1]+r[1],c[2]),material)
+    def limb(a,b,ra,material,rb=None,sides=5):
+        """A tapered capsule from a to b with rounded ends."""
+        rb=ra if rb is None else rb
         a,b=Vector(a),Vector(b);axis=(b-a).normalized()
         u=axis.cross(Vector((0,0,1)))
         if u.length<.01:u=axis.cross(Vector((1,0,0)))
         u.normalize();v=axis.cross(u)
-        vs=[tuple(p+r*(cos(k*pi/3)*u+sin(k*pi/3)*v)) for p in (a,b) for k in range(6)]
-        part(vs,[tuple(reversed(range(6))),tuple(range(6,12))]+[(k,(k+1)%6,(k+1)%6+6,k+6) for k in range(6)],material)
-    def head(p,size,material):
-        x,y,z=p;rx,ry,rz=size
-        vs=[(x+rx*cos(k*pi/4)*r,y+ry*h,z+rz*sin(k*pi/4)*r)
-            for h,r in [(-1,.5),(-.5,1),(.5,1),(1,.5)] for k in range(8)]
-        part(vs,[tuple(range(8)),tuple(reversed(range(24,32)))]+
-             [(j*8+k,(j+1)*8+k,(j+1)*8+(k+1)%8,j*8+(k+1)%8) for j in range(3) for k in range(8)],material)
+        loops=[]
+        for c,r,h in ((a,ra,-.7),(a,ra,0),(b,rb,0),(b,rb,.7)):
+            k=(1-h*h)**.5
+            loops.append([tuple(c+axis*h*r+r*k*(cos(i*2*pi/sides)*u+sin(i*2*pi/sides)*v)) for i in range(sides)])
+        return rings(loops,tuple(a-axis*ra),tuple(b+axis*rb),material)
+    def shoe(p,size):
+        start=blob(p,size,rubber,6,3,.45);soles.append((start,len(vertices)-start))
     # Each shoe follows the actual triangulated island, including hillside groups.
     for side in [-1,1]:
         # Later circuits seat the sole at its centre, which matters on steep ground.
         foot=point((side*.18,0,.04 if T.legacy else .07));floor=(ground_height(foot[0],foot[2])-position[1])/scale
-        block((side*.18,floor+.09,.07),(.23,.18,.40),rubber)
-        knee=(side*.18,.55,.015);hip=(side*.15,.95,0)
-        limb((side*.18,floor+.17,.03),knee,.095,skin if style in ('beach','tropic') else trousers)
-        limb(knee,hip,.12,trousers)
-    block((0,1.23,0),(.58*width,.64,.34),shirt)
+        shoe((side*.18,floor+.075,.07),(.115,.075,.20))
+        knee=(side*.17,.55,.015);hip=(side*.14,.95,0)
+        limb((side*.18,floor+.15,.03),knee,.075,skin if style in ('beach','tropic') else trousers,.085)
+        limb(knee,hip,.09,trousers,.115)
+    blob((0,1.17,0),(.29*width,.41,.17),shirt,8,4,.55)
+    blob((0,.96,0),(.24*width,.10,.16),trousers,6,3,.6)
     if style=='winter':
-        block((0,1.47,.02),(.65*width,.13,.40),orange)
-        block((.16,1.27,.20),(.12,.35,.055),orange)
-    limb((0,1.50,0),(0,1.64,0),.105,skin)
-    head((0,1.80,.015),(.22,.27,.22),skin)
-    block((0,2.015,-.025),(.40,.13,.34),hair)
-    # A nose and dark glasses make the direction of attention readable.
-    block((0,1.80,.245),(.09,.10,.09),skin)
-    if style in ('beach','tropic','desert') or pose=='camera':block((0,1.88,.225),(.37,.065,.045),dark)
+        limb((-.22*width,1.52,.02),(.22*width,1.52,.02),.08,orange)
+        limb((.16,1.50,.15),(.18,1.18,.19),.05,orange)
+    limb((0,1.50,0),(0,1.64,0),.085,skin,sides=4)
+    blob((0,1.81,.015),(.20,.24,.205),skin,8,5)
+    blob((0,1.875,-.03),(.215,.215,.215),hair,8,4)
+    # Eyes and a nose make the direction of attention readable.
+    for side in (-1,1):blob((side*.075,1.835,.205),(.028,.034,.016),dark,5,3)
+    blob((0,1.78,.225),(.04,.05,.04),skin,5,3)
+    if style in ('beach','tropic','desert') or pose=='camera':blob((0,1.84,.215),(.18,.035,.025),dark,8,3,.5)
     hat=rng.randrange(3)
     if style=='winter':
-        head((0,2.035,0),(.24,.16,.24),shirt)
-        block((0,2.19,0),(.13,.13,.13),cream)
+        blob((0,1.99,0),(.235,.17,.235),shirt,8,4)
+        blob((0,2.17,0),(.07,.07,.07),cream,6,3)
     elif hat==0:
-        block((0,2.04,0),(.45,.15,.43),shirt)
-        block((0,2.01,.22),(.43,.055,.28),shirt)
+        blob((0,2.01,-.01),(.225,.11,.225),shirt,8,3)
+        blob((0,1.995,.19),(.19,.025,.14),shirt,6,3,.6)
     elif hat==1:
-        block((0,1.84,-.20),(.39,.32,.12),hair)
+        blob((0,1.80,-.19),(.17,.2,.07),hair,8,4)
     poses={
         'cheer':[((-.48,1.76,0),(-.65,2.16,.06)),((.48,1.76,0),(.65,2.16,.06))],
         'wave':[((-.44,1.11,0),(-.43,.91,.12)),((.48,1.80,0),(.37,2.22,.08))],
@@ -496,24 +329,30 @@ def spectator(position,yaw,T,kind,pose,rng,ground_height,group):
     for side,(elbow,hand) in zip([-1,1],poses[pose]):
         body_part=1 if side<0 else 2
         shoulder=(side*.30*width,1.45,0)
-        limb(shoulder,elbow,.105,shirt)
-        limb(elbow,hand,.08,shirt if style=='winter' else skin)
-        block(hand,(.16,.18,.16),skin)
+        limb(shoulder,elbow,.085,shirt,.075)
+        limb(elbow,hand,.065,shirt if style=='winter' else skin,.055)
+        blob(hand,(.07,.08,.07),skin,5,3)
     if pose=='camera':
         body_part=0
-        block((0,1.80,.45),(.40,.24,.18),dark)
-        limb((0,1.80,.51),(0,1.80,.67),.11,chrome)
+        blob((0,1.80,.45),(.2,.12,.09),dark,8,4,.5)
+        limb((0,1.80,.51),(0,1.80,.67),.09,chrome)
     if pose=='flag':
         body_part=2
-        limb((.64,1.68,.12),(.64,3.0,.12),.027,wood)
+        limb((.64,1.68,.12),(.64,3.0,.12),.025,wood,sides=5)
         # Faceted cloth with front and back faces for either viewing direction.
         vv=[(.64,2.98,.12),(1.05,2.92,.24),(1.51,2.99,.09),(.64,2.42,.12),(1.05,2.36,.24),(1.51,2.43,.09)]
         body_part=3
+        flat.append(len(faces))
         part(vv,[(0,3,4,1),(1,4,5,2),(1,4,3,0),(2,5,4,1)],shirt)
-        block((.85,2.69,.19),(.13,.43,.025),cream)
+        block_vs=[(.85+dx*.065,2.69+dy*.215,.19+dz*.012) for dx,dy,dz in
+                  [(-1,-1,-1),(1,-1,-1),(1,1,-1),(-1,1,-1),(-1,-1,1),(1,-1,1),(1,1,1),(-1,1,1)]]
+        part(block_vs,[(0,3,2,1),(4,5,6,7),(0,4,7,3),(1,2,6,5),(0,1,5,4),(3,7,6,2)],cream)
     obj=mesh('Rally spectator',vertices,faces,palette[0])
     for material in palette[1:]:obj.data.materials.append(material)
     for polygon,index in zip(obj.data.polygons,face_materials):polygon.material_index=index
+    # Rounded parts shade smoothly; the two-sided flag cloth stays faceted.
+    for polygon in obj.data.polygons:polygon.use_smooth=not any(f<=polygon.index<f+4 for f in flat)
+    obj['spectator_soles']=[v for start,count in soles for v in (start,count)]
     obj['spectator_group']=group;obj['spectator_kind']=kind;obj['spectator_pose']=pose
     obj['spectator_position']=position;obj['spectator_yaw']=yaw
     obj['spectator_parts']=parts;obj['spectator_scale']=scale;obj['spectator_width']=width
@@ -1270,8 +1109,7 @@ def build_track(T):
         if i%16==0 and water_sample(p[0],p[2])[0]<-2 and not rail.near_road(p[6],8):
             for side in [-1,1]:
                 xx,yy,zz=roadside_anchor(i,side,1.4)
-                box('Reflector post',(xx,yy+.60,zz),(.22,1.2,.22),cream,.03)
-                box('Reflector',(xx,yy+.95,zz),(.25,.17,.25),curb,.015)
+                roadside.place('Reflector post',('delineator',name),lambda:roadside.delineator(C['curb']),xx,yy,zz)
     # Two extra dividers make four equal lanes on the broad carriageway.
     # Carry the dividers into the tapers until the extra lanes merge away.
     for i,p in enumerate(path):
@@ -1298,11 +1136,7 @@ def build_track(T):
     # Start gantry, grids and checker stripe are meshes, too.
     p=path[0];yaw=math.atan2(p[3],p[4])
     def startpos(x,y,z):return(p[0]+cos(yaw)*x+sin(yaw)*z,p[1]+y,p[2]-sin(yaw)*x+cos(yaw)*z)
-    for side in [-1,1]:box('Finish gantry pillar',startpos(side*6.4,3.6,0),(.65,7.2,.65),dark,.08,yaw)
-    box('Finish gantry board',startpos(0,7,0),(13.5,1.55,.7),orange,.13,yaw)
-    for k in range(14):
-        for j in range(2):
-            box('Gantry checker',startpos(-5.9+k*.9,6.65+j*.65,.38),(.65,.52,.05),cream if (k+j)%2 else dark,0,yaw)
+    roadside.place('Finish gantry',('gantry',),lambda:roadside.gantry(orange.diffuse_color[:3]),*startpos(0,0,0),yaw)
     half=width*.5-.12;cell=half*2/12
     for k in range(12):
         for j in range(2):
@@ -1346,7 +1180,8 @@ def build_track(T):
             if placed<105:
                 tree(x,y,z,random.uniform(.65,1.3),theme)
             else:
-                ico('Granite boulder',(x,y+.6,z),(random.uniform(1.0,2.5),random.uniform(.9,2.5),random.uniform(1,2.3)),mat('Boulder '+name,C['boulder']))
+                key,build=flora.rock('Granite boulder',C['boulder'],(.36,.45,.20) if theme==0 else None)
+                flora.plant('Granite boulder',key,build,x,y+.6,z,(random.uniform(1.0,2.5),random.uniform(.9,2.5),random.uniform(1,2.3)))
             placed+=1
             if placed>=145:break
         if theme!=1:
@@ -1355,32 +1190,38 @@ def build_track(T):
             for i in range(9):
                 x=-28+i*4;z=-53;y=T.terrain(x,z)
                 if nearest(x,z)<2.5 or not rail.clear(x,z,1):continue
-                box('Fence post',(x,y+1,z),(.25,2,.25),wood,.025)
+                roadside.place('Fence post',('fence post',),landmarks.fence_post,x,y,z)
                 if i<8 and nearest(x+4,z)>2.5:
-                    for h in [.65,1.45]:beam('Fence rail',(x,y+h,z),(x+4,T.terrain(x+4,z)+h,z),.09,cream,5)
+                    rise=T.terrain(x+4,z)-y;span=math.hypot(4,rise)
+                    for h in [.65,1.45]:
+                        bar=roadside.place('Fence rail',('fence rail',),landmarks.fence_rail,x,y+h,z)
+                        bar.scale=(span,1,1);bar.rotation_euler=(0,-math.atan2(rise,4),0)
             if theme==0:
                 for j in range(5):
                     for i in range(7):
                         x=-29+i*2.1;z=24+j*3.2
                         if nearest(x,z)<2 or not rail.clear(x,z,1):continue
-                        box('Crop row',(x,T.terrain(x,z)+.5,z),(.6,1.0,1.8),mat('Harvest gold',(.80,.64,.22)),.16)
+                        for dz in (-.5,.5):
+                            roadside.place('Wheat stook',('stook',),landmarks.stook,x,T.terrain(x,z+dz)-.05,z+dz,(i*7+j*3+dz)%6.28)
                 for x,z in [(15,-32),(21,-32),(18,-27)]:
-                    if nearest(x,z)>3 and rail.clear(x,z,1.5):cone('Hay bale',(x,ground_height(x,z)+1,z),1.5,1.5,2,mat('Hay straw',(.80,.62,.29)),12)
+                    if nearest(x,z)>3 and rail.clear(x,z,1.5):
+                        roadside.place('Hay bale',('hay bale',),landmarks.hay_bale,x,ground_height(x,z)-.06,z,x*.37)
             else:
                 for x,z in [(-16,25),(-13,26),(-18,27)]:
                     x,z=scenery_site(x,z,2)
-                    y=ground_height(x,z);ico('Snowman body',(x,y+1.3,z),(1.2,1.3,1.2),cream,2);ico('Snowman head',(x,y+2.95,z),(.78,.78,.78),cream,2)
-                    cone('Snowman hat',(x,y+3.65,z),.83,.83,.19,dark);cone('Hat top',(x,y+4,z),.51,.51,.65,dark)
+                    y=ground_height(x,z)
+                    # Snowmen look towards the road.
+                    face=math.atan2(-x,-z)
+                    roadside.place('Snowman',('snowman',),landmarks.snowman,x,y-.08,z,face)
         else:
             for x,z,col in [(-12,-35,(.92,.34,.19)),(3,-27,(.23,.59,.68)),(-20,25,(.91,.69,.25)),(25,31,(.92,.34,.19))]:
                 x,z=scenery_site(x,z,6)
-                y=ground_height(x,z);beam('Beach parasol pole',(x,y,z),(x,y+4,z),.1,cream)
-                cone('Striped parasol',(x,y+4,z),3.5,0,.95,mat('Parasol '+str(col),col),12)
-                box('Beach towel',(x+3,y+.08,z+3),(1.7,.08,3.5),cream,.04,yaw=.2)
-                box('Beach lounger',(x-2,y+.55,z+2),(1.4,.2,2.8),wood,.06)
+                y=ground_height(x,z)
+                roadside.place('Striped parasol',('parasol',col),lambda col=col:landmarks.parasol(col),x,y-.05,z,x)
+                roadside.place('Beach towel',('towel',col),lambda col=col:landmarks.towel(col),x+3,ground_height(x+3,z+3)-.01,z+3,.2)
+                roadside.place('Beach lounger',('lounger',),landmarks.lounger,x-2,ground_height(x-2,z+2)-.03,z+2,.2)
             hx,hz=scenery_site(-10,42,6)
-            box('Lifeguard hut',(hx,ground_height(hx,hz)+2.7,hz),(6,4,5),mat('Hut aqua',(.22,.58,.57)),.15)
-            box('Lifeguard roof',(hx,ground_height(hx,hz)+5,hz),(7,.45,6),cream,.12)
+            roadside.place('Lifeguard hut',('beach hut',),landmarks.beach_hut,hx,ground_height(hx,hz)-.1,hz,math.atan2(-hx,-hz))
     else:
         biomes.scenery(ctx)
     # Direction boards before selected bends.
@@ -1388,8 +1229,10 @@ def build_track(T):
         # A board may not stand among the crossing's signals.
         while rail.near_road(path[idx][6],10):idx-=4
         p=path[idx];xx,yy,zz=roadside_anchor(idx,1,2);yaw=math.atan2(p[3],p[4])
-        box('Direction sign',(xx,yy+2,zz),(2.8,1.15,.18),orange,.08,yaw)
-        box('Sign post',(xx,yy+.9,zz),(.16,1.8,.16),dark,.02)
+        # The chevrons point the way the road bends a little further on.
+        q=path[(idx+30)%len(path)]
+        turn=1 if math.sin(math.atan2(q[3],q[4])-yaw)>0 else -1
+        roadside.place('Sign post',('bend',turn),lambda:roadside.bend_board(turn,orange.diffuse_color[:3]),xx,yy,zz,yaw)
     if T.legacy:
         # Habitat-specific, clustered banks, not the same necklace of stones around
         # every body of water. Sand banks stay mostly bare; upland rock is coarser.
@@ -1463,8 +1306,8 @@ if __name__=='__main__':
     if '--vehicles-only' in sys.argv:
         clear();build_vehicles(globals(),ROOT);sys.exit(0)
     if '--cars-only' in sys.argv:
-        build_cars();sys.exit(0)
-    if '--tracks-only' not in sys.argv:build_cars();build_can();build_helicopter();build_vehicles(globals(),ROOT)
+        cars.build();sys.exit(0)
+    if '--tracks-only' not in sys.argv:cars.build();models.build();clear();build_vehicles(globals(),ROOT)
     only=sys.argv[sys.argv.index('--only')+1] if '--only' in sys.argv else None
     for T in THEMES:
         if only in (None,T.key):build_track(T)

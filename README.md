@@ -239,7 +239,9 @@ an internet connection to run.
   bloom and roll off softly instead of clipping. A light color grade, FXAA edge
   smoothing and dithered gradients finish the image. The menu broadcast films
   through a lens with depth of field, sharp on the cars and soft behind them.
-- Vertex-colored Blender models, smooth terrain, dust, pickup and landing particles.
+- Signed distance models with crisp material edges, printed liveries and baked
+  occlusion; cars with spinning, steering wheels and brake lamps; smooth
+  terrain, dust, pickup and landing particles.
 - Terrain-led streams: a meandering meadow creek feeds an irregular pond with
   shallow inlets and sediment shelves, a sand-bar creek widens into a coastal
   estuary, and a narrow alpine stream winds through rock constrictions. Channels
@@ -375,23 +377,36 @@ round trip during the countdown; resume explicitly when ready.
 
 ## Blender source
 
-The game meshes were actually modeled and exported in **Blender 5.2**. Open the
-editable scenes in `art/`:
+The game meshes are modeled and exported in **Blender 5.2**. The cars, the fuel
+can, the camera helicopter, the garage turntable and the track furniture are
+signed distance models: smooth, filleted parts sampled on a fine lattice,
+meshed with OpenVDB, decimated, coloured per material and shaded with baked
+ambient occlusion (`tools/sdf.py`, `tools/cars.py`). Open the editable scenes in `art/`:
 
-- `rally_car.blend` — beveled rally body, glazing, mirrors, striped roof, wheels,
-  wing, lamps and bumpers.
-- `sprite.blend`, `bruiser.blend` and `comet.blend` — the garage's hatch, pickup
-  with roll bar and light bar, and low GT with its rear wing.
-- `fuel_can.blend` — the collectible jerrycan.
-- `helicopter.blend` — camera helicopter with separately animated main and tail rotors.
-- `trains.blend` — the steam locomotive, tender and coach, the mountain railway's
-  locomotive and panorama coach, and the seaside road train's tractor and carriage.
-- `trains.blend` also holds the harbor's diesel locomotive and container wagon.
+- `rally_car.blend` — the Trailblazer: a three-door rally hatch with box flares,
+  twin projector headlamps, rally spot lamps, a roof scoop and spoiler, mud flaps
+  and white six-spoke gravel wheels (`tools/cars.py`).
+- `sprite.blend`, `bruiser.blend` and `comet.blend` — the retro city hatch with
+  its ivory roof and chrome bumpers, the trophy-truck pickup with roll bar,
+  bull bar, winch and snorkel, and the long-nosed Le Mans GT with its swan-neck
+  wing (`tools/car_sprite.py`, `tools/car_bruiser.py`, `tools/car_comet.py`).
+- `fuel_can.blend`, `helicopter.blend`, `turntable.blend` and `track_props.blend`
+  — the jerrycan, the broadcast helicopter with separately turning rotors, the
+  garage dais and the barrier tire and traffic cone (`tools/models.py`).
+- `trains.blend` — the rolling stock: steam locomotive, tender and coach, the
+  mountain railway's locomotive and panorama coach, the seaside road train's
+  tractor and carriage, and the harbor's diesel locomotive and container wagon.
 - `country.blend`, `beach.blend`, `winter.blend`, `canyon.blend`, `autumn.blend`,
   `jungle.blend`, `sakura.blend`, `harbor.blend`, `highland.blend` and
   `volcano.blend` — complete themed scenes with terrain, road, curbs, ramps, a
   level crossing with its railway and tunnels (or the road train's promenade),
   buildings, landmarks, trees and props.
+
+Each car exports a near and a far level of detail and a separate wheel, which
+the game spins and steers. Trees, shrubs and rocks (`tools/flora.py` and the
+biome libraries `tools/flora_*.py`), buildings (`tools/landmarks*.py`) and road
+furniture (`tools/roadside.py`) are modeled once per variant and placed as
+linked duplicates.
 
 Every circuit's parameters live in `tools/themes.py`: island size and shape,
 terrain, colours, counts of trees, jumps and spectators, water, railway and the
@@ -417,8 +432,9 @@ Reproduce all seventeen scenes and their runtime exports:
 cmake --build build
 ```
 
-Options go after `--`: `--tracks-only` skips the cars, can, helicopter and
-rolling stock, `--cars-only` exports just the four cars, `--only NAME` builds a single circuit (`country`, `beach`,
+Options go after `--`: `--tracks-only` skips the cars, can, helicopter, turntable,
+props and rolling stock, `--cars-only` exports just the four cars (each takes one
+to three minutes), `--only NAME` builds a single circuit (`country`, `beach`,
 `winter`, `canyon`, `autumn`, `jungle`, `sakura`, `harbor`, `highland` or
 `volcano`; each takes two to five minutes), and `--vehicles-only` exports just
 the rolling stock. `python3 tools/layout_svg.py` redraws the layout comparison.
@@ -587,13 +603,15 @@ performance profiling, broader playtesting, store signing and store submission
 are separate release steps; see the validation document for the exact tested scope.
 
 Trees and palms sway with the weather's wind direction, strength and gusts. Roots
-stay planted, palms bend more than firs, and palm fronds flutter independently.
+stay planted, palms bend more than firs, and palm fronds flutter independently,
+bobbing and swinging along the wind about the middle of their own crown.
 Color and shadow passes share the deformation and adjusted normals. A persistent
 light breeze keeps trees visibly swaying during clear spells and in the menu;
 weather gusts add stronger motion. Pausing freezes the animation.
 The asset builder exports `*-vegetation.tcv` separately from static scenery:
 `TCV1`, little-endian vertex count, 18 floats per vertex (position, normal, color,
-paint, root xyz, reference height, flexibility, frond flag, two reserved zeros).
+paint, root xyz, reference height, flexibility, frond flag, and the crown centre's
+x and z offset from the root); `TCV2` is its indexed variant.
 Graphics tests check visible motion in both the everyday breeze and stronger
 gusts, as well as frozen animation during pause, on every track.
 

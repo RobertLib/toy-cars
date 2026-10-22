@@ -2,6 +2,7 @@
 import math
 import random
 from mathutils import Vector
+import figures, flora, landmarks, roadside
 
 
 def build(api, T, path, ground, water, obstacles):
@@ -60,35 +61,31 @@ def build(api, T, path, ground, water, obstacles):
             return box(name,pos(a,h,b),size,material,0,yaw)
         a=b=0
         y = max(floor(a+dx,b+dz) for dx in (-1.05,1.05) for dz in (-.3,.3))
-        for dx in (-1.05,1.05):
-            for dz in (-.3,.3):
-                beam('Bench leg',pos(a+dx,floor(a+dx,b+dz),b+dz),
-                     pos(a+dx,y+.7,b+dz),.065,dark)
-            beam('Bench back support',pos(a+dx,y+.55,b-.32),
-                 pos(a+dx,y+1.45,b-.32),.055,dark)
-        for dz in (-.27,0,.27):
-            block('Bench seat slat',a,y+.72,b+dz,(2.7,.12,.23),wood)
-        for h in (1.03,1.32):
-            block('Bench back slat',a,y+h,b-.37,(2.7,.22,.10),wood)
+        roadside.place('Park bench',('bench',),landmarks.bench,*pos(a,y,b),yaw)
         occupied = site%3 != 0
         if occupied:
             skin = mat('Resting visitor skin '+str(site),
                        [(.75,.47,.30),(.94,.69,.49),(.42,.26,.18),(.64,.40,.26)][site%4])
             shirt = mat('Resting visitor clothes '+str(site),
                         [(.18,.49,.61),(.79,.28,.19),(.67,.47,.71),(.86,.65,.19)][site%4])
-            # Bent thighs rest on the seat; hands rest on the knees.
+            # A rounded figure at rest: thighs on the seat, hands on the knees.
+            centre=pos(a,y,b)
+            legs,arms,head=[],[],[]
             for dx in (-.18,.18):
-                foot_y = floor(a+dx,b+.63)
-                block('Seated visitor shoe',a+dx,foot_y+.09,b+.66,(.23,.18,.39),dark)
-                beam('Seated visitor shin',pos(a+dx,foot_y+.17,b+.56),pos(a+dx,y+.83,b+.51),.09,dark)
-                beam('Seated visitor thigh',pos(a+dx,y+.83,b+.51),pos(a+dx,y+.83,b-.05),.12,dark)
-                beam('Seated visitor upper arm',pos(a+dx*1.7,y+1.37,b-.03),pos(a+dx*2,y+1.05,b+.18),.10,shirt)
-                beam('Seated visitor forearm',pos(a+dx*2,y+1.05,b+.18),pos(a+dx,y+.96,b+.46),.08,skin)
-                ico('Seated visitor hand',pos(a+dx,y+.96,b+.46),(.10,.09,.10),skin)
-            block('Seated visitor coat',a,y+1.12,b-.04,(.58,.60,.34),shirt)
-            ico('Seated visitor head',pos(a,y+1.69,b-.02),(.23,.28,.23),skin,2)
-            block('Seated visitor nose',a,y+1.69,b+.21,(.09,.10,.10),skin)
-            block('Seated visitor hat',a,y+1.92,b-.04,(.47,.14,.43),shirt if T.outfit=='winter' else dark)
+                foot_y=floor(a+dx,b+.63)-y
+                legs+=[figures.blob((dx,foot_y+.075,.66),(.11,.075,.19),6,3,.45),
+                       figures.limb((dx,foot_y+.15,.56),(dx,.83,.51),.08,.09),
+                       figures.limb((dx,.83,.51),(dx,.83,-.05),.11)]
+                arms+=[figures.limb((dx*1.7,1.37,-.03),(dx*2,1.05,.18),.09,.08),
+                       figures.limb((dx*2,1.05,.18),(dx,.96,.46),.07,.06)]
+                head+=[figures.blob((dx,.96,.46),(.07,.07,.07),5,3)]
+            arms.append(figures.blob((0,1.12,-.04),(.28,.31,.17),8,4,.55))
+            head+=[figures.blob((0,1.69,-.02),(.2,.24,.205),8,5),figures.blob((0,1.66,.21),(.04,.05,.04),5,3)]
+            hat=figures.blob((0,1.86,-.04),(.225,.11,.215),8,3)
+            figures.shape('Seated visitor legs',centre,yaw,legs,dark,None)
+            figures.shape('Seated visitor coat',centre,yaw,arms,shirt,None)
+            figures.shape('Seated visitor head',centre,yaw,head,skin,None)
+            figures.shape('Seated visitor hat',centre,yaw,[hat],shirt if T.outfit=='winter' else dark,None)
         for obj in set(bpy.context.scene.objects)-before:
             obj['landscape_bench']=site
             obj['bench_occupied']=occupied
@@ -152,10 +149,7 @@ def build(api, T, path, ground, water, obstacles):
             x,z=cx+dx*.65,cz+dz*.65;y=ground(x,z)
             if any(math.hypot(x-a,z-b)<1.8 for a,b in paths):continue
             before=set(bpy.context.scene.objects)
-            beam('Park deciduous trunk',(x,y,z),(x+.2,y+3.5*s,z),.22*s,wood)
-            for ox,oy,oz,r in [(0,4.4,0,2.2),(1.3,4.0,.5,1.8),(-1.0,4.5,-.6,1.65)]:
-                ico('Park leafy crown',(x+ox*s,y+oy*s,z+oz*s),(r*s,r*.95*s,r*.9*s),
-                    mat('Park leaf '+str(int(s*10)%3),[(.31,.48,.22),(.39,.55,.25),(.27,.44,.21)][int(s*10)%3]),2)
+            flora.plant('Park oak',('broadleaf',),flora.broadleaf,x,y,z,s)
             for obj in set(bpy.context.scene.objects)-before:
                 obj['vegetation_origin']=(x,y,z,7*s);obj['vegetation_motion']=(.65,0.,0.,0.)
         # Loose shrub/flower drifts, never boxed planters or a hard park boundary.
@@ -164,7 +158,7 @@ def build(api, T, path, ground, water, obstacles):
                 x,z=cx+dx*.65+rng.uniform(-1.8,1.8),cz+dz*.65+rng.uniform(-1.3,1.3)
                 if any(math.hypot(x-a,z-b)<1.3 for a,b in paths):continue
                 y=ground(x,z)
-                ico('Park shrub drift',(x,y+.35,z),(.65,.55,.6),mat('Park shrubs',(.30,.43,.19)),2)
+                flora.plant('Park shrub drift',('shrub',),flora.shrub,x,y-.05,z,1.3)
                 if j%2==0:
                     for k in range(3):
                         ico('Park flower drift',(x+rng.uniform(-.4,.4),y+.75,z+rng.uniform(-.3,.3)),(.12,.10,.12),

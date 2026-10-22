@@ -11,6 +11,7 @@ from mathutils.bvhtree import BVHTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from themes import THEMES
+import meshdata
 import os
 # TOYCARS_TRACKS=canyon,volcano checks only those scenes.
 THEMES = [T for T in THEMES if T.key in os.environ.get("TOYCARS_TRACKS", T.key).split(",")]
@@ -34,7 +35,7 @@ for T in THEMES:
     data = (ROOT / "assets" / "tracks" / (name + ".tcp")).read_bytes()
     count, _, _, length = struct.unpack_from("<IIIf", data, 4)
     points = [struct.unpack_from("<7f", data, 20 + i * 28) for i in range(count)]
-    exported = (ROOT / "assets" / "tracks" / (name + ".tcm")).read_bytes()
+    exported = meshdata.read(ROOT / "assets" / "tracks" / (name + ".tcm"))
     exported_positions = {exported[i:i + 12] for i in range(8, len(exported), 40)}
     road = bpy.data.objects["Elevated ribbon road"]
     road.data.calc_loop_triangles()

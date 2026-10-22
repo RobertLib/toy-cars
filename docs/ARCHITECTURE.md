@@ -244,18 +244,32 @@ for demonstrations and screenshots.
 ## Rendering and content
 
 Blender evaluates bevel and weighted-normal modifiers and exports triangles.
+The cars, the fuel can, the camera helicopter, the rolling stock, the garage
+turntable and most props are signed distance models (`tools/sdf.py`,
+`tools/cars.py`): smooth parts are sampled on a 3–8 mm lattice, meshed with
+OpenVDB's dual contouring, decimated symmetrically by Blender's quadric collapse
+and shaded with the field's own normals. Each material is a separate part, so
+its edges stay crisp; printed liveries and panel gaps are clipped from the
+finished paint surface along exact half-planes. Ambient occlusion is ray cast
+against the full-resolution parts and baked into the vertex colors. Each car
+has a near and a far level of detail and a separate wheel mesh: the renderer
+spins the wheels by the distance covered, steers the front pair into the curve
+the car follows and lights the brake lamps while it slows hard. Trees, shrubs,
+rocks, buildings and road furniture of the circuits come from the same
+pipeline as libraries of variants (`tools/flora*.py`, `tools/landmarks*.py`,
+`tools/roadside.py`) placed as linked duplicates.
 Static environment geometry is merged into one vertex buffer per track, sorted
 into 40 m ground tiles with their bounds (`TiledMesh`): the color and shadow
 passes draw only the tiles inside their frustum, joining neighbouring tiles into
 single draws. Only the selected circuit's meshes are resident; changing tracks
-replaces them (10–20 ms on a desktop). Static scenes hold 110–195 thousand
-triangles, plus separate vegetation, crowd, wildlife and water batches. A frame
-renders a depth shadow pass and a colored scene pass; the sky then fills the
-remaining background at the far plane. The scene target is `R11F_G11F_B10F`, or
-`RGBA16F`, where the GPU can render to floating point, so lamps and glints can
-exceed white; OpenGL ES devices without the extension get an 8-bit scene with a
-lower bloom threshold. The shadow frustum moves in whole shadow-map texels and
-is sampled with hardware comparison filtering.
+replaces them (10–20 ms on a desktop). Static scenes hold 175–355 thousand
+triangles, plus separate vegetation (50–165 thousand), crowd, wildlife and water
+batches. A frame renders a depth shadow pass and a colored scene pass; the sky
+then fills the remaining background at the far plane. The scene target is
+`R11F_G11F_B10F`, or `RGBA16F`, where the GPU can render to floating point, so
+lamps and glints can exceed white; OpenGL ES devices without the extension get an
+8-bit scene with a lower bloom threshold. The shadow frustum moves in whole
+shadow-map texels and is sampled with hardware comparison filtering.
 
 The world goes on beyond each island (`tools/surroundings.py`). A ring mesh
 starts on the island mesh's own outline vertices, so the two share their seam
@@ -299,7 +313,11 @@ Post-processing then works from the scene's color and depth textures:
   passes, and the speed blur test uses it.
 
 Glossy materials (paint, glazing, aluminum, rubber) and asphalt are recognized
-by their exported vertex colors, so the mesh formats are unchanged. One warm
+by their exported vertex colors in the older meshes. The signed distance models
+name their material in the paint value instead (2 to 10: body paint, glass,
+chrome, rubber, satin trim, lacquered decals, headlamp and tail lamp lenses,
+bare metal); their body paint's vertex color is baked occlusion, tinted by the
+car's color. Lamp lenses glow at night, tail lamps also under braking. One warm
 color (0.98, 0.80, 0.40) marks lanterns, torches and lit windows, which glow at
 night. Terrain paint values -1 to -10 select each environment's ground shading
 (meadow, sand, snow, red desert, leaf litter, jungle floor, spring lawn with petals,
@@ -309,7 +327,7 @@ The UI uses a separate batched triangle stream and single-channel glyph atlases.
 The GL and GLES shader variants share their shader bodies.
 
 Each environment includes 15 to 24 irregular spectator groups near the start,
-bends and jumps. Blender authors low-poly figures with five body types, five cheering
+bends and jumps. Blender authors rounded, smooth-shaded figures with five body types, five cheering
 or photography poses, varied skin/clothing colors and seasonal accessories.
 Placement rejects scenery footprints and nearby road segments, and grounds each
 shoe on the triangulated island. A separate crowd batch carries each figure's
@@ -362,6 +380,16 @@ position XYZ, normal XYZ, material RGB and a body-paint interpolation mask.
 Vertices are a triangle list. Runtime recoloring affects the marked body material.
 Each track has three: the static scene `<track>.tcm`, its surroundings
 `<track>-land.tcm` and its water (below).
+
+**TCM2 mesh:** the indexed variant used by the signed distance models: four-byte
+magic; `uint32 vertex_count`; `uint32 index_count`; the TCM1 vertices; then
+`uint32` triangle indices. The loader expands it to a TCM1 triangle list. Paint
+values from 2 select a material (above); 16 is added to wheel parts that steer
+but do not spin, such as brake calipers. Each car `<stem>` has `<stem>.tcm` and
+`<stem>-far.tcm` bodies and `<stem>-wheel.tcm` and `<stem>-wheel-far.tcm`
+wheels, the right-hand wheel with its outer face towards +X; the renderer turns
+it half way round for the left side. Wheel and lamp positions are tabulated in
+`src/renderer.c` (`CAR_WHEELS`, `CAR_LAMPS`).
 
 **Water placement:** `tools/hydrology.py` traces valley drainage along the negative
 terrain gradient from authored hillside springs, then authors nonperiodic erosion

@@ -10,13 +10,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from themes import THEMES  # noqa: E402
+import meshdata  # noqa: E402
 
 HORIZON = 700.  # The far-plane fade hides everything beyond about 650 m
 BINS = 360
 
 
 def points(name, floats):
-    data = (ROOT / "assets" / "tracks" / name).read_bytes()
+    data = meshdata.read(ROOT / "assets" / "tracks" / name)
     count, = struct.unpack_from("<I", data, 4)
     if floats == 3:
         count *= 3

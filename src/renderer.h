@@ -61,8 +61,10 @@ typedef struct {
     // Scenery dissolves into the sky before the far clip plane cuts it off.
     float overcast, fog_far, clip_far, fade, vignette, speed_blur;
     int viewport[4];
-    Mesh cars[CAR_MODEL_COUNT], lamps[CAR_MODEL_COUNT];
-    Mesh fuel, cube;
+    // Each car's body and one wheel, near and far levels of detail.
+    Mesh cars[CAR_MODEL_COUNT], cars_far[CAR_MODEL_COUNT];
+    Mesh wheels[CAR_MODEL_COUNT], wheels_far[CAR_MODEL_COUNT];
+    Mesh fuel, cube, turntable, puff, barrier, barrier_hinge;
     Mesh cone, tire, fence;
     Mesh boosts[TRACK_COUNT];
     Mesh helicopter, helicopter_rotor, helicopter_tail_rotor;
@@ -80,6 +82,12 @@ typedef struct {
     Color car_colors[CAR_COUNT];
     CarModel car_meshes[CAR_COUNT];
     bool car_visible[CAR_COUNT];
+    // Wheels roll with the distance each car covers and steer into its curve.
+    float wheel_spin[CAR_COUNT], wheel_steer[CAR_COUNT], last_yaw[CAR_COUNT];
+    // Brake lamps light while a car slows hard.
+    float last_speed[CAR_COUNT], brake[CAR_COUNT];
+    Vec3 last_pos[CAR_COUNT];
+    bool wheels_ready[CAR_COUNT];
     Color sky;
     float night;
     // The main menu films the selected track. Its layout sets hero_frame, a

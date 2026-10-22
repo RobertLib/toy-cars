@@ -5,14 +5,14 @@
 #include <string.h>
 
 // Lens centres of each car's headlamps and tail lamps, as modeled in
-// tools/build_assets.py: the right lamp mirrors the left one across the car.
+// tools/cars.py: the right lamp mirrors the left one across the car.
 static const struct {
-    Vec3 head, tail, half[2];
+    Vec3 head, tail;
 } CAR_LAMPS[CAR_MODEL_COUNT] = {
-    [CAR_TRAILBLAZER] = {{.57f, .80f, 1.525f}, {.57f, .73f, -1.522f}, {{.15f, .08f, .01f}, {.16f, .055f, .01f}}},
-    [CAR_SPRITE] = {{.55f, .74f, 1.335f}, {.60f, .82f, -1.341f}, {{.13f, .10f, .01f}, {.09f, .13f, .01f}}},
-    [CAR_BRUISER] = {{.60f, .98f, 1.600f}, {.72f, 1.02f, -1.610f}, {{.14f, .08f, .01f}, {.08f, .09f, .01f}}},
-    [CAR_COMET] = {{.62f, .60f, 1.615f}, {.55f, .62f, -1.630f}, {{.18f, .045f, .01f}, {.21f, .04f, .01f}}},
+    [CAR_TRAILBLAZER] = {{.53f, .735f, 1.53f}, {.565f, .835f, -1.545f}},
+    [CAR_SPRITE] = {{.555f, .655f, 1.363f}, {.57f, .66f, -1.38f}},
+    [CAR_BRUISER] = {{.585f, 1.025f, 1.53f}, {.735f, 1.07f, -1.58f}},
+    [CAR_COMET] = {{.669f, .594f, 1.593f}, {.525f, .62f, -1.632f}},
 };
 // Lamps 0 and 1 are the left and right headlamps, 2 and 3 the tail lamps.
 static Vec3 car_lamp(int model, int lamp) {
@@ -20,6 +20,16 @@ static Vec3 car_lamp(int model, int lamp) {
     p.x *= lamp % 2 ? 1 : -1;
     return p;
 }
+// Wheel centres and tire radius as modeled in tools/cars.py: the right wheels
+// sit at +x, the front axle at +z.
+static const struct {
+    float x, y, front, rear, radius;
+} CAR_WHEELS[CAR_MODEL_COUNT] = {
+    [CAR_TRAILBLAZER] = {.845f, .38f, .945f, -.95f, .42f},
+    [CAR_SPRITE] = {.83f, .33f, .90f, -.90f, .37f},
+    [CAR_BRUISER] = {.85f, .46f, 1.05f, -1.02f, .50f},
+    [CAR_COMET] = {.85f, .33f, 1.04f, -1.04f, .37f},
+};
 // Night halos reserved for the railway's signal lamps, arm tips and headlamps.
 #define RAIL_HALOS 16
 typedef struct {
@@ -88,16 +98,19 @@ typedef struct {
     "mat3 body=turnZ(sway*clamp((p.y-.25)/.7,0.,1.));p=body*p;n=body*n;"                         \
     "if(pose<.5){float hop=max(0.,sin(t*.8));p.y+=.32*hop*hop;}"                                 \
     "p=aOrigin.xyz+world*p*size;n=world*n;}\n"
-// TCV1 reuses the eight animation attributes: root/height, flexibility, frond, reserved.
+// TCV1 reuses the eight animation attributes: root/height, flexibility, frond and the
+// crown centre's offset from the root, about which fronds flutter: they bob and,
+// out of step, swing along the wind.
 // The height-squared bend anchors roots; every part of a tree shares its phase.
 #define VEGETATION_GLSL \
     "uniform bool uVegetation;uniform vec3 uVegetationWind;uniform float uVegetationTime;" \
     "void animateVegetation(inout vec3 p,inout vec3 n){if(!uVegetation)return;" \
     "vec3 q=p-aOrigin.xyz;float h=aOrigin.w;" \
     "float seed=dot(aOrigin.xz,vec2(.73,1.21)),t=uVegetationTime;" \
-    "if(aMotion.y>.5){vec2 leaf=q.xz-vec2(h*.1,0.);" \
-    "float flutter=.055*length(uVegetationWind)*sin(t*3.4+seed)/h;" \
-    "p.y+=dot(leaf,leaf)*flutter;n.xz-=2.*leaf*flutter*n.y;}" \
+    "if(aMotion.y>.5){vec2 leaf=q.xz-aMotion.zw;float reach=dot(leaf,leaf)/h;" \
+    "float flutter=.055*length(uVegetationWind)*sin(t*3.4+seed);" \
+    "p.y+=reach*flutter;n.xz-=2.*leaf*flutter/h*n.y;" \
+    "p.xz+=uVegetationWind.xz*(.035*reach*sin(t*2.7+seed*1.7));}" \
     "float y=max(0.,p.y-aOrigin.y);" \
     "float sway=.35+.60*sin(t*1.6+seed)+.18*sin(t*2.43+seed*.7);" \
     "vec2 bend=uVegetationWind.xz*(.045*sqrt(aMotion.x)*sway);" \
@@ -106,21 +119,29 @@ typedef struct {
 // apart by the exported colors of those materials in tools/build_assets.py.
 // Asphalt (5) is the circuit's road color or one of its darker tire marks;
 // lamps and windows that light up at night (6) use the lantern color in biomes.py.
+// The cars from tools/cars.py name their material instead: paint values 2 to 10
+// are paint, glass, chrome, rubber, satin trim, lacquered decals, headlamp and
+// tail lamp lenses and bare metal (materials 1-4 and 7-11). Their paint shade is
+// baked occlusion. Wheel parts from 16 up turn with the steering but not the axle.
 static const char *world_vs[] = {
     GLSL "layout(location=0) in vec3 aPos;layout(location=1) in vec3 aNormal;layout(location=2) in "
          "vec3 aColor;layout(location=3) in float aPaint;\n"
-         "uniform mat4 uModel,uVP,uLight;uniform vec3 uPaint,uRoad;out float vGround,vMaterial;"
-         "out vec3 vPos,vNormal,vColor;out vec4 vShadow;\n"
+         "uniform mat4 uModel,uVP,uLight;uniform vec3 uPaint,uRoad;uniform float uSpin;"
+         "out float vGround,vMaterial;out vec3 vPos,vNormal,vColor;out vec4 vShadow;\n"
          CROWD_GLSL,
     VEGETATION_GLSL
-         "void main(){vec3 pos=aPos,normal=aNormal;animateCrowd(pos,normal);animateVegetation(pos,normal);vec4 "
-         "p=uModel*vec4(pos,1.);vPos=p.xyz;vNormal=mat3(uModel)*normal;vColor=mix(aColor,uPaint,"
-         "clamp(aPaint,0.,1.));vGround=max(0.,-aPaint);"
+         "void main(){vec3 pos=aPos,normal=aNormal;animateCrowd(pos,normal);animateVegetation(pos,normal);"
+         "if(uSpin!=0.&&aPaint<15.5){float c=cos(uSpin),s=sin(uSpin);mat2 roll=mat2(c,s,-s,c);"
+         "pos.yz=roll*pos.yz;normal.yz=roll*normal.yz;}"
+         "vec4 p=uModel*vec4(pos,1.);vPos=p.xyz;vNormal=mat3(uModel)*normal;vGround=max(0.,-aPaint);"
+         "float code=aPaint>1.5?mod(aPaint,16.):0.;"
+         "if(code>1.5){vColor=code<2.5?uPaint*aColor:aColor;vMaterial=code<5.5?code-1.:code+1.;}"
+         "else{vColor=mix(aColor,uPaint,clamp(aPaint,0.,1.));"
          "float worn=dot(aColor,uRoad)/dot(uRoad,uRoad);"
          "vMaterial=aPaint>.5?1.:distance(aColor,vec3(.075,.18,.22))<.01?2.:"
          "distance(aColor,vec3(.60,.66,.65))<.01?3.:distance(aColor,vec3(.055,.065,.073))<.01?4.:"
          "distance(aColor,vec3(.98,.80,.40))<.004?6.:"
-         "worn>.6&&worn<1.01&&distance(aColor,uRoad*worn)<.004&&aPaint==0.?5.:0.;"
+         "worn>.6&&worn<1.01&&distance(aColor,uRoad*worn)<.004&&aPaint==0.?5.:0.;}"
          "vShadow=uLight*p;gl_Position=uVP*p;}"};
 // One world-space cloud layer for terrain, props and water reflections. Project
 // along the sun direction onto a plane 110 m above the track, including elevation.
@@ -150,7 +171,7 @@ static const char *world_vs[] = {
 static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     "in float vGround,vMaterial;in vec3 vPos,vNormal,vColor;in vec4 vShadow;out vec4 frag;"
     "uniform sampler2DShadow uShadow;uniform "
-    "vec3 uEye;uniform float uFogFar,uClipFar,uUnlit,uGloss;uniform bool uBoost;uniform float uBoostTime;\n"
+    "vec3 uEye;uniform float uFogFar,uClipFar,uUnlit,uGloss,uBrake;uniform bool uBoost;uniform float uBoostTime;\n"
     "uniform vec4 uLamps[8],uLampDirs[8];\n"
     // Night car lamps: a low beam tipped towards the road and a short red spill
     // behind. Softened facing lets the grazing beam still reach the asphalt.
@@ -223,17 +244,23 @@ static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     // The moon shares the sun's direction and shadow map, with a cool, dim light.
     "vec3 sunColor=mix(vec3(.58,.47,.33),vec3(.12,.15,.23),uNight);"
     "vec3 col=base*(skyAmbient*(1.-.05*uOvercast)+sunColor*diff*sh*sun);"
-    "if(uNight>0.)col+=(base*carLamps(n)+glow)*uNight;"
-    // Lanterns, torches and lit windows (6) glow after dark.
-    "if(vMaterial>5.5)col+=base*2.2*uNight;vec3 V=normalize(uEye-vPos),"
+    "if(uNight>0.)col+=(base*carLamps(n)+glow)*uNight;float m=vMaterial;"
+    // Lanterns, torches and lit windows (6) glow after dark, and so do car
+    // headlamp (9) and tail lamp (10) lenses; headlamps sparkle a little by day.
+    "if(abs(m-6.)<.5)col+=base*2.2*uNight;"
+    "if(abs(m-9.)<.5)col+=base*(.25+2.6*uNight);"
+    "if(abs(m-10.)<.5)col+=base*(.15+1.6*uNight+1.8*uBrake);vec3 V=normalize(uEye-vPos),"
     "halfV=normalize(light+V);float "
     "spec=pow(max(0.,dot(n,halfV)),48.)*.12*sh*sun*(1.-.75*uNight);col+=spec;"
     // Clear-coated die-cast paint, glazing and aluminum mirror the sky above and
-    // the ground below, with a tight sun glint that the bloom picks up.
-    "if(uGloss>0.){float m=vMaterial,coat=uGloss*(m>3.5?.05:m>2.5?.8:m>1.5?1.2:m>.5?.85:.5);"
+    // the ground below, with a tight sun glint that the bloom picks up. Rubber
+    // barely shines, satin trim softly; lacquered decals match the paint.
+    "if(uGloss>0.){float coat=uGloss*(m<.5?.5:m<1.5?.85:m<2.5?1.2:m<3.5?.85:m<4.5?.05:"
+    "m<7.5?.3:m<8.5?.85:m<10.5?1.:.6);"
     "vec3 R=reflect(-V,n),env=R.y>0.?skyColor(R):uHorizon*mix(.5,.22,clamp(-R.y*2.,0.,1.));"
     // A softer Fresnel curve than glass alone: toy lacquer catches the sky early.
-    "bool metal=m>2.5&&m<3.5;float f=metal?.6:.06+.7*pow(1.-max(dot(n,V),0.),3.);"
+    "bool metal=(m>2.5&&m<3.5)||m>10.5;"
+    "float f=metal?(m<3.5?.75:.45):.06+.7*pow(1.-max(dot(n,V),0.),3.);"
     "col=mix(col,metal?env*base*1.5:env,clamp(f*coat,0.,1.));"
     "col+=pow(max(0.,dot(n,halfV)),160.)*.55*coat*sh*sun*(1.-.75*uNight);}"
     // Fully unlit lamps are brighter than white so that they bloom.
@@ -241,7 +268,7 @@ static const char *world_fs[] = {GLSL CLOUD_GLSL SKY_GLSL
     // The haze lies low: hills and peaks rising well above the eye stay clearer.
     // Lit windows and lanterns shine through it at night.
     "fog=smoothstep(uFogFar*.45,uFogFar,dist)*(1.-.5*smoothstep(15.,150.,vPos.y-uEye.y))"
-    "*(1.-.45*uNight*step(5.5,vMaterial));"
+    "*(1.-.45*uNight*float(abs(m-6.)<.5||abs(m-9.5)<1.));"
     "col=mix(col,fogColor(-V),fog*.88);"
     // Distant land dissolves into the sky before the far clip plane cuts it off.
     "col=mix(col,skyColor(-V),smoothstep(uClipFar*.7,uClipFar*.96,dist));frag=vec4(col,1.);}"};
@@ -645,12 +672,56 @@ static Mesh mesh_upload_layout(const void *data, int count, bool crowd) {
 static Mesh mesh_upload(const Vertex *data, int count) {
     return mesh_upload_layout(data, count, false);
 }
-// Reads and validates a TCM1, TCA1, TCF1 or TCV1 file. Returns the file (to be
+// The '2' variants (TCM2, TCV2, TCA2, TCF2) share vertices between triangles:
+// a vertex and an index count, the vertices as in the '1' layout, then
+// little-endian 32-bit indices. Expanded here into the triangle list every
+// draw uses.
+static unsigned char *mesh_expand(unsigned char *d, size_t *size) {
+    uint32_t vertices, indices;
+    memcpy(&vertices, d + 4, 4);
+    memcpy(&indices, d + 8, 4);
+    vertices = SDL_Swap32LE(vertices);
+    indices = SDL_Swap32LE(indices);
+    size_t stride = (memcmp(d, "TCM2", 4) ? 18 : 10) * sizeof(float);
+    if (*size < 12 || vertices > 8000000 || indices > 8000000 || indices % 3 ||
+        *size != 12 + (size_t)vertices * stride + (size_t)indices * 4) {
+        SDL_free(d);
+        return NULL;
+    }
+    unsigned char *out = SDL_malloc(8 + (size_t)indices * stride);
+    if (!out) {
+        SDL_free(d);
+        return NULL;
+    }
+    memcpy(out, d, 3);
+    out[3] = '1';
+    uint32_t count = SDL_Swap32LE(indices);
+    memcpy(out + 4, &count, 4);
+    const unsigned char *index = d + 12 + (size_t)vertices * stride;
+    for (uint32_t i = 0; i < indices; i++) {
+        uint32_t k;
+        memcpy(&k, index + (size_t)i * 4, 4);
+        k = SDL_Swap32LE(k);
+        if (k >= vertices) {
+            SDL_free(out);
+            SDL_free(d);
+            return NULL;
+        }
+        memcpy(out + 8 + (size_t)i * stride, d + 12 + (size_t)k * stride, stride);
+    }
+    SDL_free(d);
+    *size = 8 + (size_t)indices * stride;
+    return out;
+}
+// Reads and validates a TCM, TCA, TCF or TCV file, version 1 or 2. Returns the file (to be
 // released with SDL_free) and its vertex data; *floats is 10 or 18 per vertex.
 static unsigned char *mesh_read(const char *path, uint32_t *vertex_count, size_t *floats_out,
                                 bool *animated, bool *wildlife_out) {
     size_t size;
     unsigned char *d = asset_read(path, &size);
+    if (d && size >= 12 && (!memcmp(d, "TCM2", 4) || !memcmp(d, "TCV2", 4) || !memcmp(d, "TCA2", 4) ||
+                            !memcmp(d, "TCF2", 4)))
+        d = mesh_expand(d, &size);
     if (!d || size < 8 || (memcmp(d, "TCM1", 4) && memcmp(d, "TCA1", 4) && memcmp(d, "TCF1", 4) && memcmp(d, "TCV1", 4))) {
         SDL_Log("Cannot load mesh %s", path);
         SDL_free(d);
@@ -687,7 +758,7 @@ static unsigned char *mesh_read(const char *path, uint32_t *vertex_count, size_t
             const float *v = values + i * floats;
             if (vegetation) {
                 if (v[13] <= 0 || v[13] > 20 || v[14] < 0 || v[14] > 1 ||
-                    (v[15] != 0 && v[15] != 1) || v[16] != 0 || v[17] != 0) {
+                    (v[15] != 0 && v[15] != 1) || fabsf(v[16]) > v[13] || fabsf(v[17]) > v[13]) {
                     SDL_Log("Invalid vegetation data: %s", path);
                     SDL_free(d);
                     return NULL;
@@ -888,39 +959,6 @@ static void set_gloss(const Renderer *r, bool depth, float amount) {
     if (!depth)
         glUniform1f(glGetUniformLocation(r->shader, "uGloss"), amount);
 }
-// Surfaces of revolution, centered on the same mass origin as the physics hull.
-static Mesh prop_mesh(bool tire) {
-    Vertex vertices[24*12*6];
-    int count=0, rings=tire ? 12 : 5;
-    const float cone_y[]={-.20f,-.02f,.10f,.28f,.40f,.56f};
-    for (int ring=0;ring<rings;ring++) for (int side=0;side<24;side++) {
-        Vec3 p[4];
-        for (int corner=0;corner<4;corner++) {
-            float a=(side+(corner==1 || corner==2))*2*PI/24;
-            int row=ring+(corner>=2);
-            float y,radius;
-            if (tire) {
-                float b=row*2*PI/12;
-                y=.20f*sinf(b); radius=.43f+.20f*cosf(b);
-            } else {
-                y=cone_y[row]; radius=lerpf(.30f,.035f,(y+.20f)/.76f);
-            }
-            p[corner]=v3(radius*cosf(a),y,radius*sinf(a));
-        }
-        int ids[]={0,2,1,0,3,2};
-        Color color=tire ? rgb(.065f,.073f,.081f) :
-                    (ring==1 || ring==3 ? rgb(.95f,.95f,.88f) : rgb(1,.24f,.025f));
-        if (tire && ring%3==0 && side%2==0) color=rgb(.095f,.10f,.11f);
-        for (int k=0;k<6;k++) {
-            Vec3 n=vnorm(vcross(vsub(p[ids[(k/3)*3+1]],p[ids[(k/3)*3]]),
-                                vsub(p[ids[(k/3)*3+2]],p[ids[(k/3)*3]])));
-            Vertex v={0}; memcpy(v.p,&p[ids[k]],12); memcpy(v.n,&n,12);
-            v.c[0]=color.r; v.c[1]=color.g; v.c[2]=color.b;
-            vertices[count++]=v;
-        }
-    }
-    return mesh_upload(vertices,count);
-}
 // Narrow woven strips leave real openings in the orange safety net.
 static void fence_quad(Vertex *vertices,int *count,Vec3 a,Vec3 b,Vec3 c,Vec3 d,Color color) {
     Vec3 points[]={a,b,c,a,c,d};
@@ -975,10 +1013,6 @@ static void draw_props(Renderer *r, const Game *g, bool depth) {
             continue;
         }
         draw_mesh(r,p->kind==PROP_CONE ? r->cone : r->tire,model,white,depth);
-        if (p->kind==PROP_CONE) {
-            Mat4 base=mmul(model,mmul(translate(v3(0,-.20f,0)),scale3(.36f,.09f,.36f)));
-            draw_mesh(r,r->cube,base,rgb(.12f,.13f,.14f),depth);
-        }
     }
     draw_fences(r,g,depth);
     // Irregular exposed asphalt/gravel patch inside the cone perimeter.
@@ -1013,29 +1047,6 @@ static void create_primitives(Renderer *r) {
             n++;
         }
     r->cube = mesh_upload(cube, 36);
-    // Night lenses sit just proud of each car's modeled headlamps and tail lamps.
-    for (int model = 0; model < CAR_MODEL_COUNT; model++) {
-        Vertex lamps[4 * 36];
-        for (int i = 0; i < 4; i++) {
-            bool tail = i >= 2;
-            Vec3 center = car_lamp(model, i), half = CAR_LAMPS[model].half[tail];
-            Color color = tail ? rgb(1, .10f, .05f) : rgb(1, .96f, .84f);
-            for (int k = 0; k < 36; k++) {
-                Vertex v = cube[k];
-                v.p[0] = center.x + v.p[0] * half.x;
-                v.p[1] = center.y + v.p[1] * half.y;
-                v.p[2] = center.z + v.p[2] * half.z;
-                v.c[0] = color.r;
-                v.c[1] = color.g;
-                v.c[2] = color.b;
-                v.paint = 0;
-                lamps[i * 36 + k] = v;
-            }
-        }
-        r->lamps[model] = mesh_upload(lamps, 4 * 36);
-    }
-    r->cone = prop_mesh(false);
-    r->tire = prop_mesh(true);
     r->fence = mesh_upload(NULL,0);
 }
 
@@ -1117,12 +1128,22 @@ bool renderer_init(Renderer *r) {
         !r->ao_blur_shader || !r->bloom_down_shader || !r->bloom_up_shader || !r->fxaa_shader ||
         !r->dof_down_shader || !r->dof_blur_shader)
         return false;
-    const char *car_models[CAR_MODEL_COUNT] = {"models/car.tcm", "models/sprite.tcm",
-                                                "models/bruiser.tcm", "models/comet.tcm"};
-    for (int i = 0; i < CAR_MODEL_COUNT; i++)
-        if (!mesh_load(&r->cars[i], car_models[i]))
+    const char *car_models[CAR_MODEL_COUNT] = {"car", "sprite", "bruiser", "comet"};
+    for (int i = 0; i < CAR_MODEL_COUNT; i++) {
+        char path[4][64];
+        SDL_snprintf(path[0], sizeof path[0], "models/%s.tcm", car_models[i]);
+        SDL_snprintf(path[1], sizeof path[1], "models/%s-far.tcm", car_models[i]);
+        SDL_snprintf(path[2], sizeof path[2], "models/%s-wheel.tcm", car_models[i]);
+        SDL_snprintf(path[3], sizeof path[3], "models/%s-wheel-far.tcm", car_models[i]);
+        if (!mesh_load(&r->cars[i], path[0]) || !mesh_load(&r->cars_far[i], path[1]) ||
+            !mesh_load(&r->wheels[i], path[2]) || !mesh_load(&r->wheels_far[i], path[3]))
             return false;
-    if (!mesh_load(&r->fuel, "models/fuel.tcm"))
+    }
+    // Cones and tires are modeled about the same mass origin as their physics hulls.
+    if (!mesh_load(&r->fuel, "models/fuel.tcm") || !mesh_load(&r->turntable, "models/turntable.tcm") ||
+        !mesh_load(&r->cone, "models/prop-cone.tcm") || !mesh_load(&r->tire, "models/prop-tire.tcm") ||
+        !mesh_load(&r->puff, "models/puff.tcm") || !mesh_load(&r->barrier, "models/barrier-segment.tcm") ||
+        !mesh_load(&r->barrier_hinge, "models/barrier-hinge.tcm"))
         return false;
     if (!mesh_load(&r->helicopter, "models/helicopter.tcm") ||
         !mesh_load(&r->helicopter_rotor, "models/helicopter-rotor.tcm") ||
@@ -1407,8 +1428,38 @@ static void hero_jump(const Track *t, float distance, float lane, Vec3 *pos, flo
     }
 }
 
+// Rolls a car's wheels by the distance it covers along its heading and steers
+// the front pair into the curve it follows, judged from frame to frame.
+static void update_wheels(Renderer *r, int i, Vec3 pos, float yaw, float dt) {
+    float radius = CAR_WHEELS[r->car_meshes[i]].radius;
+    float base = CAR_WHEELS[r->car_meshes[i]].front - CAR_WHEELS[r->car_meshes[i]].rear;
+    if (!r->wheels_ready[i]) {
+        r->last_pos[i] = pos;
+        r->last_yaw[i] = yaw;
+        r->wheels_ready[i] = true;
+    }
+    Vec3 d = vsub(pos, r->last_pos[i]);
+    float along = d.x * sinf(yaw) + d.z * cosf(yaw);
+    // A recovered or restarted car jumps; its wheels stay put then.
+    if (fabsf(along) > 3)
+        along = 0;
+    r->wheel_spin[i] = fmodf(r->wheel_spin[i] + along / radius, 2 * PI);
+    float target = r->wheel_steer[i];
+    if (fabsf(along) > .01f)
+        target = clampf(atanf(angle_delta(yaw, r->last_yaw[i]) / along * base), -.5f, .5f);
+    r->wheel_steer[i] += (target - r->wheel_steer[i]) * (1 - expf(-dt * 10));
+    if (dt > 0) {
+        float speed = along / dt;
+        bool braking = speed > 1 && (speed - r->last_speed[i]) / dt < -6;
+        r->brake[i] += ((braking ? 1.f : 0.f) - r->brake[i]) * (1 - expf(-dt * (braking ? 20 : 5)));
+        r->last_speed[i] = speed;
+    }
+    r->last_pos[i] = pos;
+    r->last_yaw[i] = yaw;
+}
+
 // Interpolated once per frame so both passes and the night lamps agree.
-static void update_cars(Renderer *r, const Game *g, bool menu) {
+static void update_cars(Renderer *r, const Game *g, bool menu, float dt) {
     const Track *t = &g->tracks[g->selected];
     for (int i = 0; i < CAR_COUNT; i++) {
         Vec3 pos;
@@ -1450,6 +1501,7 @@ static void update_cars(Renderer *r, const Game *g, bool menu) {
             model = mmul(translate(vadd(pos, v3(0, .04f, 0))), rotation);
         }
         r->car_models[i] = model;
+        update_wheels(r, i, pos, yaw, dt);
     }
 }
 
@@ -1487,13 +1539,13 @@ static void draw_railway(Renderer *r, const Game *g, bool depth) {
     for (int i = 0; i < rail->arm_count; i++) {
         const RailArm *a = &rail->arms[i];
         Mat4 base = rail_arm_model(a, raise);
-        draw_mesh(r, r->cube, mmul(base, scale3(.16f, .16f, .16f)), rgb(.20f, .21f, .22f), depth);
+        draw_mesh(r, r->barrier_hinge, base, rgb(1, 1, 1), depth);
         int stripes = (int)ceilf(a->length / .55f);
         float step = a->length / stripes;
         for (int k = 0; k < stripes; k++) {
             Mat4 m = mmul(base, mmul(translate(v3(0, 0, step * (k + .5f))),
-                                     scale3(.055f, .07f, step * .5f)));
-            draw_mesh(r, r->cube, m, k % 2 ? rgb(.94f, .93f, .90f) : rgb(.86f, .10f, .07f), depth);
+                                     scale3(.06f, .06f, step * .5f)));
+            draw_mesh(r, r->barrier, m, k % 2 ? rgb(.94f, .93f, .90f) : rgb(.86f, .10f, .07f), depth);
         }
         if (!depth && g->rail.arm > .02f) {
             glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
@@ -1620,17 +1672,42 @@ static void draw_lamp_glows(Renderer *r, const Game *g) {
     r->bound_vao = 0;
 }
 
+// A body and its four wheels: near cars in full detail, the rest and every
+// shadow in the lighter one. The left wheels are the right wheel turned half
+// way round, so they roll the other way about their own axle.
+static void draw_car(Renderer *r, CarModel car, Mat4 body, Color paint, bool depth, bool near,
+                     float spin, float steer, float brake) {
+    near = near && !depth;
+    if (!depth)
+        glUniform1f(glGetUniformLocation(r->shader, "uBrake"), brake);
+    draw_mesh(r, near ? r->cars[car] : r->cars_far[car], body, paint, depth);
+    if (!depth)
+        glUniform1f(glGetUniformLocation(r->shader, "uBrake"), 0);
+    for (int i = 0; i < 4; i++) {
+        bool left = i % 2 == 0, front = i < 2;
+        Vec3 hub = v3(left ? -CAR_WHEELS[car].x : CAR_WHEELS[car].x, CAR_WHEELS[car].y,
+                      front ? CAR_WHEELS[car].front : CAR_WHEELS[car].rear);
+        Mat4 m = mmul(body, mmul(translate(hub), rotate_y((front ? steer : 0) + (left ? PI : 0))));
+        if (!depth)
+            glUniform1f(glGetUniformLocation(r->shader, "uSpin"), left ? -spin : spin);
+        draw_mesh(r, near ? r->wheels[car] : r->wheels_far[car], m, paint, depth);
+    }
+    if (!depth)
+        glUniform1f(glGetUniformLocation(r->shader, "uSpin"), 0);
+}
+
 static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bool garage) {
     Color white = rgb(1, 1, 1);
     Track const *t = &g->tracks[g->selected];
     if (garage) {
-        Mat4 platform = mmul(translate(v3(0, -.18f, 0)), scale3(3.5f, .16f, 3.5f));
-        draw_mesh(r, r->cube, platform, rgb(.17f, .18f, .20f), depth);
-        Mat4 rim = mmul(translate(v3(0, -.36f, 0)), scale3(3.62f, .05f, 3.62f));
-        draw_mesh(r, r->cube, rim, rgb(.89f, .29f, .12f), depth);
-        Mat4 model = mmul(rotate_y(g->clock * .20f + .5f), scale3(1.65f, 1.65f, 1.65f));
+        // The dais turns with the car; its top is at y = 0, where the tires rest.
+        Mat4 turn = rotate_y(g->clock * .20f + .5f);
+        set_gloss(r, depth, .6f);
+        draw_mesh(r, r->turntable, turn, white, depth);
+        Mat4 model = mmul(translate(v3(0, .04f * 1.65f - .008f, 0)), mmul(turn, scale3(1.65f, 1.65f, 1.65f)));
         set_gloss(r, depth, 1);
-        draw_mesh(r, r->cars[g->garage_car], model, CAR_COLORS[g->profile.color], depth);
+        // Showroom pose: front wheels turned towards the viewer.
+        draw_car(r, g->garage_car, model, CAR_COLORS[g->profile.color], depth, true, 0, .32f, 0);
         set_gloss(r, depth, 0);
         return;
     }
@@ -1664,18 +1741,18 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     if (!menu)
         draw_helicopter(r, g, depth);
     set_gloss(r, depth, 1);
-    for (int i = 0; i < CAR_COUNT; i++)
-        if (r->car_visible[i])
-            draw_mesh(r, r->cars[r->car_meshes[i]], r->car_models[i], r->car_colors[i], depth);
-    set_gloss(r, depth, 0);
-    if (!depth && r->night > 0) {
-        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
-        for (int i = 0; i < CAR_COUNT; i++)
-            if (r->car_visible[i])
-                draw_mesh(r, r->lamps[r->car_meshes[i]], r->car_models[i], white, false);
-        // Fuel cans glow softly so they can still be planned for in the dark.
-        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), .45f * r->night);
+    for (int i = 0; i < CAR_COUNT; i++) {
+        if (!r->car_visible[i])
+            continue;
+        Mat4 m = r->car_models[i];
+        bool near = vlen(vsub(v3(m.m[12], m.m[13], m.m[14]), r->eye)) < 18;
+        draw_car(r, r->car_meshes[i], m, r->car_colors[i], depth, near, r->wheel_spin[i],
+                 r->wheel_steer[i], r->brake[i]);
     }
+    set_gloss(r, depth, 0);
+    // Fuel cans glow softly so they can still be planned for in the dark.
+    if (!depth && r->night > 0)
+        glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), .45f * r->night);
     for (int i = 0; i < t->can_count; i++) {
         if (!menu && g->cars[0].can_cooldown[i] > 0)
             continue;
@@ -1701,8 +1778,9 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
             // Smoke billows out, then thins away; dust only shrinks.
             float s = p->kind == PARTICLE_SMOKE ? p->size * (1 + 2.2f * age) * fminf(1, (1 - age) * 4)
                                                 : p->size * (.3f + .7f * p->life / p->max_life);
+            // A soft, lumpy puff, turning slowly as it drifts.
             Mat4 model = mmul(translate(p->pos), mmul(rotate_y(p->life * 2), scale3(s, s, s)));
-            draw_mesh(r, r->cube, model, p->color, false);
+            draw_mesh(r, r->puff, model, p->color, false);
         }
         glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 0);
     }
@@ -2132,8 +2210,8 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     if (menu) {
         fade = hero_camera(r, g, aspect, &blur);
     } else if (garage) {
-        r->eye = v3(7.9f, 6.1f, 10);
-        r->target = v3(0, .7f, 0);
+        r->eye = v3(6.3f, 3.9f, 8.1f);
+        r->target = v3(0, .75f, 0);
         r->clip_far = 100;
         r->projection = perspective(38 * PI / 180, aspect, .1f, r->clip_far);
     } else {
@@ -2173,7 +2251,7 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
                              -light_center.z - 374, -light_center.z + 275),
                        light_view);
     if (!garage)
-        update_cars(r, g, menu);
+        update_cars(r, g, menu, dt);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDisable(GL_BLEND);
@@ -2282,10 +2360,16 @@ void renderer_destroy(Renderer *r) {
     mesh_delete(&r->tire);
     mesh_delete(&r->fence);
     for (int i = 0; i < CAR_MODEL_COUNT; i++) {
-        mesh_delete(&r->lamps[i]);
         mesh_delete(&r->cars[i]);
+        mesh_delete(&r->cars_far[i]);
+        mesh_delete(&r->wheels[i]);
+        mesh_delete(&r->wheels_far[i]);
     }
     mesh_delete(&r->fuel);
+    mesh_delete(&r->turntable);
+    mesh_delete(&r->puff);
+    mesh_delete(&r->barrier);
+    mesh_delete(&r->barrier_hinge);
     mesh_delete(&r->helicopter);
     mesh_delete(&r->helicopter_rotor);
     mesh_delete(&r->helicopter_tail_rotor);

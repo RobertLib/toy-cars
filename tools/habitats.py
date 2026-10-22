@@ -6,6 +6,179 @@ animation uses bounded paths, keeping animals clear of the rally and obstacles.
 import math
 import bmesh
 import random
+import flora, flora_temperate
+
+
+# --- Smooth wildlife primitives -----------------------------------------------------------------
+# Animals are small but close to the cameras: they are made of smooth-shaded,
+# properly tessellated ellipsoids and tapered capsules rather than faceted
+# icospheres, with a soft top-lit gradient baked into the 'Riverbed' colour
+# layer that export() reads per vertex. Every surface is closed and wound
+# outwards, so no vertex is shared by opposite faces (which has no normal).
+
+def _object(bpy, name, points, faces, material, origin=None):
+    """A smooth mesh from game-axis points; faces are turned to face away from origin
+    (a point, or a function giving the inside point for a face centroid)."""
+    verts = [(p[0], -p[2], p[1]) for p in points]
+    fixed = []
+    for f in faces:
+        a, b, c = (verts[f[0]], verts[f[1]], verts[f[2]])
+        n = ((b[1]-a[1])*(c[2]-a[2])-(b[2]-a[2])*(c[1]-a[1]), (b[2]-a[2])*(c[0]-a[0])-(b[0]-a[0])*(c[2]-a[2]),
+             (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))
+        centre = [sum(verts[i][k] for i in f) / len(f) for k in range(3)]
+        inner = origin(centre) if callable(origin) else origin
+        out = [centre[k] - inner[k] for k in range(3)]
+        fixed.append(tuple(f) if sum(n[k]*out[k] for k in range(3)) >= 0 else tuple(reversed(f)))
+    data = bpy.data.meshes.new(name)
+    data.from_pydata(verts, [], fixed)
+    data.update()
+    data.polygons.foreach_set('use_smooth', [True] * len(data.polygons))
+    data.materials.append(material)
+    obj = bpy.data.objects.new(name, data)
+    bpy.context.collection.objects.link(obj)
+    return obj
+
+
+def shade(obj, material, depth=.28, under=None):
+    """Bake a top-lit gradient (and optionally a paler underside) into 'Riverbed'."""
+    data = obj.data
+    base = material.diffuse_color[:3]
+    layer = data.color_attributes.new('Riverbed', 'FLOAT_COLOR', 'POINT')
+    for i, v in enumerate(data.vertices):
+        up = v.normal.z * .5 + .5
+        c = [b * (1 - depth * (1 - up)) for b in base]
+        if under is not None and v.normal.z < -.25:
+            t = min(1., (-v.normal.z - .25) * 2.2)
+            c = [x + (u - x) * t for x, u in zip(c, under)]
+        layer.data[i].color = (*c, 1)
+    return obj
+
+
+def detail(radius):
+    """Longitude and latitude counts for an ellipsoid of this size."""
+    lon = max(5, min(12, int(5 + 12 * radius)))
+    return lon, max(3, lon // 2 + 1)
+
+
+def ellipsoid(bpy, name, centre, radii, material, lon=None, lat=None, tilt=(0., 0.)):
+    """An ellipsoid in game axes; tilt rotates it about z then x (radians)."""
+    if lon is None:
+        lon, lat = detail(max(radii))
+    cz, sz = math.cos(tilt[0]), math.sin(tilt[0])
+    cx, sx = math.cos(tilt[1]), math.sin(tilt[1])
+
+    def place(p):
+        x, y, z = p
+        x, y = x * cz - y * sz, x * sz + y * cz
+        y, z = y * cx - z * sx, y * sx + z * cx
+        return (centre[0] + x, centre[1] + y, centre[2] + z)
+    points = [place((0, -radii[1], 0))]
+    for j in range(1, lat):
+        ph = -math.pi / 2 + math.pi * j / lat
+        for k in range(lon):
+            th = math.tau * k / lon
+            points.append(place((radii[0] * math.cos(ph) * math.cos(th), radii[1] * math.sin(ph),
+                                 radii[2] * math.cos(ph) * math.sin(th))))
+    points.append(place((0, radii[1], 0)))
+    return _object(bpy, name, points, _rings(lon, lat - 1), material, (centre[0], -centre[2], centre[1]))
+
+
+def _rings(n, count):
+    """Faces of `count` stacked loops of n points between a first and a last pole."""
+    faces = [(0, 1 + (k + 1) % n, 1 + k) for k in range(n)]
+    for j in range(count - 1):
+        a = 1 + j * n
+        faces += [(a + k, a + (k + 1) % n, a + n + (k + 1) % n, a + n + k) for k in range(n)]
+    top = 1 + count * n
+    a = 1 + (count - 1) * n
+    faces += [(a + k, a + (k + 1) % n, top) for k in range(n)]
+    return faces
+
+
+def capsule(bpy, Vector, name, a, b, ra, material, rb=None, sides=6):
+    """A tapered capsule from a to b with rounded ends."""
+    rb = ra if rb is None else rb
+    a, b = Vector(a), Vector(b)
+    axis = (b - a).normalized()
+    u = axis.cross(Vector((0, 1, 0)))
+    if u.length < .01:
+        u = axis.cross(Vector((1, 0, 0)))
+    u.normalize()
+    v = axis.cross(u)
+    loops = []
+    for c, r, h in ((a, ra, -.75), (a, ra, 0), (b, rb, 0), (b, rb, .75)):
+        k = (1 - h * h) ** .5
+        loops.append([tuple(c + axis * h * r + r * k * (u * math.cos(i * math.tau / sides) + v * math.sin(i * math.tau / sides)))
+                      for i in range(sides)])
+    points = [tuple(a - axis * ra)] + [p for loop in loops for p in loop] + [tuple(b + axis * rb)]
+    ga, gb = a, b
+
+    def inside(centre):
+        # The nearest point of the axis, in Blender axes.
+        q = Vector((centre[0], centre[2], -centre[1]))
+        t = max(0., min(1., (q - ga).dot(gb - ga) / max((gb - ga).length_squared, 1e-12)))
+        p = ga + (gb - ga) * t
+        return (p.x, -p.z, p.y)
+    return _object(bpy, name, points, _rings(sides, len(loops)), material, inside)
+
+
+def tube(bpy, Vector, name, spine, radii, material, sides=7):
+    """A closed tube along a polyline of game-axis points with a radius per point."""
+    spine = [Vector(p) for p in spine]
+    loops = []
+    for i, (p, r) in enumerate(zip(spine, radii)):
+        d = (spine[min(i + 1, len(spine) - 1)] - spine[max(i - 1, 0)]).normalized()
+        u = d.cross(Vector((0, 1, 0)))
+        if u.length < .01:
+            u = d.cross(Vector((1, 0, 0)))
+        u.normalize()
+        v = d.cross(u)
+        loops.append([tuple(p + r * (u * math.cos(k * math.tau / sides) + v * math.sin(k * math.tau / sides) * .8))
+                      for k in range(sides)])
+    head = spine[0] - (spine[1] - spine[0]).normalized() * radii[0]
+    tail = spine[-1] + (spine[-1] - spine[-2]).normalized() * radii[-1]
+    points = [tuple(head)] + [p for loop in loops for p in loop] + [tuple(tail)]
+
+    def inside(centre):
+        q = Vector((centre[0], centre[2], -centre[1]))
+        best = min(spine, key=lambda s: (s - q).length_squared)
+        return (best.x, -best.z, best.y)
+    return _object(bpy, name, points, _rings(sides, len(loops)), material, inside)
+
+
+def feathers(bpy, name, root, span, chord, material, side, lift=.06, thickness=.018, fingers=4):
+    """A thin, closed wing with a feathered trailing edge, rooted near x = side*.12."""
+    rx, ry, rz = root
+    outline = [(0, 0, chord * .45), (span * .45, lift, chord * .42), (span * .85, lift * .4, chord * .1),
+               (span, -lift * .3, -chord * .35)]
+    # Primary feathers fan out along the trailing edge back to the body.
+    for f in range(fingers):
+        t = 1 - (f + 1) / (fingers + 1)
+        outline.append((span * t + span * .05, 0, -chord * (.55 if f % 2 == 0 else .38)))
+    outline.append((0, 0, -chord * .35))
+    top = [(rx + side * x, ry + y + thickness, rz + z) for x, y, z in outline]
+    bottom = [(rx + side * x, ry + y - thickness, rz + z) for x, y, z in outline]
+    n = len(outline)
+    points = top + bottom
+    faces = [tuple(range(n)), tuple(range(n, 2 * n))]
+    faces += [(k, (k + 1) % n, n + (k + 1) % n, n + k) for k in range(n)]
+    data = bpy.data.meshes.new(name)
+    data.from_pydata([(p[0], -p[2], p[1]) for p in points], [], faces)
+    data.validate()
+    data.update()
+    # Recalculate outward winding with bmesh, then shade flat: a thin plate's
+    # smooth normals would bend across its rim.
+    import bmesh as _bm
+    bm = _bm.new()
+    bm.from_mesh(data)
+    _bm.ops.triangulate(bm, faces=bm.faces)
+    _bm.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(data)
+    bm.free()
+    data.materials.append(material)
+    obj = bpy.data.objects.new(name, data)
+    bpy.context.collection.objects.link(obj)
+    return obj
 
 
 def build(api, T, path, ground, water, obstacles):
@@ -71,14 +244,16 @@ def build(api, T, path, ground, water, obstacles):
             api['biomes'].patch(T, patches, x, y, z, rng, ground, dict(ico=ico, beam=beam, mesh=mesh, mat=mat,
                                 foliage=foliage, dry=dry, flower=flower, bark=bark, stone=stone))
         elif patches % 11 == 0:
-            end = (x+2.3, ground(x+2.3,z+.8)+.22, z+.8)
-            beam('Driftwood' if theme == 1 else 'Fallen branch', (x,y+.22,z), end, .22, bark, 7)
-            beam('Broken branch', (x+1,y+.3,z+.35), (x+1.3,y+.8,z+1.2), .09,bark,5)
+            flora.plant('Driftwood' if theme == 1 else 'Fallen branch', ('fallen-log',),
+                        flora_temperate.fallen_log, x, y - .06, z, .85)
         elif theme == 2:
-            ico('Alpine scree', (x,y+.25,z), (.85,.5,.7), stone)
+            key, build = flora.rock('Alpine scree', C['stone'], budget=90)
+            flora.plant('Alpine scree', key, build, x, y + .1, z, (.85, .45, .7))
             for j in range(3):
                 dx,dz=rng.uniform(-.8,.8),rng.uniform(-.8,.8)
-                ico('Dwarf mountain pine',(x+dx,ground(x+dx,z+dz)+.35,z+dz),(.7,.55,.6),foliage)
+                flora.plant('Dwarf mountain pine', ('dwarf pine',),
+                            lambda v: flora.fir(v, snow=(.93, .96, .98), tiers=3, budget=90),
+                            x+dx, ground(x+dx,z+dz)-.05, z+dz, .2)
         else:
             for j in range(rng.randrange(5,10)):
                 dx,dz=rng.uniform(-1.1,1.1),rng.uniform(-1.1,1.1)
@@ -91,7 +266,8 @@ def build(api, T, path, ground, water, obstacles):
                 if j%3 == 0:
                     ico('Wildflower' if theme == 0 else 'Dune seed head',(a,yy+h,b),(.12,.09,.12),flower)
             if patches%4 == 0:
-                ico('Hedgerow shrub' if theme == 0 else 'Coastal scrub',(x,y+.55,z),(1.1,.85,.9),foliage,2)
+                flora.plant('Hedgerow shrub' if theme == 0 else 'Coastal scrub', ('shrub',), flora.shrub,
+                            x, y - .05, z, 1.7)
         patches += 1
         if patches == T.patches:
             break
@@ -151,67 +327,52 @@ def build(api, T, path, ground, water, obstacles):
             sx=sz=0
         occupied.append((x,z))
         start=set(bpy.context.scene.objects)
-        def ell(label,p,s,material,part=0):
-            obj=ico(label,(x+p[0],y+p[1],z+p[2]),s,material,2 if part==0 else 1)
+        def ell(label,p,s,material,part=0,lon=None,lat=None,tilt=(0.,0.),under=None):
+            obj=ellipsoid(bpy,label,(x+p[0],y+p[1],z+p[2]),s,material,lon,lat,tilt)
+            shade(obj,material,under=under)
             obj['wildlife_part']=part
             return obj
-        def rod(label,a,b,r,material,part=0):
-            obj=beam(label,(x+a[0],y+a[1],z+a[2]),(x+b[0],y+b[1],z+b[2]),r,material,6)
+        def rod(label,a,b,r,material,part=0,r2=None,sides=6):
+            obj=capsule(bpy,Vector,label,(x+a[0],y+a[1],z+a[2]),(x+b[0],y+b[1],z+b[2]),r,material,r2,sides)
+            shade(obj,material)
             obj['wildlife_part']=part
-        pivot=0.
-        if not T.legacy:
-            pivot=api['biomes'].animal(T,label,number,dict(ell=ell,rod=rod,mesh=mesh,mat=mat,x=x,y=y,z=z,
-                                                           black=black,orange=orange,wing=wing,dry=dry,pale=pale))
-        elif species == 0:
-            ell('Deer body',(0,1.18,0),(.40,.50,.83),fur)
-            rod('Deer neck',(0,1.28,.5),(0,1.95,.78),.23,fur,3)
-            ell('Deer head',(0,1.99,.96),(.24,.25,.40),fur,3)
-            ell('Deer muzzle',(0,1.88,1.23),(.18,.14,.20),black,3)
+            return obj
+        def body_tube(label,spine,radii,material,part=0,sides=7):
+            obj=tube(bpy,Vector,label,[(x+p[0],y+p[1],z+p[2]) for p in spine],radii,material,sides)
+            shade(obj,material,.22)
+            obj['wildlife_part']=part
+            return obj
+        def wing_pair(k,material,root_y=0.,root_z=0.,span=1.13,chord=.42):
             for side in (-1,1):
-                ell('Deer ear',(side*.28,2.21,.80),(.13,.26,.09),fur,3)
-                ell('Deer eye',(side*.21,2.05,1.07),(.035,.045,.04),black,3)
-                for front in (-1,1):
-                    part=1 if side*front>0 else 2
-                    rod('Deer leg',(side*.25,.99,front*.55),(side*.27,.08,front*.57),.075,fur,part)
-                    ell('Deer hoof',(side*.27,.09,front*.60),(.09,.09,.14),black,part)
-                if number%3 == 0:
-                    rod('Stag antler',(side*.13,2.12,.8),(side*.44,2.95,.63),.045,dry,3)
-                    for k in range(2):
-                        rod('Antler tine',(side*(.25+k*.09),2.4+k*.23,.73),(side*(.5+k*.10),2.65+k*.23,.87),.03,dry,3)
-            ell('Deer tail',(0,1.35,-.81),(.14,.18,.26),pale)
-        elif species == 1:
-            ell('Hare body',(0,.36,0),(.29,.35,.49),hare)
-            ell('Hare head',(0,.66,.38),(.22,.24,.24),hare,3)
-            for side in (-1,1):
-                ell('Hare ear',(side*.13,1.03,.35),(.075,.32,.075),hare,3)
-                ell('Hare eye',(side*.18,.73,.51),(.032,.035,.032),black,3)
-                ell('Hare hind paw',(side*.23,.10,-.20),(.15,.10,.28),hare,1)
-                ell('Hare forepaw',(side*.17,.08,.34),(.075,.08,.17),hare,2)
-            ell('Hare tail',(0,.4,-.48),(.14,.14,.14),pale)
-        elif species == 2:
-            ell('Goose body',(0,.50,0),(.34,.37,.57),pale)
-            rod('Goose neck',(0,.57,.35),(0,1.10,.44),.12,pale,3)
-            ell('Goose head',(0,1.12,.48),(.17,.19,.23),pale,3)
-            ell('Goose bill',(0,1.10,.73),(.105,.07,.15),orange,3)
-            for side in (-1,1):
-                ell('Goose eye',(side*.15,1.18,.56),(.028,.03,.03),black,3)
-                rod('Goose leg',(side*.16,.30,0),(side*.16,.05,.04),.045,orange,1 if side<0 else 2)
-                ell('Goose foot',(side*.16,.05,.12),(.12,.045,.15),orange,1 if side<0 else 2)
-        elif species == 3:
-            for j in range(16):
-                zz=-.85+j*.12
-                ell('Snake scales',(math.sin(j*.65)*.13,.075,zz),(.08,.07,.13),snake)
-            ell('Snake head',(math.sin(15*.65)*.13,.09,1.04),(.115,.085,.16),snake,3)
-        else:
-            ell('Bird body',(0,0,0),(.16,.17,.43),plumage)
-            ell('Bird head',(0,.09,.35),(.13,.14,.16),plumage)
-            ell('Bird beak',(0,.07,.52),(.055,.04,.11),orange)
-            for side in (-1,1):
-                obj=mesh('Bird articulated wing',[(x+side*.12,y,z+.16),(x+side*.68,y+.08,z+.11),
-                    (x+side*1.13,y-.04,z-.26),(x+side*.52,y,z-.24),(x+side*.13,y,z-.2)],
-                    [(0,1,3),(1,2,3),(0,3,4)],wing)
+                obj=feathers(bpy,'Bird articulated wing',(x+side*.12*k,y+root_y*k,z+root_z*k),span*k,chord*k,material,side)
                 obj['wildlife_part']=1 if side<0 else 2
-            ell('Bird tail',(0,0,-.43),(.19,.05,.22),wing)
+        pivot=0.
+        kit=dict(ell=ell,rod=rod,mesh=mesh,mat=mat,x=x,y=y,z=z,black=black,orange=orange,wing=wing,dry=dry,pale=pale,
+                 tube=body_tube,wings=wing_pair)
+        zoo=api['biomes']
+        if not T.legacy:
+            pivot=zoo.animal(T,label,number,kit)
+        elif species == 0:
+            pivot=zoo.deer(T,number,kit)
+        elif species == 1:
+            zoo.hare(kit,hare)
+        elif species == 2:
+            # A plump grey-lag goose: the head and long neck nod as it grazes.
+            ell('Goose body',(0,.50,0),(.32,.33,.55),pale,lon=10,lat=6,tilt=(0,-.1))
+            ell('Goose tail',(0,.58,-.5),(.16,.1,.18),pale,lon=7,lat=4,tilt=(0,-.5))
+            for side in (-1,1):
+                ell('Goose wing',(side*.27,.6,-.05),(.07,.2,.42),wing if theme==2 else pale,lon=6,lat=4,tilt=(0,-.1))
+            rod('Goose neck',(0,.6,.36),(0,1.06,.45),.11,pale,3,r2=.075,sides=6)
+            ell('Goose head',(0,1.11,.5),(.13,.14,.18),pale,3,lon=8,lat=5)
+            ell('Goose bill',(0,1.08,.7),(.07,.05,.12),orange,3,lon=6,lat=4)
+            for side in (-1,1):
+                ell('Goose eye',(side*.11,1.16,.56),(.025,.028,.025),black,3,lon=5,lat=3)
+                rod('Goose leg',(side*.15,.3,0),(side*.16,.05,.04),.04,orange,1 if side<0 else 2,r2=.03,sides=5)
+                ell('Goose foot',(side*.16,.03,.12),(.09,.02,.12),orange,1 if side<0 else 2,lon=6,lat=3)
+        elif species == 3:
+            zoo.serpent(kit,snake)
+        else:
+            zoo.bird(T,number,kit,plumage,1.,orange,wing)
         for obj in set(bpy.context.scene.objects)-start:
             obj['wildlife_origin']=(x,y,z,pivot)
             obj['wildlife_motion']=(species,obj['wildlife_part'],sx,sz)

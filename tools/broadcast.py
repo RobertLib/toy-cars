@@ -1,7 +1,8 @@
-"""Original low-poly trackside television crews, baked into the scenery batch."""
+"""Original trackside television crews, baked into the scenery batch."""
 import math
 import bpy
 from mathutils import Vector
+import figures, landmarks, roadside
 
 
 def build(api, T, path, ground, water, obstacles, stations):
@@ -54,12 +55,20 @@ def build(api, T, path, ground, water, obstacles, stations):
             wx,_,wz = point(a,0,c)
             return ground(wx,wz)
         base = max(floor(a,c) for a,c in [(-3,-4),(3,-4),(-3,3),(3,3)]) if compound else floor(0,0)
-        def B(name,p,size,color,bevel=0):
-            return box('TV '+name, point(p[0],base+p[1],p[2]), size, color, bevel, yaw)
+        # Rounded parts: each keeps its own object and name, centred where it stands.
+        def B(name,p,size,color,bevel=0,e=.4):
+            return figures.shape('TV '+name, point(p[0],base+p[1],p[2]), yaw,
+                                 [figures.blob((0,0,0),[v/2 for v in size],8,5,e)], color, None)
         def L(name,a,b,r,color):
-            return beam('TV '+name, point(a[0],base+a[1],a[2]), point(b[0],base+b[1],b[2]),r,color,6)
+            mid=[(u+v)/2 for u,v in zip(a,b)]
+            return figures.shape('TV '+name, point(mid[0],base+mid[1],mid[2]), yaw,
+                                 [figures.limb([u-m for u,m in zip(a,mid)],[v-m for v,m in zip(b,mid)],r,sides=6)],
+                                 color, None)
         def I(name,p,size,color):
-            return ico('TV '+name, point(p[0],base+p[1],p[2]),size,color,2)
+            return figures.shape('TV '+name, point(p[0],base+p[1],p[2]), yaw,
+                                 [figures.blob((0,0,0),size,10,6)], color, None)
+        def M(name,key,build,p):
+            return roadside.place('TV '+name,key,build,*point(p[0],base+p[1],p[2]),yaw)
         def person(a,c,role):
             y = floor(a,c)-base
             for side in (-1,1):
@@ -87,57 +96,29 @@ def build(api, T, path, ground, water, obstacles, stations):
             y=floor(a,c)-base
             for dx,dz in [(-.65,-.35),(.65,-.35),(0,.70)]:
                 L('tripod',(a+dx,floor(a+dx,c+dz)-base+.04,c+dz),(a,y+1.60,c),.045,metal)
-            B('camera head',(a,y+1.78,c),(.58,.42,.86),ink,.035)
-            B('long lens hood',(a,y+1.78,c+.61),(.42,.34,.44),ink)
-            B('lens glass',(a,y+1.78,c+.84),(.32,.25,.025),glass)
-            B('viewfinder',(a-.37,y+1.96,c-.19),(.23,.18,.22),ink)
-            B('red tally',(a,y+2.015,c+.30),(.12,.07,.09),red)
-            L('pan handle',(a+.2,y+1.55,c),(a+.35,y+1.48,c-.65),.035,ink)
+            M('camera head',('tv camera',),landmarks.tv_camera,(a,y+1.78,c))
+            B('lens glass',(a,y+1.78,c+.845),(.3,.24,.03),glass,e=.3)
             person(a,c-1.05,'Camera operator')
         camera(0,1 if compound else .5)
-        B('flight case',(-1.6,floor(-1.6,-.4)-base+.3,-.4),(.85,.6,.65),ink,.035)
-        B('case lid',(-1.6,floor(-1.6,-.4)-base+.61,-.4),(.89,.055,.69),metal)
+        B('flight case',(-1.6,floor(-1.6,-.4)-base+.3,-.4),(.85,.6,.65),ink,e=.2)
+        B('case lid',(-1.6,floor(-1.6,-.4)-base+.61,-.4),(.89,.055,.69),metal,e=.2)
         # Cables lie on the sampled terrain, including gently sloping shoulders.
         for k in range(12):
             a,c=-1.5*k/12, .5-1.1*k/12
             b,d=-1.5*(k+1)/12,.5-1.1*(k+1)/12
             L('camera cable',(a,floor(a,c)-base+.035,c),(b,floor(b,d)-base+.035,d),.025,ink)
         if compound:
-            # Truck on four grounded wheels with a roof dish and a readable TV mark.
-            for a in (-1.15,1.15):
-                for c in (-4.4,-1.1):
-                    gy=floor(a-2.6,c)-base
-                    L('van tire',(a-2.78,gy+.5,c),(a-2.42,gy+.5,c),.50,ink)
-                    L('van hub',(a-2.80,gy+.5,c),(a-2.40,gy+.5,c),.24,metal)
-            B('OB van',(-2.6,1.70,-2.8),(2.65,2.35,5.1),ivory,.15)
-            B('van stripe',(-2.6,1.30,-2.8),(2.72,.44,5.13),blue)
-            B('windshield',(-2.6,2.25,-.23),(2.18,.83,.04),glass)
-            for a in (-3.52,-1.68):
-                B('headlight',(a,.98,-.21),(.40,.22,.06),ivory)
-            for a in (-3.94,-1.26):
-                B('side window',(a,2.25,-.9),(.035,.75,.95),glass)
-                # Block-letter T and V on both sides of the production vehicle.
-                L('logo T',(a,2.40,-3.7),(a,2.40,-3.0),.065,blue)
-                L('logo T',(a,2.40,-3.35),(a,1.82,-3.35),.065,blue)
-                L('logo V',(a,2.40,-2.8),(a,1.82,-2.48),.065,blue)
-                L('logo V',(a,1.82,-2.48),(a,2.40,-2.16),.065,blue)
-            L('dish mast',(-2.6,2.9,-3.3),(-2.6,3.7,-3.3),.09,metal)
-            # Concave upward parabola, original faceted mesh with feed support.
-            vs=[point(-2.6,base+3.65,-3.3)]
-            for k in range(16):
-                t=k*math.pi/8
-                vs.append(point(-2.6+1.05*math.cos(t),base+4.04,-3.3+1.05*math.sin(t)))
-            api['mesh']('TV satellite dish',vs,[(0,k+1,(k+1)%16+1) for k in range(16)],ivory)
-            L('dish feed',(-2.6,3.65,-3.3),(-2.6,4.45,-3.3),.045,ink)
-            L('radio mast',(-3.5,2.9,-4.7),(-3.5,5.1,-4.7),.035,metal)
+            # The production truck with its lettering, and the uplink dish on its roof.
+            M('OB van',('ob van',),landmarks.ob_van,(-2.6,floor(-2.6,-2.8)-base,-2.8))
+            M('satellite dish',('satellite dish',),landmarks.satellite_dish,(-2.6,floor(-2.6,-2.8)-base+3.02,-3.3))
             person(2.2,.5,'Reporter')
             person(3.9,-.4,'Sound engineer')
             person(2.4,-3.8,'Vision technician')
-            B('production desk',(2.5,.95,-2.7),(2.4,.13,.85),metal)
+            B('production desk',(2.5,.95,-2.7),(2.4,.13,.85),metal,e=.2)
             for a in (1.5,3.5):
                 L('desk leg',(a,floor(a,-2.7)-base,-2.7),(a,.95,-2.7),.055,ink)
-                B('monitor',(a,1.43,-2.65),(.83,.65,.12),ink)
-                B('monitor image',(a,1.43,-2.73),(.71,.51,.035),screen)
+                B('monitor',(a,1.43,-2.65),(.83,.65,.12),ink,e=.2)
+                B('monitor image',(a,1.43,-2.73),(.71,.51,.035),screen,e=.15)
                 L('monitor stand',(a,1.0,-2.65),(a,1.20,-2.65),.06,ink)
         for obj in set(bpy.context.scene.objects)-before:
             obj['broadcast_station']=index
