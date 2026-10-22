@@ -230,6 +230,98 @@ def build_car():
     box('Number plate',(0,.73,-1.54),(.44,.15,.04),cream,.01)
     export(os.path.join(ROOT,'assets/models/car.tcm'));save('rally_car')
 
+# The garage's other cars share the rally car's footprint, so collisions and
+# the chase camera fit them all. Lamp centres match CAR_LAMPS in renderer.c.
+def wheels(x,y,z,radius,width,hub):
+    for side in [-x,x]:
+        for along in z:
+            beam('All terrain tire',(side-width/2,y,along),(side+width/2,y,along),radius,rubber,16)
+            beam('Recessed wheel hub',(side-width/2-.02,y,along),(side+width/2+.02,y,along),radius*hub,chrome,12)
+            beam('Hub center',(side-width/2-.03,y,along),(side+width/2+.03,y,along),radius*.24,dark,10)
+
+def build_sprite():
+    clear()
+    box('Rounded hatch body',(0,.50,0),(1.62,.50,2.6),paint,.22)
+    box('Short hood',(0,.79,.84),(1.50,.16,.74),paint,.08)
+    box('Bubble glazing',(0,1.08,-.16),(1.42,.70,1.62),glass,.25)
+    box('Roof',(0,1.45,-.2),(1.44,.12,1.38),paint,.1)
+    box('Roof stripe',(0,1.512,-.2),(.32,.014,1.18),cream,.003)
+    box('Hood stripe',(0,.875,.86),(.32,.012,.62),cream,.003)
+    box('Roof spoiler',(0,1.43,-.96),(1.30,.07,.22),dark,.03)
+    wheels(.80,.38,[-.85,.85],.38,.28,.62)
+    for x in [-.81,.81]:
+        box('Side mirror',(x,1.0,.42),(.2,.14,.2),paint,.06)
+        box('Door handle',(x,.86,-.2),(.06,.07,.2),cream,.015)
+    box('Front bumper',(0,.40,1.32),(1.55,.20,.12),chrome,.05)
+    box('Rear bumper',(0,.40,-1.32),(1.55,.20,.12),chrome,.05)
+    box('Grille',(0,.58,1.30),(.5,.12,.05),dark,.02)
+    for x in [-.55,.55]:
+        box('Headlamp',(x,.74,1.30),(.32,.26,.06),cream,.06)
+        box('Tail lamp',(x*1.09,.82,-1.31),(.22,.30,.05),orange,.025)
+    box('Number plate',(0,.62,-1.35),(.42,.14,.04),cream,.01)
+    export(os.path.join(ROOT,'assets/models/sprite.tcm'));save('sprite')
+
+def build_bruiser():
+    clear()
+    box('Pickup chassis',(0,.70,0),(1.78,.52,3.15),paint,.16)
+    box('Hood',(0,1.01,1.08),(1.66,.14,.92),paint,.07)
+    box('Cab glazing',(0,1.27,.22),(1.58,.64,1.02),glass,.14)
+    box('Cab roof',(0,1.63,.2),(1.62,.12,.98),paint,.08)
+    box('Bed floor',(0,.97,-.86),(1.54,.04,1.42),dark)
+    for x in [-.83,.83]:
+        box('Bed side',(x,1.10,-.86),(.12,.30,1.44),paint,.03)
+        box('Side mirror',(x*1.05,1.22,.82),(.16,.2,.18),dark,.04)
+        beam('Roll bar post',(x*.86,.98,-.2),(x*.86,1.78,-.2),.05,dark)
+    box('Tailgate',(0,1.10,-1.53),(1.66,.30,.1),paint,.03)
+    beam('Roll bar',(-.72,1.78,-.2),(.72,1.78,-.2),.05,dark)
+    for x in [-.45,-.15,.15,.45]:
+        box('Light bar lamp',(x,1.84,-.18),(.22,.12,.1),cream,.02)
+    wheels(.88,.52,[-1.05,1.05],.52,.36,.5)
+    for z in [-1.05,1.05]:
+        for x in [-.88,.88]:
+            box('Wheel arch',(x,1.02,z),(.30,.08,1.08),dark,.03)
+    box('Bull bar',(0,.66,1.64),(1.5,.14,.12),chrome,.04)
+    for x in [-.55,.55]:
+        beam('Bull bar upright',(x,.6,1.66),(x,1.08,1.66),.045,chrome)
+    beam('Bull bar top',(-.55,1.08,1.66),(.55,1.08,1.66),.045,chrome)
+    box('Grille',(0,.82,1.58),(.62,.22,.05),dark,.02)
+    for x in [-.60,.60]:
+        box('Headlamp',(x,.98,1.56),(.34,.22,.07),cream,.05)
+        box('Tail lamp',(x*1.2,1.02,-1.58),(.2,.22,.05),orange,.02)
+    box('Rear bumper',(0,.50,-1.60),(1.70,.18,.14),chrome,.04)
+    export(os.path.join(ROOT,'assets/models/bruiser.tcm'));save('bruiser')
+
+def build_comet():
+    clear()
+    box('Low coupe body',(0,.42,0),(1.82,.40,3.2),paint,.16)
+    box('Long hood',(0,.65,.86),(1.70,.12,1.40),paint,.06)
+    box('Fastback glazing',(0,.86,-.36),(1.36,.44,1.25),glass,.2)
+    box('Roof',(0,1.07,-.42),(1.32,.09,.88),paint,.06)
+    box('Rear deck',(0,.69,-1.2),(1.74,.14,.72),paint,.06)
+    for x in [-.3,.3]:
+        box('Hood stripe',(x,.715,.86),(.16,.012,1.3),cream,.003)
+        box('Roof stripe',(x,1.118,-.42),(.13,.012,.8),cream,.002)
+        box('Deck stripe',(x,.765,-1.2),(.16,.012,.62),cream,.003)
+    box('Rear wing',(0,1.06,-1.46),(1.95,.07,.38),dark,.03)
+    for x in [-.6,.6]:
+        box('Wing strut',(x,.88,-1.42),(.07,.30,.1),dark)
+    box('Front splitter',(0,.24,1.62),(1.80,.06,.2),dark,.02)
+    for x in [-.92,.92]:
+        box('Side skirt',(x,.27,0),(.06,.1,2.0),dark,.02)
+        box('Side mirror',(x*.86,.9,.28),(.2,.11,.18),paint,.05)
+        box('Side intake',(x*1.0,.48,-.62),(.03,.16,.42),dark,.01)
+    wheels(.86,.37,[-1.08,1.08],.37,.3,.7)
+    for x in [-.62,.62]:
+        box('Headlamp',(x,.60,1.58),(.42,.12,.06),cream,.03)
+        box('Tail lamp',(x*.89,.62,-1.60),(.5,.1,.05),orange,.02)
+    for x in [-.3,.3]:
+        beam('Exhaust',(x,.32,-1.55),(x,.32,-1.68),.07,chrome)
+    box('Number plate',(0,.46,-1.62),(.42,.13,.04),cream,.01)
+    export(os.path.join(ROOT,'assets/models/comet.tcm'));save('comet')
+
+def build_cars():
+    build_car();build_sprite();build_bruiser();build_comet()
+
 def build_can():
     clear();fuel=mat('Fuel mint',(.43,.93,.63))
     box('Jerrycan body',(0,.61,0),(.79,1.06,.39),fuel,.1)
@@ -1371,7 +1463,9 @@ def build_track(T):
 if __name__=='__main__':
     if '--vehicles-only' in sys.argv:
         clear();build_vehicles(globals(),ROOT);sys.exit(0)
-    if '--tracks-only' not in sys.argv:build_car();build_can();build_helicopter();build_vehicles(globals(),ROOT)
+    if '--cars-only' in sys.argv:
+        build_cars();sys.exit(0)
+    if '--tracks-only' not in sys.argv:build_cars();build_can();build_helicopter();build_vehicles(globals(),ROOT)
     only=sys.argv[sys.argv.index('--only')+1] if '--only' in sys.argv else None
     for T in THEMES:
         if only in (None,T.key):build_track(T)

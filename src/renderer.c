@@ -4,6 +4,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Lens centres of each car's headlamps and tail lamps, as modeled in
+// tools/build_assets.py: the right lamp mirrors the left one across the car.
+static const struct {
+    Vec3 head, tail, half[2];
+} CAR_LAMPS[CAR_MODEL_COUNT] = {
+    [CAR_TRAILBLAZER] = {{.57f, .80f, 1.525f}, {.57f, .73f, -1.522f}, {{.15f, .08f, .01f}, {.16f, .055f, .01f}}},
+    [CAR_SPRITE] = {{.55f, .74f, 1.335f}, {.60f, .82f, -1.341f}, {{.13f, .10f, .01f}, {.09f, .13f, .01f}}},
+    [CAR_BRUISER] = {{.60f, .98f, 1.600f}, {.72f, 1.02f, -1.610f}, {{.14f, .08f, .01f}, {.08f, .09f, .01f}}},
+    [CAR_COMET] = {{.62f, .60f, 1.615f}, {.55f, .62f, -1.630f}, {{.18f, .045f, .01f}, {.21f, .04f, .01f}}},
+};
+// Lamps 0 and 1 are the left and right headlamps, 2 and 3 the tail lamps.
+static Vec3 car_lamp(int model, int lamp) {
+    Vec3 p = lamp >= 2 ? CAR_LAMPS[model].tail : CAR_LAMPS[model].head;
+    p.x *= lamp % 2 ? 1 : -1;
+    return p;
+}
 // Night halos reserved for the railway's signal lamps, arm tips and headlamps.
 #define RAIL_HALOS 16
 typedef struct {
@@ -987,26 +1003,27 @@ static void create_primitives(Renderer *r) {
             n++;
         }
     r->cube = mesh_upload(cube, 36);
-    // Night lenses sit just proud of the modeled headlamps and tail lamps.
-    Vertex lamps[4 * 36];
-    for (int i = 0; i < 4; i++) {
-        bool tail = i >= 2;
-        Vec3 center = v3(i % 2 ? .57f : -.57f, tail ? .73f : .80f, tail ? -1.522f : 1.525f);
-        Vec3 half = tail ? v3(.16f, .055f, .01f) : v3(.15f, .08f, .01f);
-        Color color = tail ? rgb(1, .10f, .05f) : rgb(1, .96f, .84f);
-        for (int k = 0; k < 36; k++) {
-            Vertex v = cube[k];
-            v.p[0] = center.x + v.p[0] * half.x;
-            v.p[1] = center.y + v.p[1] * half.y;
-            v.p[2] = center.z + v.p[2] * half.z;
-            v.c[0] = color.r;
-            v.c[1] = color.g;
-            v.c[2] = color.b;
-            v.paint = 0;
-            lamps[i * 36 + k] = v;
+    // Night lenses sit just proud of each car's modeled headlamps and tail lamps.
+    for (int model = 0; model < CAR_MODEL_COUNT; model++) {
+        Vertex lamps[4 * 36];
+        for (int i = 0; i < 4; i++) {
+            bool tail = i >= 2;
+            Vec3 center = car_lamp(model, i), half = CAR_LAMPS[model].half[tail];
+            Color color = tail ? rgb(1, .10f, .05f) : rgb(1, .96f, .84f);
+            for (int k = 0; k < 36; k++) {
+                Vertex v = cube[k];
+                v.p[0] = center.x + v.p[0] * half.x;
+                v.p[1] = center.y + v.p[1] * half.y;
+                v.p[2] = center.z + v.p[2] * half.z;
+                v.c[0] = color.r;
+                v.c[1] = color.g;
+                v.c[2] = color.b;
+                v.paint = 0;
+                lamps[i * 36 + k] = v;
+            }
         }
+        r->lamps[model] = mesh_upload(lamps, 4 * 36);
     }
-    r->lamps = mesh_upload(lamps, 4 * 36);
     r->cone = prop_mesh(false);
     r->tire = prop_mesh(true);
     r->fence = mesh_upload(NULL,0);
@@ -1086,7 +1103,12 @@ bool renderer_init(Renderer *r) {
         !r->ao_blur_shader || !r->bloom_down_shader || !r->bloom_up_shader || !r->fxaa_shader ||
         !r->dof_down_shader || !r->dof_blur_shader)
         return false;
-    if (!mesh_load(&r->car, "models/car.tcm") || !mesh_load(&r->fuel, "models/fuel.tcm"))
+    const char *car_models[CAR_MODEL_COUNT] = {"models/car.tcm", "models/sprite.tcm",
+                                                "models/bruiser.tcm", "models/comet.tcm"};
+    for (int i = 0; i < CAR_MODEL_COUNT; i++)
+        if (!mesh_load(&r->cars[i], car_models[i]))
+            return false;
+    if (!mesh_load(&r->fuel, "models/fuel.tcm"))
         return false;
     if (!mesh_load(&r->helicopter, "models/helicopter.tcm") ||
         !mesh_load(&r->helicopter_rotor, "models/helicopter-rotor.tcm") ||
@@ -1373,6 +1395,7 @@ static void update_cars(Renderer *r, const Game *g, bool menu) {
             // Rivals cycle through the other liveries so the player's car stays unique.
             int color = g->profile.color;
             r->car_colors[i] = CAR_COLORS[i ? (color + 1 + (i - 1) % 5) % 6 : color];
+            r->car_meshes[i] = i ? rival_model(i) : g->profile.car;
         } else {
             const Car *c = &g->cars[i];
             // Use simulation time so blinking freezes with the game, including shadows.
@@ -1385,6 +1408,7 @@ static void update_cars(Renderer *r, const Game *g, bool menu) {
             pitch = c->pitch;
             roll = c->roll;
             r->car_colors[i] = c->color;
+            r->car_meshes[i] = c->model;
         }
         // The modeled tire bottoms are .04 below the car origin.
         Mat4 model = mmul(translate(vadd(pos, v3(0, .04f, 0))),
@@ -1511,7 +1535,8 @@ static void lamp_uniforms(const Renderer *r) {
         if (!r->car_visible[i])
             continue;
         Mat4 m = r->car_models[i];
-        Vec3 p = transform_point(m, v3(0, .8f, 1.6f));
+        Vec3 front = car_lamp(r->car_meshes[i], 0);
+        Vec3 p = transform_point(m, v3(0, front.y, front.z + .08f));
         Vec3 f = vnorm(v3(m.m[8], m.m[9], m.m[10]));
         float lamp[] = {p.x, p.y, p.z, 1}, direction[] = {f.x, f.y, f.z, 0};
         memcpy(lamps + i * 4, lamp, sizeof lamp);
@@ -1530,8 +1555,9 @@ static void draw_lamp_glows(Renderer *r, const Game *g) {
             continue;
         for (int k = 0; k < 4; k++) {
             bool tail = k >= 2;
-            Vec3 p = transform_point(r->car_models[i], v3(k % 2 ? .57f : -.57f, tail ? .73f : .80f,
-                                                          tail ? -1.62f : 1.72f));
+            Vec3 lens = car_lamp(r->car_meshes[i], k);
+            lens.z += tail ? -.1f : .2f;
+            Vec3 p = transform_point(r->car_models[i], lens);
             float v[] = {p.x, p.y, p.z, tail ? .42f : .62f, 1, tail ? 4.f : 3.f, 0, 0};
             memcpy(data + count++ * 8, v, sizeof v);
         }
@@ -1575,7 +1601,7 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
         draw_mesh(r, r->cube, rim, rgb(.89f, .29f, .12f), depth);
         Mat4 model = mmul(rotate_y(g->clock * .20f + .5f), scale3(1.65f, 1.65f, 1.65f));
         set_gloss(r, depth, 1);
-        draw_mesh(r, r->car, model, CAR_COLORS[g->profile.color], depth);
+        draw_mesh(r, r->cars[g->garage_car], model, CAR_COLORS[g->profile.color], depth);
         set_gloss(r, depth, 0);
         return;
     }
@@ -1613,13 +1639,13 @@ static void render_objects(Renderer *r, const Game *g, bool depth, bool menu, bo
     set_gloss(r, depth, 1);
     for (int i = 0; i < CAR_COUNT; i++)
         if (r->car_visible[i])
-            draw_mesh(r, r->car, r->car_models[i], r->car_colors[i], depth);
+            draw_mesh(r, r->cars[r->car_meshes[i]], r->car_models[i], r->car_colors[i], depth);
     set_gloss(r, depth, 0);
     if (!depth && r->night > 0) {
         glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), 1);
         for (int i = 0; i < CAR_COUNT; i++)
             if (r->car_visible[i])
-                draw_mesh(r, r->lamps, r->car_models[i], white, false);
+                draw_mesh(r, r->lamps[r->car_meshes[i]], r->car_models[i], white, false);
         // Fuel cans glow softly so they can still be planned for in the dark.
         glUniform1f(glGetUniformLocation(r->shader, "uUnlit"), .45f * r->night);
     }
@@ -2066,10 +2092,11 @@ void renderer_draw(Renderer *r, const Game *g, float dt, float alpha) {
     r->overcast = overcast;
     int vx = 0, vy = 0, vw = r->width, vh = r->height;
     if (garage) {
+        // Above the upgrade rows, right of the car's name.
         vx = (int)(r->width * .37f);
-        vy = (int)(r->height * .265f);
+        vy = (int)(r->height * .33f);
         vw = r->width - vx;
-        vh = (int)(r->height * .645f);
+        vh = (int)(r->height * .60f);
     }
     float aspect = (float)vw / vh, fade = 0, blur = 0;
     r->aperture = 0;
@@ -2220,8 +2247,10 @@ void renderer_destroy(Renderer *r) {
     mesh_delete(&r->cone);
     mesh_delete(&r->tire);
     mesh_delete(&r->fence);
-    mesh_delete(&r->lamps);
-    mesh_delete(&r->car);
+    for (int i = 0; i < CAR_MODEL_COUNT; i++) {
+        mesh_delete(&r->lamps[i]);
+        mesh_delete(&r->cars[i]);
+    }
     mesh_delete(&r->fuel);
     mesh_delete(&r->helicopter);
     mesh_delete(&r->helicopter_rotor);

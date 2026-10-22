@@ -351,6 +351,7 @@ bool game_load(Game *g) {
         track_place_boosts(t);
     }
     profile_load(&g->profile);
+    g->garage_car = g->profile.car;
     // Open on the most advanced cup the player has reached.
     g->selected = CUPS[track_cup(SDL_min(g->profile.championship_completed, TRACK_COUNT - 1))].first;
     game_set_mode(g, MODE_CHAMPIONSHIP);
@@ -454,13 +455,46 @@ static void profile_defaults(Profile *p) {
                    .sound = true,
                    .music = true,
                    .arcade_night = false,
-                   .initials = "AAA"};
+                   .initials = "AAA",
+                   .car = CAR_TRAILBLAZER,
+                   .owned = {[CAR_TRAILBLAZER] = true}};
 }
-// Version 8 (ten circuits in three cups):
-//   TOYCARS 8 / settings / ten best times / ten medals / unlock progress
+// Saves from before the garage bring a modest purse for the progress they
+// carry: a third place on normal for every stage reached, so a veteran does
+// not meet the later rivals in a stock car, yet still has upgrades to earn.
+static void legacy_garage(Profile *p) {
+    for (int track = 0; track < SDL_min(p->championship_completed, TRACK_COUNT); track++)
+        p->coins += race_prize(track, 1, MODE_CHAMPIONSHIP, 3);
+}
+// GARAGE <coins> <car>, then one line per car: owned and the four upgrade levels.
+static bool load_garage(Profile *p, const char **cursor) {
+    int coins = 0, car = 0, used = 0;
+    if (sscanf(*cursor, " GARAGE %d %d %n", &coins, &car, &used) != 2 || !used || coins < 0 ||
+        coins > 1000000000 || car < 0 || car >= CAR_MODEL_COUNT)
+        return false;
+    *cursor += used;
+    for (int model = 0; model < CAR_MODEL_COUNT; model++) {
+        int owned = 0, *levels = p->upgrades[model];
+        used = 0;
+        if (sscanf(*cursor, " %d %d %d %d %d %n", &owned, &levels[0], &levels[1], &levels[2],
+                   &levels[3], &used) != 5 || !used || owned < 0 || owned > 1)
+            return false;
+        for (int k = 0; k < UPGRADE_COUNT; k++)
+            if (levels[k] < 0 || levels[k] > UPGRADE_LEVELS || (!owned && levels[k]))
+                return false;
+        p->owned[model] = owned;
+        *cursor += used;
+    }
+    p->coins = coins;
+    p->car = (CarModel)car;
+    return p->owned[CAR_TRAILBLAZER] && p->owned[car];
+}
+// Version 9 (the garage):
+//   TOYCARS 9 / settings / ten best times / ten medals / unlock progress
 //   CHAMPIONSHIP <cups>, then per cup: stages scored, best medal, eliminated
-//   one line of eight places per track / OPTIONS / RECORDS ...
-// Versions 1-7 describe the first three circuits, which form the Rookie Cup.
+//   one line of eight places per track / OPTIONS / GARAGE ... / RECORDS ...
+// Version 8 has no garage. Versions 1-7 describe the first three circuits,
+// which form the Rookie Cup.
 static bool load_settings(Profile *p, const char **cursor) {
     int c, level, a, t, s, m, used = 0;
     if (sscanf(*cursor, " %d %d %d %d %d %d %n", &c, &level, &a, &t, &s, &m, &used) != 6 || !used ||
@@ -537,7 +571,7 @@ void profile_load(Profile *p) {
         return;
     int version = 0, used = 0;
     const char *cursor = d;
-    if (sscanf(cursor, "TOYCARS %d %n", &version, &used) != 1 || !used || version < 1 || version > 8) {
+    if (sscanf(cursor, "TOYCARS %d %n", &version, &used) != 1 || !used || version < 1 || version > 9) {
         SDL_free(d);
         return;
     }
@@ -610,6 +644,13 @@ void profile_load(Profile *p) {
         p->arcade_night = night == 1;
         cursor += used;
     }
+    if (version >= 9 && !load_garage(p, &cursor)) {
+        profile_defaults(p);
+        SDL_free(d);
+        return;
+    }
+    if (version < 9)
+        legacy_garage(p);
     // Legacy saves retain unlocks and records; start a new scored Championship.
     if (version < 3 || !load_records(p, cursor, version))
         migrate_records(p);
@@ -625,7 +666,7 @@ bool profile_save(const Profile *p) {
     char *data = SDL_malloc(capacity);
     if (!data)
         return false;
-    int len = SDL_snprintf(data, capacity, "TOYCARS 8\n%d %d %d %d %d %d\n", p->color, p->difficulty,
+    int len = SDL_snprintf(data, capacity, "TOYCARS 9\n%d %d %d %d %d %d\n", p->color, p->difficulty,
                            p->auto_accel, p->touch, p->sound, p->music);
     for (int i = 0; i < TRACK_COUNT; i++)
         len += SDL_snprintf(data + len, capacity - len, "%.3f%c", p->best[i], i == TRACK_COUNT - 1 ? '\n' : ' ');
@@ -641,6 +682,11 @@ bool profile_save(const Profile *p) {
             len += SDL_snprintf(data + len, capacity - len, "%d%c",
                 p->championship_places[track][i], i == CAR_COUNT - 1 ? '\n' : ' ');
     len += SDL_snprintf(data + len, capacity - len, "OPTIONS %d\n", p->arcade_night);
+    len += SDL_snprintf(data + len, capacity - len, "GARAGE %d %d\n", p->coins, p->car);
+    for (int model = 0; model < CAR_MODEL_COUNT; model++)
+        len += SDL_snprintf(data + len, capacity - len, "%d %d %d %d %d\n", p->owned[model],
+                            p->upgrades[model][0], p->upgrades[model][1], p->upgrades[model][2],
+                            p->upgrades[model][3]);
     len += SDL_snprintf(data + len, capacity - len, "RECORDS %u %s %d\n",
                         p->record_serial, p->initials, p->initials_set);
     for (int track = 0; track < TRACK_COUNT; track++) {

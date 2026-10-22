@@ -1,5 +1,6 @@
 // Exercise real result handling and persistence without touching player data.
 #include "game.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -502,6 +503,144 @@ static void test_settings_save_failure(Game *g, const char *path) {
     }
 }
 
+// The garage: prize money, upgrades, cars, their persistence and the rivals.
+static void test_garage(Game *g, const char *path) {
+    EXPECT(game_reset_profile(g));
+    Profile *p = &g->profile;
+    EXPECT(p->coins == 0 && p->car == CAR_TRAILBLAZER && p->owned[CAR_TRAILBLAZER]);
+    for (int m = 1; m < CAR_MODEL_COUNT; m++)
+        EXPECT(!p->owned[m] && CAR_INFO[m].price > CAR_INFO[m - 1].price);
+    // Stock cars are slower than the reference car; upgrades take them past it.
+    const int full[UPGRADE_COUNT] = {UPGRADE_LEVELS, UPGRADE_LEVELS, UPGRADE_LEVELS, UPGRADE_LEVELS};
+    CarTune reference = {0};
+    for (int m = 0; m < CAR_MODEL_COUNT; m++) {
+        CarTune stock = car_tune(m, NULL), best = car_tune(m, full);
+        EXPECT(car_top_speed(&stock) < car_top_speed(&reference));
+        EXPECT(car_rating(&stock) < car_rating(&reference) && car_rating(&best) > car_rating(&reference));
+        for (int level = 1; level < UPGRADE_LEVELS; level++)
+            EXPECT(upgrade_price(m, UPGRADE_ENGINE, level) > upgrade_price(m, UPGRADE_ENGINE, level - 1));
+        EXPECT(upgrade_price(m, UPGRADE_TIRES, UPGRADE_LEVELS) == 0);
+    }
+    CarTune comet = car_tune(CAR_COMET, full), trailblazer = car_tune(CAR_TRAILBLAZER, full);
+    EXPECT(car_rating(&comet) > car_rating(&trailblazer));
+    EXPECT(fabsf(car_top_speed(&reference) - 33.54f) < .01f);
+    // Better places, later cups and harder rivals pay more; Arcade pays half.
+    EXPECT(race_prize(0, 1, MODE_CHAMPIONSHIP, 1) > race_prize(0, 1, MODE_CHAMPIONSHIP, 2));
+    EXPECT(race_prize(0, 1, MODE_CHAMPIONSHIP, CAR_COUNT) > 0 && race_prize(0, 1, MODE_CHAMPIONSHIP, 0) == 0);
+    EXPECT(race_prize(TRACK_COUNT - 1, 1, MODE_CHAMPIONSHIP, 1) > race_prize(0, 1, MODE_CHAMPIONSHIP, 1));
+    EXPECT(race_prize(0, 2, MODE_CHAMPIONSHIP, 1) > race_prize(0, 1, MODE_CHAMPIONSHIP, 1));
+    EXPECT(race_prize(0, 1, MODE_CHAMPIONSHIP, 1) > race_prize(0, 0, MODE_CHAMPIONSHIP, 1));
+    EXPECT(race_prize(0, 1, MODE_ARCADE, 1) * 2 == race_prize(0, 1, MODE_CHAMPIONSHIP, 1));
+    EXPECT(cup_prize(0, 1, 3) > cup_prize(0, 1, 2) && cup_prize(0, 1, 0) == 0);
+    game_set_mode(g, MODE_ARCADE);
+    g->selected = 0;
+    g->test_mode = false;
+    finish(g, 3, false);
+    EXPECT(g->prize == race_prize(0, p->difficulty, MODE_ARCADE, 3) && p->coins == g->prize);
+    int before = p->coins;
+    finish(g, 1, true);
+    EXPECT(g->prize == 0 && p->coins == before); // A DNF earns nothing.
+    g->test_mode = true;
+    finish(g, 1, false);
+    EXPECT(g->prize == 0 && p->coins == before); // Neither do demo races.
+    g->test_mode = false;
+    // A cup's final adds the medal's bonus to the race prize.
+    EXPECT(game_reset_profile(g));
+    game_set_mode(g, MODE_CHAMPIONSHIP);
+    p->championship_completed = p->championship_stages[0] = 2;
+    for (int track = 0; track < 2; track++)
+        for (int i = 0; i < CAR_COUNT; i++)
+            p->championship_places[track][i] = i + 1;
+    g->selected = 2;
+    finish(g, 1, false);
+    EXPECT(p->championship_medal[0] == 3 && g->cup_prize == cup_prize(0, p->difficulty, 3));
+    EXPECT(g->prize == race_prize(2, p->difficulty, MODE_CHAMPIONSHIP, 1));
+    EXPECT(p->coins == g->prize + g->cup_prize);
+    game_leave_results(g);
+    // Upgrades cost coins, stop at the last level and reach the race.
+    EXPECT(game_reset_profile(g));
+    g->garage_car = CAR_TRAILBLAZER;
+    p->coins = upgrade_price(CAR_TRAILBLAZER, UPGRADE_ENGINE, 0) - 1;
+    EXPECT(!game_buy_upgrade(g, UPGRADE_ENGINE) && p->upgrades[CAR_TRAILBLAZER][UPGRADE_ENGINE] == 0);
+    p->coins++;
+    EXPECT(game_buy_upgrade(g, UPGRADE_ENGINE) && p->coins == 0);
+    EXPECT(p->upgrades[CAR_TRAILBLAZER][UPGRADE_ENGINE] == 1);
+    p->coins = 100000;
+    while (game_buy_upgrade(g, UPGRADE_TIRES))
+        ;
+    EXPECT(p->upgrades[CAR_TRAILBLAZER][UPGRADE_TIRES] == UPGRADE_LEVELS);
+    game_set_mode(g, MODE_ARCADE);
+    game_start(g);
+    CarTune tuned = car_tune(CAR_TRAILBLAZER, p->upgrades[CAR_TRAILBLAZER]);
+    EXPECT(g->cars[0].model == CAR_TRAILBLAZER && g->cars[0].tune.grip == tuned.grip);
+    EXPECT(g->cars[0].tune.power == tuned.power && tuned.grip > car_tune(CAR_TRAILBLAZER, NULL).grip);
+    // The turntable shows any car; only an owned one becomes the player's ride.
+    game_browse_car(g, CAR_COMET);
+    EXPECT(g->garage_car == CAR_COMET && p->car == CAR_TRAILBLAZER);
+    EXPECT(!game_buy_upgrade(g, UPGRADE_ENGINE));
+    p->coins = CAR_INFO[CAR_COMET].price - 1;
+    EXPECT(!game_buy_car(g, CAR_COMET) && !p->owned[CAR_COMET]);
+    p->coins++;
+    EXPECT(game_buy_car(g, CAR_COMET) && p->owned[CAR_COMET] && p->car == CAR_COMET && p->coins == 0);
+    EXPECT(!game_buy_car(g, CAR_COMET));
+    game_browse_car(g, CAR_COMET + 1);
+    EXPECT(g->garage_car == CAR_TRAILBLAZER && p->car == CAR_TRAILBLAZER);
+    game_browse_car(g, CAR_TRAILBLAZER - 1);
+    EXPECT(g->garage_car == CAR_COMET && p->car == CAR_COMET);
+    game_start(g);
+    EXPECT(g->cars[0].model == CAR_COMET);
+    // The garage survives a save, and a damaged garage is not trusted.
+    p->coins = 1234;
+    EXPECT(profile_save(p));
+    Profile saved;
+    profile_load(&saved);
+    EXPECT(memcmp(&saved, p, sizeof saved) == 0);
+    size_t size;
+    char *text = SDL_LoadFile(path, &size);
+    EXPECT(text && strstr(text, "GARAGE 1234 3\n"));
+    const char *damaged[] = {"GARAGE 1234 2\n", "GARAGE -5 3\n"};
+    for (size_t i = 0; text && i < SDL_arraysize(damaged); i++) {
+        char *copy = SDL_strdup(text), *at = strstr(copy, "GARAGE 1234 3\n");
+        memcpy(at, damaged[i], strlen(damaged[i]));
+        EXPECT(SDL_SaveFile(path, copy, strlen(copy)));
+        profile_load(&saved);
+        EXPECT(saved.coins == 0 && saved.car == CAR_TRAILBLAZER && !saved.owned[CAR_COMET]);
+        SDL_free(copy);
+    }
+    SDL_free(text);
+    // A save from before the garage brings a third place's prize per stage reached.
+    char v8[2048];
+    int len = SDL_snprintf(v8, sizeof v8, "TOYCARS 8\n0 1 0 1 1 1\n0 0 0 0 0 0 0 0 0 0\n"
+                                          "0 0 0 0 0 0 0 0 0 0\n4\nCHAMPIONSHIP 3\n3 1 0\n1 0 0\n0 0 0\n");
+    for (int track = 0; track < TRACK_COUNT; track++)
+        len += SDL_snprintf(v8 + len, sizeof v8 - len, "0 0 0 0 0 0 0 0\n");
+    len += SDL_snprintf(v8 + len, sizeof v8 - len, "OPTIONS 0\nRECORDS 0 AAA 0\n");
+    for (int track = 0; track < TRACK_COUNT; track++)
+        len += SDL_snprintf(v8 + len, sizeof v8 - len, "0 0\n");
+    EXPECT(SDL_SaveFile(path, v8, (size_t)len));
+    profile_load(&saved);
+    int purse = 0;
+    for (int track = 0; track < 4; track++)
+        purse += race_prize(track, 1, MODE_CHAMPIONSHIP, 3);
+    EXPECT(saved.championship_completed == 4 && saved.coins == purse);
+    EXPECT(saved.car == CAR_TRAILBLAZER && saved.owned[CAR_TRAILBLAZER] && !saved.owned[CAR_SPRITE]);
+    // Rivals bring better cars to later circuits and to harder races.
+    int levels[UPGRADE_COUNT];
+    expected_upgrades(0, levels);
+    EXPECT(!levels[0] && !levels[1] && !levels[2] && !levels[3]);
+    for (int i = 1; i < CAR_COUNT; i++) {
+        for (int track = 1; track < TRACK_COUNT; track++) {
+            CarTune a = rival_tune(track - 1, 1, i), b = rival_tune(track, 1, i);
+            EXPECT(b.power + b.speed + b.grip > a.power + a.speed + a.grip);
+        }
+        for (int d = 1; d < 3; d++) {
+            CarTune a = rival_tune(4, d - 1, i), b = rival_tune(4, d, i);
+            EXPECT(b.power + b.speed + b.grip > a.power + a.speed + a.grip);
+        }
+    }
+    EXPECT(game_reset_profile(g));
+}
+
 static void test_dnf_classification(Game *g) {
     EXPECT(game_reset_profile(g));
     game_set_mode(g, MODE_ARCADE);
@@ -764,6 +903,7 @@ int main(int argc, char **argv) {
     test_cups(g, path);
     test_settings_save_failure(g, path);
     test_dnf_classification(g);
+    test_garage(g, path);
     SDL_RemovePath(path);
     game_free(g);
     free(g);

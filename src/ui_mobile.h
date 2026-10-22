@@ -169,25 +169,33 @@ static void mobile_menu(UI *u, Game *g, Renderer *r) {
 static void mobile_garage(UI *u, Game *g) {
     Rect b = mobile_content_bounds(u);
     float top = b.y - MOBILE_PAGE_GAP;
+    CarModel car = g->garage_car;
     gradient(u, (Rect){0, top, b.x + b.w * .62f, u->height - top}, alpha(NIGHT, .85f),
              alpha(NIGHT, 0), false);
-    mobile_title(u, b, 56, "Your Trailblazer.");
-    label(u, 0, 26, b.x, b.y + 62, alpha(WHITE, .78f), "Pick a color. Make it yours.");
+    // The upgrade rows sit over the foot of the turntable.
+    gradient(u, (Rect){b.x + b.w * .4f, b.y + b.h - 250, b.w * .6f + 24, 250 + u->safe_bottom + 24},
+             alpha(NIGHT, 0), alpha(NIGHT, .8f), true);
+    char name[48];
+    SDL_snprintf(name, sizeof name, "Your %s.", CAR_INFO[car].name);
+    mobile_title(u, b, 56, name);
+    label(u, 0, 26, b.x, b.y + 62, alpha(WHITE, .78f), CAR_INFO[car].tagline);
+    car_switcher(u, g, b.x, b.y + 112, 56, 28);
     float cy = b.y + b.h - 210;
     for (int i = 0; i < 6; i++) {
         float x = b.x + 40 + i * 84;
         if (g->profile.color == i)
             slant_outline(u, (Rect){x - 40, cy - 33, 80, 66}, 3, WHITE);
         slant(u, (Rect){x - 33, cy - 26, 66, 52}, CAR_COLORS[i]);
-        if (hit(u, (Rect){x - 38, cy - 38, 76, 76})) {
+        u->garage_layout.swatches[i] = (Rect){x - 38, cy - 38, 76, 76};
+        if (hit(u, u->garage_layout.swatches[i])) {
             g->profile.color = i;
             game_save_profile(g);
             ui_clear_input(u);
         }
     }
     italic(u, 1, 30, b.x, cy + 44, WHITE, CAR_COLOR_NAMES[g->profile.color]);
-    if (race_button(u, (Rect){b.x, b.y + b.h - 76, 420, 76}, "TAKE IT RACING", 38, g->clock))
-        g->screen = SCREEN_MENU;
+    garage_action(u, g, (Rect){b.x, b.y + b.h - 76, 460, 76}, 36);
+    upgrade_rows(u, g, (Rect){b.x + b.w * .45f, b.y, b.w * .55f, b.h}, 50, 22, true);
 }
 static void mobile_help(UI *u, Game *g) {
     Rect b = mobile_content_bounds(u);
@@ -364,6 +372,18 @@ static void mobile_results(UI *u, Game *g) {
                                          : "Race complete";
     title(u, b.x, b.y + 26, 48, heading);
     char text[128];
+    if (g->prize > 0) {
+        char amount[32];
+        format_coins(amount, sizeof amount, g->prize + g->cup_prize);
+        SDL_snprintf(text, sizeof text, "+%s", amount);
+        float w = text_width(u, 1, 48, text), right = b.x + b.w;
+        coin_icon(u, right - w - 30, b.y + 44, 19);
+        headline(u, 48, right - w, b.y + 44 - 48 * .65f, GOLD, text);
+        format_coins(amount, sizeof amount, g->profile.coins);
+        SDL_snprintf(text, sizeof text, "%s  /  BANK %s", g->cup_prize ? "INCL. CUP BONUS" : "PRIZE MONEY",
+                     amount);
+        label(u, 0, 22, right - text_width(u, 0, 22, text), b.y + 78, alpha(WHITE, .62f), text);
+    }
     if (eliminated)
         SDL_snprintf(text, sizeof text, "Eliminated in stage %d / %s",
                      g->profile.championship_stages[game_cup(g)],

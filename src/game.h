@@ -211,6 +211,31 @@ enum {
     RAIL_MODEL_ROAD_TRAIN_TRACTOR, RAIL_MODEL_ROAD_TRAIN_CARRIAGE,
     RAIL_MODEL_DIESEL_LOCOMOTIVE, RAIL_MODEL_CONTAINER_WAGON, RAIL_MODEL_COUNT
 };
+// The garage: a few cars, each with four upgrades of five levels. Their
+// performance is measured against the handling model's reference car; a
+// zero tune drives exactly like it, +.1 is ten percent more.
+#define CAR_MODEL_COUNT 4
+#define UPGRADE_COUNT 4
+#define UPGRADE_LEVELS 5
+typedef enum { CAR_TRAILBLAZER, CAR_SPRITE, CAR_BRUISER, CAR_COMET } CarModel;
+typedef enum { UPGRADE_ENGINE, UPGRADE_SPEED, UPGRADE_TIRES, UPGRADE_FUEL } UpgradeKind;
+typedef struct {
+    float power;   // Engine acceleration
+    float speed;   // Top speed on asphalt
+    float grip;    // Tire grip and the cornering limit
+    float economy; // Share of fuel saved per second of driving
+    float grit;    // Share of the off-road drag and power loss shrugged off
+} CarTune;
+typedef struct {
+    const char *name, *kind, *tagline;
+    int price;   // Coins; the first car is free
+    int markup;  // Upgrade prices in percent of the base price list
+    // Tune at level 0 and the gain per upgrade level, in UpgradeKind order.
+    float base[UPGRADE_COUNT], step[UPGRADE_COUNT];
+    float grit;
+} CarInfo;
+extern const CarInfo CAR_INFO[CAR_MODEL_COUNT];
+extern const char *UPGRADE_NAMES[UPGRADE_COUNT];
 typedef struct {
     // Driver-relative steering: -1 left, +1 right.
     // Throttle above 1 is catch-up power for rivals far behind the player.
@@ -237,6 +262,9 @@ typedef struct {
     float throttle, slip, verge;
     bool wet;
     float can_cooldown[MAX_CANS];
+    CarTune tune;
+    float skill; // A rival's cornering margin above or below its difficulty's
+    CarModel model;
     int nearest, lap, checkpoints, collected, jumps;
     bool grounded, finished, dnf, offroad;
     Color color;
@@ -331,6 +359,10 @@ typedef struct {
     bool initials_set;
     unsigned record_serial;
     TrackRecords records[TRACK_COUNT];
+    int coins;
+    CarModel car; // The car the player races, always one they own
+    bool owned[CAR_MODEL_COUNT];
+    int upgrades[CAR_MODEL_COUNT][UPGRADE_COUNT];
 } Profile;
 typedef struct {
     Track tracks[TRACK_COUNT];
@@ -373,6 +405,9 @@ typedef struct {
     char initials[4];
     int initials_cursor, record_page;
     Screen records_return;
+    // Coins the latest race paid, and the cup bonus when it was a cup's final.
+    int prize, cup_prize;
+    CarModel garage_car; // The car on the garage turntable, owned or not
 } Game;
 extern const Color CAR_COLORS[6];
 extern const char *CAR_COLOR_NAMES[6];
@@ -425,6 +460,25 @@ bool game_reset_profile(Game *g);
 const char *game_player_name(const Game *g);
 void game_open_records(Game *g);
 bool game_car_precedes(const Game *g, int a, int b);
+/* Garage and prize money, see src/cars.c. */
+CarTune car_tune(CarModel model, const int levels[UPGRADE_COUNT]);
+/* The upgrades a player is expected to own when reaching a circuit. */
+void expected_upgrades(int track, int levels[UPGRADE_COUNT]);
+CarTune rival_tune(int track, int difficulty, int rival);
+CarModel rival_model(int rival);
+float rival_skill(int rival);
+float car_top_speed(const CarTune *tune);
+/* A 0-100 summary of a tune's pace, for the garage and the menu. */
+int car_rating(const CarTune *tune);
+/* Price of the next level of an upgrade, or 0 once it is complete. */
+int upgrade_price(CarModel model, UpgradeKind kind, int level);
+int race_prize(int track, int difficulty, RaceMode mode, int place);
+int cup_prize(int cup, int difficulty, int medal);
+bool game_buy_upgrade(Game *g, UpgradeKind kind);
+bool game_buy_car(Game *g, CarModel model);
+void game_browse_car(Game *g, CarModel model);
+/* Prints how a modelled player fares against the field; --balance. */
+int game_balance(int track);
 float track_nearest(const Track *t, Vec3 p, int *index, Vec3 *center, float *lane);
 Vec3 track_at(const Track *t, float distance, float lane, Vec3 *direction);
 bool track_water(const Track *t, Vec3 p, float *height);

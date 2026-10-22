@@ -65,6 +65,30 @@ static void toggle_pause(Game *g, UI *u) {
     ui_clear_input(u);
 }
 
+// Garage keys: browse the cars, pick an upgrade row, buy one directly by its
+// number. Confirm buys the car on show or the picked upgrade, or else heads
+// to the race menu.
+static void garage_input(Game *g, UI *u, int browse, int focus, int buy, bool confirm) {
+    if (browse) {
+        game_browse_car(g, g->garage_car + browse);
+        u->garage_focus = 0;
+    }
+    if (focus)
+        u->garage_focus = u->garage_focus ? SDL_clamp(u->garage_focus + focus, 1, UPGRADE_COUNT)
+                                          : focus > 0 ? 1 : UPGRADE_COUNT;
+    if (buy >= 0)
+        game_buy_upgrade(g, (UpgradeKind)buy);
+    if (confirm) {
+        if (!g->profile.owned[g->garage_car])
+            game_buy_car(g, g->garage_car);
+        else if (u->garage_focus)
+            game_buy_upgrade(g, (UpgradeKind)(u->garage_focus - 1));
+        else
+            g->screen = SCREEN_MENU;
+    }
+    ui_clear_input(u);
+}
+
 static bool restore_graphics(Renderer *r, UI *u) {
     bool show_stats = u->show_stats;
     bool mobile = u->mobile;
@@ -82,13 +106,15 @@ static bool restore_graphics(Renderer *r, UI *u) {
 
 int main(int argc, char **argv) {
     bool test = false, autoplay = false, noaudio = false, benchmark = false, touch_override = false;
-    bool no_vsync = false, show_fps = false, night = false;
+    bool no_vsync = false, show_fps = false, night = false, balance = false;
     float train_at = 0;
-    int track = -1, frames = 0, width = 1440, height = 900;
+    int track = -1, frames = 0, width = 1440, height = 900, preview_car = -1;
     const char *screenshot = NULL, *screen = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--test"))
             test = true;
+        else if (!strcmp(argv[i], "--balance"))
+            balance = true;
         else if (!strcmp(argv[i], "--autoplay"))
             autoplay = true;
         else if (!strcmp(argv[i], "--no-audio"))
@@ -103,7 +129,16 @@ int main(int argc, char **argv) {
             touch_override = true;
         else if (!strcmp(argv[i], "--night"))
             night = true;
-        else if (!strcmp(argv[i], "--train-at") && i + 1 < argc)
+        else if (!strcmp(argv[i], "--car") && i + 1 < argc) {
+            i++;
+            for (int k = 0; k < CAR_MODEL_COUNT; k++)
+                if (!SDL_strcasecmp(argv[i], CAR_INFO[k].name))
+                    preview_car = k;
+            if (preview_car < 0) {
+                fprintf(stderr, "Unknown car: %s\n", argv[i]);
+                return 1;
+            }
+        } else if (!strcmp(argv[i], "--train-at") && i + 1 < argc)
             train_at = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--track") && i + 1 < argc) {
             track = game_track_index(argv[++i]);
@@ -125,7 +160,9 @@ int main(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "--help")) {
             printf("ToyCars\n  --test                     Run deterministic simulation tests (no "
-                   "window; with --track, only that circuit)\n  --track ID                 country, beach, winter, canyon, autumn,\n"
+                   "window; with --track, only that circuit)\n"
+                   "  --balance                  Race modelled players against the rivals and\n"
+                   "                             print where they finish (with --track, one circuit)\n  --track ID                 country, beach, winter, canyon, autumn,\n"
                    "                             jungle, sakura, harbor, highland or volcano\n  --screen "
                    "menu|race|garage|help|settings|results|championship|records\n  --autoplay      "
                    "           Drive the "
@@ -137,12 +174,21 @@ int main(int argc, char **argv) {
                    "  --no-audio                 Do not open an audio device\n  "
                    "--touch                    Preview mobile layout and touch controls\n"
                    "  --night                    Race at night in every mode\n"
+                   "  --car NAME                 Preview Trailblazer, Sprite, Bruiser or Comet\n"
+                   "                             (garage and race screens; nothing is saved)\n"
                    "  --train-at SECONDS         Send the first train to the crossing at this race time\n");
             return 0;
         } else {
             fprintf(stderr, "Unknown or incomplete option: %s\n", argv[i]);
             return 1;
         }
+    }
+    if (balance) {
+        if (!SDL_Init(0))
+            return 1;
+        int code = game_balance(track);
+        SDL_Quit();
+        return code;
     }
     if (test) {
         if (!SDL_Init(0))
@@ -223,9 +269,16 @@ int main(int argc, char **argv) {
     g->force_night = night;
     g->force_train = train_at;
     g->test_mode = autoplay || frames > 0 || screen != NULL;
+    if (preview_car >= 0)
+        g->garage_car = (CarModel)preview_car;
     if (screen) {
         if (!strcmp(screen, "race")) {
             game_start(g);
+            if (preview_car >= 0) {
+                // The previewed car need not be owned, so the profile keeps its own.
+                g->cars[0].model = (CarModel)preview_car;
+                g->cars[0].tune = car_tune(g->cars[0].model, NULL);
+            }
         } else if (!strcmp(screen, "garage"))
             g->screen = SCREEN_GARAGE;
         else if (!strcmp(screen, "help"))
@@ -243,6 +296,9 @@ int main(int argc, char **argv) {
             for (int i = 0; i < 120 * 200 && g->screen != SCREEN_RESULTS; i++)
                 game_tick(g, (Controls){0}, FIXED_DT, true);
             // Preview only: leave the loaded profile and saved progression untouched.
+            // Show what the finish would pay without banking it.
+            if (g->cars[0].finished)
+                g->prize = race_prize(g->selected, g->profile.difficulty, g->mode, g->finish_rank);
             if (celebration) {
                 g->championship_celebration = true;
                 g->celebration_time = 0;
@@ -329,6 +385,15 @@ int main(int argc, char **argv) {
                     game_continue(g);
                     ui_clear_input(u);
                 }
+                if (g->screen == SCREEN_GARAGE) {
+                    Uint8 b = e.gbutton.button;
+                    garage_input(g, u,
+                                 b == SDL_GAMEPAD_BUTTON_DPAD_LEFT    ? -1
+                                 : b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT ? 1 : 0,
+                                 b == SDL_GAMEPAD_BUTTON_DPAD_UP      ? -1
+                                 : b == SDL_GAMEPAD_BUTTON_DPAD_DOWN  ? 1 : 0,
+                                 -1, b == SDL_GAMEPAD_BUTTON_SOUTH);
+                }
                 // The D-pad steps through the circuits, the shoulders through the cups.
                 if (g->screen == SCREEN_MENU) {
                     if (e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_LEFT)
@@ -354,7 +419,14 @@ int main(int argc, char **argv) {
                     break;
                 if (e.key.key == SDLK_ESCAPE || e.key.key == SDLK_AC_BACK)
                     toggle_pause(g, u);
-                if (e.key.key == SDLK_RETURN) {
+                if (g->screen == SCREEN_GARAGE) {
+                    SDL_Keycode k = e.key.key;
+                    int browse = k == SDLK_LEFT ? -1 : k == SDLK_RIGHT ? 1 : 0;
+                    int focus = k == SDLK_UP ? -1 : k == SDLK_DOWN ? 1 : 0;
+                    int buy = k >= SDLK_1 && k < SDLK_1 + UPGRADE_COUNT ? (int)(k - SDLK_1) : -1;
+                    if (browse || focus || buy >= 0 || k == SDLK_RETURN)
+                        garage_input(g, u, browse, focus, buy, k == SDLK_RETURN);
+                } else if (e.key.key == SDLK_RETURN) {
                     if (g->screen == SCREEN_MENU || g->screen == SCREEN_RESULTS)
                         game_continue(g);
                     else if (g->screen == SCREEN_PAUSE)

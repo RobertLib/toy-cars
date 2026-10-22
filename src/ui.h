@@ -28,6 +28,10 @@ typedef struct {
 typedef struct {
     Rect modes[2], start, secondary, times[2], cards[TRACK_COUNT], cups[CUP_COUNT];
 } MenuLayout;
+// The garage's targets as last drawn; upgrade buttons are empty for a car not owned.
+typedef struct {
+    Rect swatches[6], arrows[2], action, upgrades[UPGRADE_COUNT];
+} GarageLayout;
 typedef struct {
     GLuint program, vao, vbo, white, current_texture;
     UIFont fonts[2];
@@ -52,7 +56,9 @@ typedef struct {
     bool menu_seen;
     Screen menu_screen;
     float menu_transition_start, menu_fade, nav_from, nav_position;
+    int garage_focus; // Upgrade row picked with the keys or D-pad, 1-based; 0 for none
     MenuLayout menu_layout;
+    GarageLayout garage_layout;
 } UI;
 bool ui_init(UI *u);
 void ui_size(UI *u, int w, int h, SDL_Window *window);

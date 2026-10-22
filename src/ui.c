@@ -952,8 +952,22 @@ static void cup_tabs(UI *u, Game *g, float x, float y, float h, float size) {
     }
 }
 // Big stat readouts under the title: overall standing, or a track's personal best.
+// The player's car rating against the best rival car on the selected track.
+static void field_ratings(const Game *g, int *car, int *rivals) {
+    CarTune tune = car_tune(g->profile.car, g->profile.upgrades[g->profile.car]);
+    *car = car_rating(&tune);
+    *rivals = 0;
+    for (int i = 1; i < CAR_COUNT; i++) {
+        CarTune rival = rival_tune(g->selected, g->profile.difficulty, i);
+        *rivals = SDL_max(*rivals, car_rating(&rival));
+    }
+}
 static void menu_stats(UI *u, Game *g, float x, float y, float value_size, float label_size) {
-    char values[3][32], names[3][24];
+    char values[4][32], names[4][24];
+    int car, rivals;
+    field_ratings(g, &car, &rivals);
+    SDL_snprintf(values[3], 32, "%d / %d", car, rivals);
+    SDL_strlcpy(names[3], "CAR / BEST RIVAL", 24);
     bool open = game_track_unlocked(&g->profile, g->selected);
     if (g->mode == MODE_CHAMPIONSHIP) {
         int cup = game_cup(g), stage = g->profile.championship_stages[cup];
@@ -989,19 +1003,43 @@ static void menu_stats(UI *u, Game *g, float x, float y, float value_size, float
         label(u, 0, label_size, x + value_size * 1.2f, y + value_size * .85f, alpha(WHITE, .6f), s);
         return;
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         float w = fmaxf(text_width(u, 1, value_size, values[i]),
                         text_width(u, 0, label_size, names[i]));
         Color c = i == 1 && g->mode == MODE_ARCADE && g->profile.medals[g->selected]
                       ? tint(medal_color(g->profile.medals[g->selected]), .35f)
-                      : WHITE;
+                  : i == 3 && car < rivals ? tint(ORANGE, .3f)
+                                           : WHITE;
         headline(u, value_size, x, y - value_size * .3f, c, values[i]);
         label(u, 0, label_size, x, y + value_size * .85f, alpha(WHITE, .6f), names[i]);
         x += w + value_size * .9f;
-        if (i < 2)
+        if (i < 3)
             line(u, x - value_size * .25f, y - value_size * .05f, x - value_size * .55f,
                  y + value_size * 1.25f, 1.5f, alpha(WHITE, .22f));
     }
+}
+// Coins with thousands separated, as "12,480".
+static void format_coins(char *out, size_t size, int coins) {
+    if (coins >= 1000000)
+        SDL_snprintf(out, size, "%d,%03d,%03d", coins / 1000000, coins / 1000 % 1000, coins % 1000);
+    else if (coins >= 1000)
+        SDL_snprintf(out, size, "%d,%03d", coins / 1000, coins % 1000);
+    else
+        SDL_snprintf(out, size, "%d", coins);
+}
+static const Color GOLD = {.98f, .76f, .22f, 1};
+static void coin_icon(UI *u, float x, float y, float r) {
+    circle(u, x, y, r, GOLD);
+    ring(u, x, y, r * .6f, r * .16f, rgb(.78f, .52f, .09f));
+}
+// A coin and an amount; returns the width drawn.
+static float coins_label(UI *u, float x, float y, float size, Color c, int coins, const char *prefix) {
+    char amount[32], s[48];
+    format_coins(amount, sizeof amount, coins);
+    SDL_snprintf(s, sizeof s, "%s%s", prefix, amount);
+    coin_icon(u, x + size * .45f, y + size * .62f, size * .42f);
+    label(u, 0, size, x + size * 1.15f, y, c, s);
+    return size * 1.15f + text_width(u, 0, size, s);
 }
 static void keycap(UI *u, float *x, float y, const char *key, const char *action) {
     float w = text_width(u, 0, 12, key) + 16;
@@ -1032,6 +1070,10 @@ static void header(UI *u, Game *g) {
         x += tw + 35;
     }
     Rect settings = {u->width - 87 - u->safe_right, 21 + u->safe_top, 42, 38};
+    char bank[32];
+    format_coins(bank, sizeof bank, g->profile.coins);
+    float bank_w = text_width(u, 0, 18, bank) + 18 * 1.15f;
+    coins_label(u, settings.x - 26 - bank_w, settings.y + 8, 18, WHITE, g->profile.coins, "");
     bool current = g->screen == SCREEN_SETTINGS;
     rounded(u, settings, 10,
             current ? ORANGE : alpha(WHITE, inside(settings, u->mx, u->my) ? .24f : .14f));
@@ -1165,45 +1207,206 @@ static void menu(UI *u, Game *g, Renderer *r) {
     player_tag(u, g, r, panel * .7f, 150 + u->safe_top, chip_y - 10, 17);
 }
 
+static float upgrade_value(int model, int kind, int level) {
+    return CAR_INFO[model].base[kind] + CAR_INFO[model].step[kind] * level;
+}
+// Every stat bar spans the weakest stock car to the best fully upgraded one.
+static float stat_share(int kind, float value) {
+    float lo = 1, hi = -1;
+    for (int m = 0; m < CAR_MODEL_COUNT; m++) {
+        lo = fminf(lo, upgrade_value(m, kind, 0));
+        hi = fmaxf(hi, upgrade_value(m, kind, UPGRADE_LEVELS));
+    }
+    return clampf((value - lo) / (hi - lo), 0, 1);
+}
+// Segments of a stat: the stock car in white, bought upgrades in orange and
+// what the remaining levels would add as a faint outline.
+static void stat_bar(UI *u, float x, float y, float w, float h, CarModel model, int kind, int level) {
+    const int count = 12;
+    float step = w / count;
+    int base = SDL_max(1, (int)lroundf(stat_share(kind, upgrade_value(model, kind, 0)) * count));
+    int now = SDL_max(base, (int)lroundf(stat_share(kind, upgrade_value(model, kind, level)) * count));
+    int full = SDL_max(now, (int)lroundf(stat_share(kind, upgrade_value(model, kind, UPGRADE_LEVELS)) * count));
+    for (int k = 0; k < count; k++) {
+        Rect seg = {x + k * step, y, step - 3, h};
+        if (k < base)
+            slant(u, seg, alpha(WHITE, .9f));
+        else if (k < now)
+            slant(u, seg, ORANGE);
+        else if (k < full)
+            slant_outline(u, seg, 1.2f, alpha(WHITE, .38f));
+        else
+            slant(u, seg, alpha(WHITE, .08f));
+    }
+}
+// A price tag that buys when the player can afford it, or MAX when complete.
+static bool price_button(UI *u, Rect r, int price, int coins, float size) {
+    if (!price) {
+        slant(u, r, alpha(WHITE, .06f));
+        italic_center(u, size, r, alpha(WHITE, .5f), "MAX", false);
+        return false;
+    }
+    bool afford = coins >= price, hover = afford && inside(r, u->mx, u->my);
+    bool clicked = hit(u, r) && afford;
+    if (afford)
+        slant(u, r, hover ? rgb(.97f, .37f, .17f) : ORANGE);
+    else
+        slant_outline(u, r, 1.2f, alpha(WHITE, .25f));
+    char amount[32];
+    format_coins(amount, sizeof amount, price);
+    float tw = text_width(u, 1, size, amount), icon = size * .42f;
+    float x = r.x + (r.w - tw - icon * 2.6f) * .5f;
+    coin_icon(u, x + icon, r.y + r.h * .5f, icon);
+    italic(u, 1, size, x + icon * 2.6f, r.y + r.h * .5f - size * .65f,
+           afford ? WHITE : alpha(WHITE, .5f), amount);
+    return clicked;
+}
+static bool arrow_button(UI *u, Rect r, int direction) {
+    bool hover = inside(r, u->mx, u->my), clicked = hit(u, r);
+    slant(u, r, alpha(WHITE, hover ? .24f : .12f));
+    float cx = r.x + r.w * .5f, cy = r.y + r.h * .5f, arm = r.h * .2f;
+    line(u, cx - arm * .4f * direction, cy - arm, cx + arm * .5f * direction, cy, 3, WHITE);
+    line(u, cx + arm * .5f * direction, cy, cx - arm * .4f * direction, cy + arm, 3, WHITE);
+    return clicked;
+}
+// The turntable car's four upgrades, one row each, anchored to the bottom.
+// Phones show the bank beside the caption; the desktop header carries it.
+static void upgrade_rows(UI *u, Game *g, Rect area, float row, float size, bool bank) {
+    CarModel car = g->garage_car;
+    bool owned = g->profile.owned[car];
+    int total = 0;
+    for (int k = 0; k < UPGRADE_COUNT; k++)
+        total += g->profile.upgrades[car][k];
+    char s[96], name[32];
+    upper(name, sizeof name, CAR_INFO[car].name);
+    if (owned)
+        SDL_snprintf(s, sizeof s, "UPGRADES  /  %d OF %d", total, UPGRADE_COUNT * UPGRADE_LEVELS);
+    else
+        SDL_snprintf(s, sizeof s, "BUY THE %s TO UPGRADE IT", name);
+    float y = area.y + area.h - row * UPGRADE_COUNT, caption = y - size * 1.9f;
+    label(u, 0, size, area.x, caption, alpha(WHITE, .6f), s);
+    if (bank) {
+        char amount[32];
+        format_coins(amount, sizeof amount, g->profile.coins);
+        float w = text_width(u, 0, size, amount) + size * 1.15f;
+        coins_label(u, area.x + area.w - w, caption, size, WHITE, g->profile.coins, "");
+    }
+    float name_w = size * 7.5f, button_w = size * 8, level_w = size * 3.2f;
+    float bar_x = area.x + name_w, bar_w = area.w - name_w - button_w - level_w;
+    for (int k = 0; k < UPGRADE_COUNT; k++) {
+        float ry = y + k * row;
+        int level = owned ? g->profile.upgrades[car][k] : 0;
+        if (u->garage_focus == k + 1 && owned)
+            skew(u, (Rect){area.x - 14, ry, area.w + 14, row - 4}, 8, alpha(WHITE, .08f));
+        label(u, 0, size, area.x, ry + (row - 4) * .5f - size * .62f, WHITE, UPGRADE_NAMES[k]);
+        float bar_h = size * .75f;
+        stat_bar(u, bar_x, ry + (row - 4 - bar_h) * .5f, bar_w, bar_h, car, k, level);
+        SDL_snprintf(s, sizeof s, "%d/%d", level, UPGRADE_LEVELS);
+        label(u, 0, size * .85f, bar_x + bar_w + size * .6f, ry + (row - 4) * .5f - size * .55f,
+              alpha(WHITE, .6f), s);
+        u->garage_layout.upgrades[k] = (Rect){0};
+        if (!owned)
+            continue;
+        Rect buy = {area.x + area.w - button_w, ry + 2, button_w, row - 8};
+        u->garage_layout.upgrades[k] = buy;
+        if (price_button(u, buy, upgrade_price(car, k, level), g->profile.coins, size * 1.15f)) {
+            game_buy_upgrade(g, k);
+            ui_clear_input(u);
+        }
+    }
+}
+// Below the title: the car switcher and what the car on the turntable is to you.
+static void car_switcher(UI *u, Game *g, float x, float y, float h, float size) {
+    CarModel car = g->garage_car;
+    u->garage_layout.arrows[0] = (Rect){x, y, h * 1.25f, h};
+    u->garage_layout.arrows[1] = (Rect){x + h * 1.25f + 8, y, h * 1.25f, h};
+    if (arrow_button(u, u->garage_layout.arrows[0], -1)) {
+        game_browse_car(g, car - 1);
+        ui_clear_input(u);
+    }
+    if (arrow_button(u, u->garage_layout.arrows[1], 1)) {
+        game_browse_car(g, car + 1);
+        ui_clear_input(u);
+    }
+    CarTune tune = car_tune(car, g->profile.owned[car] ? g->profile.upgrades[car] : NULL);
+    char s[64];
+    SDL_snprintf(s, sizeof s, "%s  /  RATING %d", g->profile.owned[car] ? "YOUR RIDE" : "FOR SALE",
+                 car_rating(&tune));
+    italic(u, 1, size, x + h * 2.5f + 26, y + h * .5f - size * .65f,
+           g->profile.owned[car] ? WHITE : tint(ORANGE, .3f), s);
+}
+// The garage's main action: race the owned car, or buy the one on show.
+static void garage_action(UI *u, Game *g, Rect r, float size) {
+    CarModel car = g->garage_car;
+    u->garage_layout.action = r;
+    if (g->profile.owned[car]) {
+        if (race_button(u, r, "TAKE IT RACING", size, g->clock))
+            g->screen = SCREEN_MENU;
+        return;
+    }
+    char amount[32], s[64];
+    int price = CAR_INFO[car].price;
+    format_coins(amount, sizeof amount, price);
+    if (g->profile.coins >= price) {
+        SDL_snprintf(s, sizeof s, "BUY FOR %s", amount);
+        if (race_button(u, r, s, size, g->clock)) {
+            game_buy_car(g, car);
+            ui_clear_input(u);
+        }
+        return;
+    }
+    slant(u, r, alpha(NIGHT, .7f));
+    slant_outline(u, r, 1.5f, alpha(WHITE, .2f));
+    format_coins(amount, sizeof amount, price - g->profile.coins);
+    SDL_snprintf(s, sizeof s, "%s MORE TO BUY", amount);
+    lock_icon(u, r.x + r.h * .55f, r.y + r.h * .3f, r.h * .38f, alpha(WHITE, .5f));
+    italic_center(u, size * .8f, (Rect){r.x + r.h * .4f, r.y, r.w - r.h * .4f, r.h},
+                  alpha(WHITE, .6f), s, false);
+}
 static void garage(UI *u, Game *g) {
-    float m = 46 + u->safe_left;
-    bool compact = u->height - u->safe_top - u->safe_bottom < 690;
-    float cy = compact ? u->height - 183 - u->safe_bottom : 431;
+    float m = 46 + u->safe_left, right = u->width - 46 - u->safe_right;
+    float available = u->height - u->safe_top - u->safe_bottom;
+    bool compact = available < 690;
+    CarModel car = g->garage_car;
+    const CarInfo *info = &CAR_INFO[car];
     gradient(u, (Rect){0, 0, u->width * .55f, u->height}, alpha(NIGHT, .85f), alpha(NIGHT, 0),
              false);
-    float size = compact ? 58 : 82, y = compact ? 98 + u->safe_top : 117;
-    eyebrow(u, m, y, 15, tint(ORANGE, .25f), "YOUR RIDE, YOUR RULES");
+    float size = compact ? 54 : 78, y = compact ? 96 + u->safe_top : 117;
+    char s[96], name[40];
+    SDL_snprintf(s, sizeof s, "YOUR GARAGE  /  %02d OF %02d  /  %s", car + 1, CAR_MODEL_COUNT, info->kind);
+    eyebrow(u, m, y, 15, tint(ORANGE, .25f), s);
     y = title(u, m, y + 32, size, "Meet the");
-    y = title(u, m, y + size * .2f, size, "Trailblazer.");
-    label(u, 0, 18, m, y + 24, alpha(WHITE, .78f), "A little rally car with a lot of heart.");
-    if (!compact)
-        label(u, 0, 19, m, y + 52, alpha(WHITE, .78f), "Pick a color. Leave your mark.");
+    SDL_snprintf(name, sizeof name, "%s.", info->name);
+    y = title(u, m, y + size * .2f, size, name);
+    label(u, 0, 18, m, y + 22, alpha(WHITE, .78f), info->tagline);
+    float sy = y + (compact ? 58 : 72);
+    car_switcher(u, g, m, sy, 44, 21);
+    float cy = sy + (compact ? 92 : 112);
     for (int i = 0; i < 6; i++) {
         float x = m + 23 + i * 57;
         if (g->profile.color == i)
             slant_outline(u, (Rect){x - 28, cy - 24, 56, 48}, 2.5f, WHITE);
         slant(u, (Rect){x - 23, cy - 18, 46, 36}, CAR_COLORS[i]);
-        if (hit(u, (Rect){x - 27, cy - 27, 54, 54})) {
+        u->garage_layout.swatches[i] = (Rect){x - 27, cy - 27, 54, 54};
+        if (hit(u, u->garage_layout.swatches[i])) {
             g->profile.color = i;
             game_save_profile(g);
             ui_clear_input(u);
         }
     }
     italic(u, 1, 22, m, cy + 38, WHITE, CAR_COLOR_NAMES[g->profile.color]);
-    if (race_button(u, (Rect){m, u->height - 92 - u->safe_bottom, 330, 62}, "TAKE IT RACING", 31,
-                    g->clock))
-        g->screen = SCREEN_MENU;
-    float x = u->width * .58f;
-    y = u->height - 151;
-    caps(u, x, y, alpha(WHITE, .6f), "01 / TRAILBLAZER RALLY");
-    const char *names[] = {"SPEED", "HANDLING", "GRIT"};
-    float values[] = {.82f, .9f, .94f};
-    for (int i = 0; i < 3; i++) {
-        caps(u, x + i * 135, y + 35, WHITE, names[i]);
-        for (int k = 0; k < 10; k++)
-            slant(u, (Rect){x + i * 135 + k * 10.5f, y + 62, 9.5f, 9},
-                  k < (int)lroundf(values[i] * 10) ? ORANGE : alpha(WHITE, .16f));
+    Rect action = {m, u->height - 92 - u->safe_bottom, 380, 62};
+    float kx = m + 4, ky = cy + (compact ? 70 : 96);
+    if (ky + 22 < action.y - 12) {
+        keycap(u, &kx, ky, "< >", "CAR");
+        keycap(u, &kx, ky, "1-4", "UPGRADE");
+        keycap(u, &kx, ky, "ENTER", g->profile.owned[car] ? "RACE" : "BUY");
     }
+    garage_action(u, g, action, 30);
+    float row = compact ? 32 : 40;
+    upgrade_rows(u, g, (Rect){u->width * .52f, 0, right - u->width * .52f,
+                             u->height - (compact ? 22 : 34) - u->safe_bottom},
+                 row, compact ? 15 : 16, false);
 }
 static void help(UI *u, Game *g) {
     float m = 46 + u->safe_left;
@@ -1316,7 +1519,7 @@ static void reset_data(UI *u, Game *g) {
     float y = u->safe_top + (u->height - u->safe_top - u->safe_bottom - 310) * .5f;
     italic_center(u, 54, (Rect){cx - 500, y, 1000, 66}, WHITE, "RESET ALL SAVED DATA?", true);
     center_label(u, 0, 19, cx, y + 80, WHITE,
-                 "Championship progress, medals, records and race history will be erased.");
+                 "Championship progress, medals, records, coins, cars and upgrades will be erased.");
     center_label(u, 0, 19, cx, y + 112, alpha(WHITE, .6f),
                  "Your initials, car color and settings will return to their defaults.");
     center_label(u, 0, 19, cx, y + 159, tint(ORANGE, .2f), "This cannot be undone.");
@@ -1949,6 +2152,22 @@ static void results(UI *u, Game *g) {
                      medal > 0 ? " MEDAL" : "");
         label(u, 0, 17, m, y + 143, alpha(WHITE, .62f), record);
     }
+    // Prize money beside the title: the race's, any cup bonus, and the bank.
+    if (g->prize > 0) {
+        char amount[32], big[40], bank[32], detail[96];
+        format_coins(amount, sizeof amount, g->prize + g->cup_prize);
+        format_coins(bank, sizeof bank, g->profile.coins);
+        SDL_snprintf(big, sizeof big, "+%s", amount);
+        float right = x + w - 58, bw = text_width(u, 1, 44, big);
+        coin_icon(u, right - bw - 26, y + 84, 16);
+        headline(u, 44, right - bw, y + 84 - 44 * .65f, GOLD, big);
+        if (g->cup_prize) {
+            format_coins(amount, sizeof amount, g->cup_prize);
+            SDL_snprintf(detail, sizeof detail, "INCL. CUP BONUS %s  /  BANK %s", amount, bank);
+        } else
+            SDL_snprintf(detail, sizeof detail, "PRIZE MONEY  /  BANK %s", bank);
+        label(u, 0, 14, right - text_width(u, 0, 14, detail), y + 112, alpha(WHITE, .6f), detail);
+    }
     bool compact = h < 600;
     float left = m, top = y + (compact ? 181 : 201);
     Rect card = {left, top, 290, h - (compact ? 276 : 296)};
@@ -2493,8 +2712,14 @@ void ui_draw(UI *u, Game *g, Renderer *r) {
     flush(u);
     glDisable(GL_BLEND);
     u->click_count = 0;
-    if (g->screen != screen)
+    if (g->screen != screen) {
         ui_clear_input(u);
+        // The garage opens on the player's own car.
+        if (g->screen == SCREEN_GARAGE) {
+            g->garage_car = g->profile.car;
+            u->garage_focus = 0;
+        }
+    }
 }
 void ui_destroy(UI *u) {
     glDeleteProgram(u->program);

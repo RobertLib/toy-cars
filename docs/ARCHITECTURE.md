@@ -6,6 +6,7 @@
 | --- | --- |
 | `main.c` | SDL lifecycle, window, input events, fixed-step loop, gamepads, diagnostic CLI |
 | `src/game.c` | Vehicle dynamics, AI, fuel, laps, ranking, collisions, particles and race state |
+| `src/cars.c` | The garage: cars, upgrade prices, prize money, rival cars and the expected progression |
 | `src/tracks.c` | The ten circuits and three cups: names, surfaces, climate, lighting, sounds, railway |
 | `src/railway.c` | Level crossings: timetables, barriers, the trains' poses and their collisions with cars |
 | `src/assets.c` | Checked binary loading, APK asset lookup, local profile persistence |
@@ -141,15 +142,48 @@ near alternating road edges, restore 18 percentage points within a 1.5-meter
 collection radius, and have a 35-second per-driver cooldown so a lead car
 cannot deny the entire field access to fuel.
 
-Rivals adapt to the player's race distance so neither side drives out of sight.
-Within 15 meters they race at their difficulty pace; beyond that the adjustment
-grows over the next 100 meters. A rival ahead lowers its pace by up to
-40 / 30 / 15 percent on easy / normal / hard. A rival behind gains up to
-12 / 14 / 18 percent engine power (throttle above 1, AI only) and corners at up
-to 1.0 / 1.10 / 1.14 times normal pace, which stays below the tire limit. Ice,
-mud and volcanic ash recover grip too slowly for that, so on Alpine Rush, Jungle
-Ruins and Volcano Peak catch-up never raises corner pace above 1.0. Jump takeoff speeds are unchanged. Adaptation stops once the player
-finishes, so the remaining classification settles at regular pace.
+Every car carries a `CarTune`: engine, top speed, grip, fuel economy and grit,
+each relative to the reference car of the handling model, which a zero tune
+drives exactly (14.2 m/s² on asphalt, 33.5 m/s top speed, the circuit's grip).
+Engine power scales acceleration; the drag coefficient is derived so that the
+top speed follows its own stat. Grip scales lateral grip, the lateral limit and
+the steering limit. Economy scales fuel use. Grit shrinks the off-road drag and
+power loss (the Bruiser). `CAR_INFO` in `src/cars.c` gives each car its level-0
+tune and the gain per upgrade level; stock cars sit below the reference car and
+fully upgraded ones above it.
+
+Rivals take their car from `rival_tune`: the Trailblazer that a player who
+finished third on normal everywhere and spent the winnings on engine, top
+speed and tires would own on that circuit (`expected_upgrades`), shifted by
+difficulty along the Championship (normal -0.035 to +0.025, easy -0.10 to
+-0.04, hard -0.01 to +0.06), by each rival's own offset and by the character of
+the car model they drive. Prices and prizes therefore set the rivals' pace too.
+AI drivers hold full throttle on straights (easy rivals cruise at 80 % of top
+speed) and take corners at 44 / 80 / 87 % of their car's tire limit on easy /
+normal / hard, plus a per-driver skill offset.
+
+Rivals adapt a little to the player's race distance. Within 15 meters they
+race at their difficulty pace; beyond that the adjustment grows over the next
+100 meters. A rival ahead lowers its cruising speed by up to 30 / 10 / 4 percent
+on easy / normal / hard, and its cornering margin by the square of that. A rival
+behind gains up to 10 / 12 / 15 percent engine power (throttle above 1, AI only)
+and corners at up to 72 / 90 / 93 % of the tire limit. Ice, mud and volcanic ash
+recover grip too slowly for that, so on Alpine Rush, Jungle Ruins and Volcano
+Peak catch-up never raises the cornering margin. Adaptation stops once the
+player finishes, so the remaining classification settles at regular pace.
+
+`./build/ToyCars --balance` races a modelled player against every field: a
+steady driver (the normal rivals' margin) and a sharp one (92 % plus five
+percent of extra pace, which matches the race times of a strong player who won
+every stage on normal before the garage), each in a stock, expected, fully
+upgraded Trailblazer and a fully upgraded Comet. It prints the average place of
+three races per cell. The tuning target on normal: with the expected upgrades a
+sharp driver fights for the win and a steady one for a qualifying place, while
+a stock car falls back in the later cups.
+
+Every finish pays `race_prize` coins by place, cup, difficulty and mode
+(Arcade half, DNF nothing), and a cup medal adds `cup_prize`. Prizes are paid in
+`game_results` once the player's place is final and saved with the results.
 
 Track projection searches a bounded neighborhood around the previous segment.
 Signed, unwrapped progress and sequential quarter-lap gates prevent finish-line
@@ -466,6 +500,13 @@ finished or eliminated cup again clears its classifications but preserves unlock
 records and medals; the other cups' series are untouched. Championship always
 starts the next unscored stage of the selected cup; Arcade permits single-track
 replays of every unlocked track.
+
+Profile version 9 adds the garage after `OPTIONS`: `GARAGE <coins> <car>`,
+then one line per car with its ownership and four upgrade levels. Loading
+rejects negative coins, levels outside 0–5, upgrades on cars not owned, a
+selected car that is not owned and a missing Trailblazer. Older profiles load
+with the Trailblazer only and a purse of a third place's prize on normal for
+every stage they have reached.
 
 Profile version 8 stores ten tracks: ten best times and medals, the unlock
 index, a `CHAMPIONSHIP <cups>` line followed by one line per cup (stages,

@@ -103,9 +103,37 @@ an internet connection to run.
   asset generation; each track adds one wildlife draw per scene/shadow pass.
 - Eight-car, two-lap races. Seven rivals steer, brake, select overtaking lines,
   plan fuel stops and recover if stuck. Three difficulty levels.
-- Rivals adapt to your pace: leaders far ahead ease off, and rivals far behind
-  push harder, so the field stays within reach. Close racing is unaffected;
-  easy waits longest for you, hard chases hardest.
+- **Garage:** four cars, each with four upgrades of five levels: **ENGINE**
+  (acceleration), **TOP SPEED**, **TIRES** (grip and cornering limit) and
+  **FUEL** (economy). Every car starts slower than it can become and leans its
+  own way:
+
+  | Car | Kind | Price | Character |
+  | --- | --- | --- | --- |
+  | **Trailblazer** | Rally | free | Balanced starter, cheapest upgrades |
+  | **Sprite** | Hatch | 3,000 | Grip and acceleration, low top speed, frugal |
+  | **Bruiser** | Pickup | 4,500 | Big tank, loses less on grass and sand |
+  | **Comet** | GT | 9,000 | Fastest once upgraded, thirsty, dearest upgrades |
+
+  Upgrades belong to each car and cost 250 / 500 / 800 / 1,200 / 1,700 coins per
+  level on the Trailblazer, more on the other cars. A car rating (0–100) sums up
+  its pace; the menu compares yours with the best rival car on the selected track.
+- **Prize money:** every finish pays coins by place (600 down to 100 in the
+  Rookie Cup), ×1.6 in the Pro Cup and ×2.4 in the Master Cup, ×0.75 on easy and
+  ×1.3 on hard. Arcade races pay half, a DNF nothing. A cup medal adds a bonus
+  (500 / 800 / 1,200 in the Rookie Cup, scaled the same way). Results show the
+  prize and the bank; the header shows the bank on every menu page.
+- **Rivals grow with you:** on each circuit they bring about the car a player
+  who finished third everywhere and spent the winnings would have by then,
+  tuned a little better. Upgrading keeps you in the fight; on normal a strong
+  driver with those upgrades fights for the win, while a stock car falls back
+  in the later cups. Hard brings better cars and sharper cornering; easy rivals
+  hold back. Rivals take corners at a share of their tire limit (easy 44 %,
+  normal 80 %, hard 87 %) and keep full throttle on straights; the field
+  spreads from Juno and Ace at the front to Rusty and Bean at the back.
+- Rivals adapt to your pace a little: leaders far ahead ease off, and rivals
+  far behind push harder. Close racing is unaffected; easy waits longest for
+  you, hard hardly waits at all.
 - A substantial shortcut across terrain returns the car to its last legal road
   position and stops it. Detection compares the actual distance driven with the
   skipped road distance; ordinary shoulder excursions keep their progress.
@@ -147,7 +175,7 @@ an internet connection to run.
   sending the car into a sideways skid that widens the turn and scrubs speed,
   especially on snow. Ease the steering and slow down to regain traction.
   Brake before tight corners; holding Drift trades more grip and speed for rotation.
-  Rivals use the same physics and plan braking around the surface limits;
+  Rivals use the same physics and plan braking around their own car's limits;
   only rivals far behind you get a little extra engine power to catch up.
 - Collectible fuel, fuel exhaustion, lap validation, race position, race time,
   lap time, final classification, podium medals and local personal records.
@@ -177,13 +205,14 @@ an internet connection to run.
   selected track behind the menu, cutting between chase, helicopter, head-on and
   trackside cameras, with your car tagged in the pack. Picking a track card
   switches the broadcast to that circuit.
-- Garage with six liveries, controls guide, settings, countdown, pause, restart,
-  results and next-track flow. English throughout.
+- Garage with four cars on a turntable, upgrades and six liveries, controls
+  guide, settings, countdown, pause, restart, results and next-track flow.
+  English throughout.
 - After crossing the finish, cars ease into a slow cooldown lap on the right,
   keeping space between them while the results are displayed.
 - **RESET DATA** in settings asks for confirmation, then clears championship
-  progress, medals, records, race history and initials, and restores default
-  settings and car color. The reset is saved immediately.
+  progress, medals, records, race history, initials, coins, cars and upgrades,
+  and restores default settings and car color. The reset is saved immediately.
 - Independent multitouch steering and brake/drift controls, automatic or manual
   acceleration, keyboard and hot-plugged gamepad input. Acceleration is manual
   by default; automatic acceleration can be enabled in settings.
@@ -316,6 +345,9 @@ an internet connection to run.
 | Switch cup in menu | C | Cup tabs | Shoulder buttons |
 | Switch race mode | Tab | Championship / Arcade buttons | X / west button |
 | Arcade day / night | N | DAY / NIGHT buttons | Use touch or mouse |
+| Garage: browse cars | left / right | Arrow buttons | D-pad left / right |
+| Garage: buy an upgrade | 1–4, or up / down and Enter | Price buttons | D-pad up / down, then A |
+| Garage: buy the car on show / go racing | Enter | Main button | A / south button |
 
 Hold the brake to stop, then keep holding to reverse at low speed with any
 control method. Release it to accelerate forward in automatic mode, or use
@@ -342,6 +374,8 @@ editable scenes in `art/`:
 
 - `rally_car.blend` — beveled rally body, glazing, mirrors, striped roof, wheels,
   wing, lamps and bumpers.
+- `sprite.blend`, `bruiser.blend` and `comet.blend` — the garage's hatch, pickup
+  with roll bar and light bar, and low GT with its rear wing.
 - `fuel_can.blend` — the collectible jerrycan.
 - `helicopter.blend` — camera helicopter with separately animated main and tail rotors.
 - `trains.blend` — the steam locomotive, tender and coach, the mountain railway's
@@ -369,15 +403,15 @@ Paired, gently curved tire marks with subtle color and faded ends cluster and ov
 in sharper bends. They are present on every circuit
 from the start and follow the road elevation and banking.
 
-Reproduce all fourteen scenes and their runtime exports:
+Reproduce all seventeen scenes and their runtime exports:
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender -b --python tools/build_assets.py
 cmake --build build
 ```
 
-Options go after `--`: `--tracks-only` skips the car, can, helicopter and
-rolling stock, `--only NAME` builds a single circuit (`country`, `beach`,
+Options go after `--`: `--tracks-only` skips the cars, can, helicopter and
+rolling stock, `--cars-only` exports just the four cars, `--only NAME` builds a single circuit (`country`, `beach`,
 `winter`, `canyon`, `autumn`, `jungle`, `sakura`, `harbor`, `highland` or
 `volcano`; each takes two to five minutes), and `--vehicles-only` exports just
 the rolling stock. `python3 tools/layout_svg.py` redraws the layout comparison.
@@ -411,7 +445,9 @@ python3 tests/track_layouts.py
 ./build/ToyCars --autoplay --track beach --night   # night in any mode
 ./build/ToyCars --autoplay --track country --train-at 17.5   # a train meets the field
 ./build/ToyCars --screen garage
+./build/ToyCars --screen garage --car comet   # preview a car without buying it
 ./build/ToyCars --screen records
+./build/ToyCars --balance --track canyon   # where modelled players finish
 ./build/ToyCars --screen race --autoplay --benchmark --frames 600 \
   --no-audio --screenshot screenshots/demo.bmp
 ```

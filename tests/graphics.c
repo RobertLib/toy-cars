@@ -1289,8 +1289,7 @@ static void test_settings_save_ui(UI *u, Game *g, Renderer *r) {
         EXPECT(SDL_CreateDirectory(temp), "block settings staging file");
         if (setting == 0) {
             g->screen = SCREEN_GARAGE;
-            float cy = compact ? u->height - 183 - u->safe_bottom : 431;
-            click_ui(u, g, r, m + 23 + 4 * 57, cy);
+            click_menu(u, g, r, &u->garage_layout.swatches[4]);
             EXPECT(g->profile.color == 4, "garage click applies requested color");
         } else if (setting == 1) {
             click_ui(u, g, r, m + w - 559 + 30, y + 30);
@@ -1371,6 +1370,45 @@ static void test_reset_ui(UI *u, Game *g, Renderer *r) {
     capture_ui(u, g, r, "reset-success");
     EXPECT(!saved.initials_set && strcmp(game_player_name(g), "YOU") == 0,
            "reset clears confirmed initials and restores YOU");
+}
+
+// Buying upgrades and cars with the garage's own buttons, and browsing back.
+static void test_garage_ui(UI *u, Game *g, Renderer *r) {
+    EXPECT(game_reset_profile(g), "reset garage fixture");
+    Profile *p = &g->profile;
+    g->screen = SCREEN_GARAGE;
+    g->garage_car = p->car;
+    int price = upgrade_price(CAR_TRAILBLAZER, UPGRADE_ENGINE, 0);
+    p->coins = price + 10;
+    click_menu(u, g, r, &u->garage_layout.upgrades[UPGRADE_ENGINE]);
+    EXPECT(p->upgrades[CAR_TRAILBLAZER][UPGRADE_ENGINE] == 1 && p->coins == 10,
+           "an upgrade button buys one level");
+    click_menu(u, g, r, &u->garage_layout.upgrades[UPGRADE_ENGINE]);
+    EXPECT(p->upgrades[CAR_TRAILBLAZER][UPGRADE_ENGINE] == 1 && p->coins == 10,
+           "an upgrade the bank cannot cover stays unbought");
+    capture_ui(u, g, r, "garage-upgraded");
+    click_menu(u, g, r, &u->garage_layout.arrows[1]);
+    EXPECT(g->garage_car == CAR_SPRITE && p->car == CAR_TRAILBLAZER,
+           "the arrow shows the next car without selecting it");
+    ui_draw(u, g, r);
+    EXPECT(u->garage_layout.upgrades[UPGRADE_ENGINE].w == 0, "a car for sale offers no upgrades");
+    click_menu(u, g, r, &u->garage_layout.action);
+    EXPECT(!p->owned[CAR_SPRITE], "a car the bank cannot cover stays for sale");
+    capture_ui(u, g, r, "garage-for-sale");
+    p->coins = CAR_INFO[CAR_SPRITE].price;
+    click_menu(u, g, r, &u->garage_layout.action);
+    EXPECT(p->owned[CAR_SPRITE] && p->car == CAR_SPRITE && p->coins == 0,
+           "the main button buys the car on show");
+    click_menu(u, g, r, &u->garage_layout.arrows[0]);
+    EXPECT(g->garage_car == CAR_TRAILBLAZER && p->car == CAR_TRAILBLAZER,
+           "browsing back to an owned car makes it the ride");
+    click_menu(u, g, r, &u->garage_layout.action);
+    EXPECT(g->screen == SCREEN_MENU, "an owned car goes racing");
+    Profile saved;
+    profile_load(&saved);
+    EXPECT(saved.owned[CAR_SPRITE] && saved.upgrades[CAR_TRAILBLAZER][UPGRADE_ENGINE] == 1,
+           "garage purchases are saved");
+    EXPECT(game_reset_profile(g), "reset after garage purchases");
 }
 
 static void test_mobile_ui(UI *u, Game *g, Renderer *r) {
@@ -1669,7 +1707,7 @@ static void test_ui_draw(UI *u, Game *g, Renderer *r) {
                "context recovery preserves diagnostics and clears held input");
         EXPECT(glIsProgram(r->shader) && glIsProgram(r->weather_shader) &&
                    glIsProgram(u->program) && glIsTexture(u->fonts[0].texture) &&
-                   glIsBuffer(r->car.vbo) && glIsBuffer(r->scene.crowd.mesh.vbo) && r->scene.crowd.mesh.count > 0,
+                   glIsBuffer(r->cars[0].vbo) && glIsBuffer(r->scene.crowd.mesh.vbo) && r->scene.crowd.mesh.count > 0,
                "world and UI resources exist in the replacement context");
     }
     if (drawn_frames == 7)
@@ -1869,6 +1907,7 @@ static void test_ui_draw(UI *u, Game *g, Renderer *r) {
         test_save_failure_ui(u, g, r);
         test_settings_save_ui(u, g, r);
         test_reset_ui(u, g, r);
+        test_garage_ui(u, g, r);
         test_time_of_day_ui(u, g, r);
         g->test_mode = true;
         game_start(g);

@@ -528,6 +528,8 @@ bool game_reset_profile(Game *g) {
     g->save_failure_acknowledged = false;
     SDL_strlcpy(g->initials, g->profile.initials, sizeof g->initials);
     g->cars[0].name = game_player_name(g);
+    g->garage_car = g->profile.car;
+    g->prize = g->cup_prize = 0;
     g->initials_cursor = g->record_page = 0;
     g->record_history = false;
     g->records_return = SCREEN_MENU;
@@ -635,6 +637,7 @@ void game_start(Game *g) {
     g->championship_scored = false;
     g->championship_celebration = false;
     g->celebration_time = 0;
+    g->prize = g->cup_prize = 0;
     g->time = 0;
     g->start_idle_time = 0;
     g->start_hint_dismissed = false;
@@ -675,6 +678,14 @@ void game_start(Game *g) {
                    : i == 7 ? rgb(.43f, .65f, .80f)
                             : CAR_COLORS[i == 0 ? g->profile.color : (i + g->profile.color) % 6];
         c->name = names[i];
+        if (i == 0) {
+            c->model = g->profile.car;
+            c->tune = car_tune(c->model, g->profile.upgrades[c->model]);
+        } else {
+            c->model = rival_model(i);
+            c->tune = rival_tune(g->selected, g->profile.difficulty, i);
+            c->skill = rival_skill(i);
+        }
     }
     props_reset(g);
     rail_reset(g);
@@ -729,6 +740,13 @@ static float corner_grip(int track) {
     return TRACK_INFO[track].corner_grip;
 }
 
+// Rivals by difficulty: the share of the tire limit they use in corners and
+// their straight-line target as a share of top speed (above 1 the throttle
+// stays open at top speed, easy rivals hold back). Leaders far ahead of a
+// struggling player ease off by up to AI_EASE, most on easy.
+static const float AI_MARGINS[3] = {.44f, .80f, .87f}, AI_CRUISING[3] = {.80f, 1.1f, 1.1f};
+static const float AI_EASE[3] = {.30f, .10f, .04f};
+
 // Rivals adapt to the player's race distance so neither side drives out of
 // sight. Returns -1..1: positive when the rival trails the player. Close
 // racing is untouched, and the result table settles at regular pace.
@@ -755,7 +773,8 @@ void game_ai(const Game *g, int index, Controls *out) {
     for (int j = 0; !c->finished && j < t->can_count; j++) {
         float d = wrap(t->points[(int)t->cans[j].index].s - c->last_s, t->length);
         // Fuel use per metre falls on circuits longer than the first ones.
-        float remaining = (t->length * RACE_LAPS - c->progress) * fminf(1, 1100 / t->length);
+        float remaining = (t->length * RACE_LAPS - c->progress) * fminf(1, 1100 / t->length) *
+                          (1 - c->tune.economy);
         if (d < near && d < 60 && c->can_cooldown[j] <= 0 &&
             c->fuel < fminf(60, remaining * .12f + 5)) {
             near = d;
@@ -818,33 +837,36 @@ void game_ai(const Game *g, int index, Controls *out) {
         angle += angle_delta(c->yaw, atan2f(c->velocity.x, c->velocity.z)) * .85f;
     out->steer = clampf(-angle * 3.6f, -1, 1);
 
-    // Sample the whole braking horizon: maintain speed on straights, then
+    // Sample the whole braking horizon: full throttle on straights, then
     // brake only as far ahead as needed to reach a corner's target speed.
+    // Corners use a share of the car's tire limit, which leaves grip for line
+    // corrections and overtaking; difficulty and each driver's skill set it.
     int difficulty = g->profile.difficulty;
-    float pace = difficulty == 0 ? .74f : difficulty == 2 ? 1.08f : 1.f;
-    pace *= 1.f - (index % 4) * .008f;
-    // Leaders ease off for a struggling player, most on easy. Trailing rivals
-    // gain engine power and corner closer to the tire limit, still below it.
-    // Ice recovers grip too slowly for that, so there only easy rivals
-    // approach normal cornering pace.
-    static const float ease[3] = {.40f, .30f, .15f}, push[3] = {.12f, .14f, .18f};
-    static const float commit[3] = {1.f, 1.10f, 1.14f};
+    float margin = AI_MARGINS[difficulty] + c->skill;
+    float cruise = car_top_speed(&c->tune) * AI_CRUISING[difficulty];
+    // Trailing rivals gain engine power and corner closer to the tire limit,
+    // still below it. Ice recovers grip too slowly for that.
+    static const float push[3] = {.10f, .12f, .15f}, commit[3] = {.72f, .90f, .93f};
     float band = ai_rubber_band(g, index), power = 1;
     if (band < 0) {
-        pace *= 1 + band * ease[difficulty];
+        float eased = 1 + band * AI_EASE[difficulty];
+        margin *= eased * eased;
+        cruise *= eased;
     } else {
-        float limit = TRACK_INFO[g->selected].slippery ? 1.f : commit[difficulty];
-        pace += fmaxf(0, limit - pace) * band;
+        float limit = TRACK_INFO[g->selected].slippery ? margin : commit[difficulty];
+        margin += fmaxf(0, limit - margin) * band;
         power += band * push[difficulty];
     }
-    float desired = 31.f * pace * power;
+    // Crests and jumps scale with the same pace as the corners.
+    float pace = sqrtf(margin / .80f);
+    float desired = cruise * power;
     for (float ahead = 0; ahead <= 48; ahead += 6) {
         Vec3 d0, d1;
         track_at(t, c->last_s + ahead, 0, &d0);
         track_at(t, c->last_s + ahead + 6, 0, &d1);
         float curvature = fabsf(angle_delta(atan2f(d1.x, d1.z), atan2f(d0.x, d0.z))) / 6;
-        // Leave grip available for line corrections and overtaking.
-        float corner_speed = sqrtf(corner_grip(g->selected) * .72f / fmaxf(curvature, .001f)) * pace;
+        float corner_speed = sqrtf(corner_grip(g->selected) * (1 + c->tune.grip) * margin /
+                                   fmaxf(curvature, .001f));
         float crest = fmaxf(0, (d0.y - d1.y) / 6);
         float crest_speed = sqrtf(12.f / fmaxf(crest, .001f)) * pace;
         corner_speed = fminf(corner_speed, crest_speed);
@@ -1054,9 +1076,22 @@ static void update_lap(Game *g, int index, float previous_progress, float dt) {
     }
 }
 
+// Engine acceleration on asphalt, and the drag that sets the top speed. The
+// reference car (a zero tune) pulls 14.2 m/s² and tops out at 33.5 m/s.
+static float car_engine(const CarTune *t) {
+    return 14.2f * (1 + t->power);
+}
+static float car_drag(const CarTune *t) {
+    return .012f * (car_engine(t) - .70f) / (14.2f - .70f) / ((1 + t->speed) * (1 + t->speed));
+}
+float car_top_speed(const CarTune *t) {
+    return sqrtf((car_engine(t) - .70f) / car_drag(t));
+}
+
 static void car_handling(Car *c, int track, Controls in, float off, float dt) {
-    float grip = TRACK_INFO[track].grip;
-    float lateral_limit = corner_grip(track);
+    const CarTune *tune = &c->tune;
+    float grip = TRACK_INFO[track].grip * (1 + tune->grip);
+    float lateral_limit = corner_grip(track) * (1 + tune->grip);
     if (in.drift) {
         grip *= .43f;
         lateral_limit *= .55f;
@@ -1073,7 +1108,7 @@ static void car_handling(Car *c, int track, Controls in, float off, float dt) {
         // a = v * yaw_rate: at speed, the front tires cannot hold a tight
         // turning radius. Braking restores steering as the car slows down.
         float demand = fabsf(yaw_rate) * fabsf(longitudinal);
-        float steering_limit = corner_grip(track) * (in.drift ? 1.3f : 1);
+        float steering_limit = corner_grip(track) * (1 + tune->grip) * (in.drift ? 1.3f : 1);
         // Overloaded tires slide instead of only limiting nose rotation.
         // Keep the transition gradual, and restore traction as the driver
         // unwinds the steering or slows down. Momentum then settles naturally.
@@ -1084,14 +1119,17 @@ static void car_handling(Car *c, int track, Controls in, float off, float dt) {
         scrub = fmaxf(0, demand - steering_limit) * .18f;
     }
     bool reversing = in.reverse && in.brake > 0 && throttle == 0;
+    // A gritty car loses less power and speed on terrain.
+    float engine = car_engine(tune) * (off > .5f ? lerpf(9.f / 14.2f, 1, tune->grit) : 1);
+    float drag = car_drag(tune), terrain = off * .40f * (1 - tune->grit);
     if (longitudinal < 0 || (longitudinal == 0 && reversing)) {
         // Resistance opposes backward motion. Releasing BRAKE lets manual
         // drivers coast to a stop; automatic acceleration drives forward again.
         float reverse_power = reversing && c->fuel > 0 ? in.brake * 8.f : 0;
-        float resistance = .70f + longitudinal * longitudinal * .012f -
-                           off * longitudinal * .40f + scrub +
+        float resistance = .70f + longitudinal * longitudinal * drag -
+                           terrain * longitudinal + scrub +
                            (reversing ? 0 : in.brake * 24.f);
-        float accel = throttle * (off > .5f ? 9.f : 14.2f) - reverse_power;
+        float accel = throttle * engine - reverse_power;
         if (!c->grounded) {
             resistance = .8f;
             accel = 0;
@@ -1099,8 +1137,8 @@ static void car_handling(Car *c, int track, Controls in, float off, float dt) {
         longitudinal = fminf(0, longitudinal + resistance * dt);
         longitudinal = fmaxf(-7.f, longitudinal + accel * dt);
     } else {
-        float accel = throttle * (off > .5f ? 9.f : 14.2f) - in.brake * 24.f - .70f -
-                      longitudinal * longitudinal * .012f - off * longitudinal * .40f - scrub;
+        float accel = throttle * engine - in.brake * 24.f - .70f -
+                      longitudinal * longitudinal * drag - terrain * longitudinal - scrub;
         if (!c->grounded)
             accel = -.8f;
         // Reach a complete stop before the next step can engage reverse.
@@ -1443,7 +1481,8 @@ race_progress:
     }
     // Keep the fuel stops useful on the longer bridge circuits.
     float range_scale = fminf(1, 720.f / t->length);
-    c->fuel = fmaxf(0, c->fuel - (.80f + throttle * .65f + c->speed * .045f) * dt * range_scale);
+    c->fuel = fmaxf(0, c->fuel - (.80f + throttle * .65f + c->speed * .045f) * dt * range_scale *
+                               (1 - c->tune.economy));
     for (int j = 0; j < t->can_count; j++)
         if (c->can_cooldown[j] <= 0) {
             const Can *can = &t->cans[j];
@@ -1686,6 +1725,8 @@ static void championship_score(Game *g) {
         int medal = !p->championship_eliminated[cup] && rank <= 3 ? 4 - rank : 0;
         if (medal > p->championship_medal[cup])
             p->championship_medal[cup] = medal;
+        g->cup_prize = cup_prize(cup, p->difficulty, medal);
+        p->coins += g->cup_prize;
         // A cup medal opens the next cup.
         if (medal > 0 && cup + 1 < CUP_COUNT && CUPS[cup + 1].first > p->championship_completed) {
             p->championship_completed = CUPS[cup + 1].first;
@@ -1712,6 +1753,9 @@ void game_results(Game *g) {
         int medal = g->finish_rank <= 3 ? 4 - g->finish_rank : 0;
         if (medal > g->profile.medals[g->selected])
             g->profile.medals[g->selected] = medal;
+        // The finishing place is final: every car still racing is behind.
+        g->prize = race_prize(g->selected, g->profile.difficulty, g->mode, g->finish_rank);
+        g->profile.coins += g->prize;
         game_save_profile(g);
     }
     championship_score(g);
@@ -3637,11 +3681,12 @@ static void test_ai_pace_and_range(Game *g) {
     printf("%s solo pace: easy=%.2fs normal=%.2fs hard=%.2fs\n", g->tracks[g->selected].id,
            times[0], times[1], times[2]);
     CHECK(times[1] < g->tracks[g->selected].length * .12f, "normal AI maintains competitive race pace with grip-limited corners");
-    CHECK(times[1] < times[0] * .9f, "normal AI is substantially faster than easy AI");
     // Alpine Rush's first ramp starts above its steep approach. The chassis
     // release on that step can cost either driver a few seconds, so only
     // bound the difference there until the ramp is re-exported.
-    float margin = !strcmp(g->tracks[g->selected].id, "winter") ? 1.08f : 1.f;
+    bool winter = !strcmp(g->tracks[g->selected].id, "winter");
+    CHECK(times[1] < times[0] * (winter ? .95f : .9f), "normal AI is substantially faster than easy AI");
+    float margin = winter ? 1.08f : 1.f;
     CHECK(times[2] < times[1] * margin, "hard AI is faster than normal AI within the same tire limits");
 
     g->profile.difficulty = 1;
@@ -3665,8 +3710,9 @@ static void test_ai_rubber_band(Game *g) {
         game_start(g);
         g->screen = SCREEN_RACE;
         // Find a stretch where a rival racing close to the player holds full
-        // throttle just below its cruising speed: no bend or ramp limits it.
-        float speed = 31.f * (difficulty == 0 ? .74f : difficulty == 2 ? 1.08f : 1.f) - 2;
+        // throttle at the pace it would ease to: no bend or ramp limits it.
+        float speed = car_top_speed(&g->cars[1].tune) * AI_CRUISING[difficulty] *
+                      (1 - AI_EASE[difficulty]);
         Controls close = {0}, leading, trailing, settled;
         float s = 60;
         for (; s < t->length - 260; s += 5) {
@@ -3683,8 +3729,7 @@ static void test_ai_rubber_band(Game *g) {
         game_ai(g, 1, &trailing);
         g->cars[0].finished = true;
         game_ai(g, 1, &settled);
-        CHECK(leading.throttle == 0 && leading.brake > 0,
-              "a rival far ahead eases off for the player");
+        CHECK(leading.throttle < close.throttle, "a rival far ahead eases off for the player");
         CHECK(trailing.throttle > 1, "a rival far behind gains catch-up power");
         CHECK(settled.throttle == close.throttle && settled.brake == close.brake,
               "rivals settle the results at regular pace after the player finishes");
@@ -4125,6 +4170,12 @@ static void test_lava(Game *g) {
     CHECK(found, "a car can reach the lava");
 }
 
+// Simulations race the stock first car, whatever the player's garage holds.
+static void test_stock_garage(Profile *p) {
+    p->car = CAR_TRAILBLAZER;
+    memset(p->upgrades, 0, sizeof p->upgrades);
+}
+
 int game_tests(int only) {
     Game *g = calloc(1, sizeof *g);
     if (!g || !game_load(g)) {
@@ -4133,6 +4184,7 @@ int game_tests(int only) {
         return 1;
     }
     g->test_mode = true;
+    test_stock_garage(&g->profile);
     if (only <= 0) {
         test_surface_slopes();
         test_rollovers();
@@ -4270,4 +4322,79 @@ done:
     game_free(g);
     free(g);
     return failures ? 1 : 0;
+}
+
+// Races a modelled player against the full field of one Championship stage
+// and returns the place. The player drives like a rival with the given share
+// of the tire limit plus some extra pace, without catch-up help.
+static int balance_race(Game *g, int track, int difficulty, CarTune tune, float margin,
+                        float flair) {
+    g->selected = track;
+    g->profile.difficulty = difficulty;
+    game_start(g);
+    tune.power += flair;
+    tune.speed += flair;
+    tune.grip += flair;
+    g->cars[0].tune = tune;
+    g->cars[0].skill = margin - AI_MARGINS[difficulty];
+    int limit = (int)(120 * race_time_limit(&g->tracks[track]));
+    for (int step = 0; step < limit && g->screen != SCREEN_RESULTS; step++)
+        game_tick(g, (Controls){0}, FIXED_DT, true);
+    return g->cars[0].finished ? player_rank(g) : CAR_COUNT;
+}
+
+int game_balance(int only) {
+    Game *g = calloc(1, sizeof *g);
+    if (!g || !game_load(g)) {
+        fprintf(stderr, "Cannot load balance assets\n");
+        free(g);
+        return 1;
+    }
+    g->test_mode = true;
+    g->mode = MODE_CHAMPIONSHIP;
+    test_stock_garage(&g->profile);
+    // A steady driver corners like a normal rival. A sharp one uses more of
+    // the tires and finds a few percent more pace on top, through lines and
+    // jumps the rivals take carefully: that matches the race times of a
+    // strong player who won every stage on normal before the garage. Each
+    // place averages three races with a little more and less cornering.
+    static const float drivers[2] = {.80f, .92f}, flair[2] = {0, .05f};
+    static const int full[UPGRADE_COUNT] = {UPGRADE_LEVELS, UPGRADE_LEVELS, UPGRADE_LEVELS,
+                                            UPGRADE_LEVELS};
+    static const char *levels[3] = {"easy", "normal", "hard"};
+    printf("Average place of a steady / sharp player in a stock, expected (bought with\n"
+           "third places), fully upgraded Trailblazer and fully upgraded Comet\n");
+    printf("%-9s %-6s  %-11s %-11s %-11s %-11s  ratings: rivals / cars\n", "track", "level",
+           "stock", "expected", "upgraded", "comet");
+    for (int track = 0; track < TRACK_COUNT; track++) {
+        if (only >= 0 && track != only)
+            continue;
+        int expected[UPGRADE_COUNT];
+        expected_upgrades(track, expected);
+        CarTune tunes[4] = {car_tune(CAR_TRAILBLAZER, NULL), car_tune(CAR_TRAILBLAZER, expected),
+                            car_tune(CAR_TRAILBLAZER, full), car_tune(CAR_COMET, full)};
+        for (int difficulty = 0; difficulty < 3; difficulty++) {
+            printf("%-9s %-6s ", g->tracks[track].id, levels[difficulty]);
+            for (int k = 0; k < 4; k++) {
+                float places[2] = {0};
+                for (int d = 0; d < 2; d++)
+                    for (int v = -1; v <= 1; v++)
+                        places[d] += balance_race(g, track, difficulty, tunes[k],
+                                                  drivers[d] + v * .02f, flair[d]) / 3.f;
+                printf(" %.1f / %.1f  ", places[0], places[1]);
+            }
+            int lo = 100, hi = 0;
+            for (int i = 1; i < CAR_COUNT; i++) {
+                CarTune t = rival_tune(track, difficulty, i);
+                lo = SDL_min(lo, car_rating(&t));
+                hi = SDL_max(hi, car_rating(&t));
+            }
+            printf(" %d-%d / %d %d %d %d\n", lo, hi, car_rating(&tunes[0]), car_rating(&tunes[1]),
+                   car_rating(&tunes[2]), car_rating(&tunes[3]));
+            fflush(stdout);
+        }
+    }
+    game_free(g);
+    free(g);
+    return 0;
 }

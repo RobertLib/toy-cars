@@ -55,8 +55,9 @@ typedef struct {
     Vec3 horizon, zenith, ember;
     float overcast, fog_far, fade, vignette, speed_blur;
     int viewport[4];
-    Mesh car, fuel, plane, cube;
-    Mesh cone, tire, fence, lamps;
+    Mesh cars[CAR_MODEL_COUNT], lamps[CAR_MODEL_COUNT];
+    Mesh fuel, plane, cube;
+    Mesh cone, tire, fence;
     Mesh boosts[TRACK_COUNT];
     Mesh helicopter, helicopter_rotor, helicopter_tail_rotor;
     Mesh rail_models[RAIL_MODEL_COUNT];
@@ -71,6 +72,7 @@ typedef struct {
     // Car transforms shared by the shadow pass, color pass and night lamps.
     Mat4 car_models[CAR_COUNT];
     Color car_colors[CAR_COUNT];
+    CarModel car_meshes[CAR_COUNT];
     bool car_visible[CAR_COUNT];
     Color sky;
     float night;
